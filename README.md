@@ -46,7 +46,7 @@ This removes the binary and optionally removes global configuration files.
 # Initialize global config
 atlassian config init --global
 
-# Edit ~/.config/atlassian/config.toml
+# Edit ~/.config/atlassian-cli/config.toml
 # Or use environment variables
 export ATLASSIAN_DOMAIN="company.atlassian.net"
 export ATLASSIAN_EMAIL="user@example.com"
@@ -122,7 +122,7 @@ atlassian config edit            # Edit project config
 1. **CLI flags** (highest): `--domain`, `--email`, `--token`
 2. **Environment variables**: `ATLASSIAN_*`
 3. **Project config**: `./.atlassian.toml`
-4. **Global config**: `~/.config/atlassian/config.toml`
+4. **Global config**: `~/.config/atlassian-cli/config.toml`
 
 ## Configuration File Example
 

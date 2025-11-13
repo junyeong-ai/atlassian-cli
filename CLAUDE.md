@@ -106,7 +106,7 @@ Command::Config(ConfigCommand)
 1. CLI flags (`--domain`, `--email`, `--token`)
 2. Environment variables (`ATLASSIAN_*`)
 3. Project config (`./.atlassian.toml`)
-4. Global config (`~/.config/atlassian/config.toml`)
+4. Global config (`~/.config/atlassian-cli/config.toml`)
 
 **Key fields**:
 - `domain`, `email`, `token`: Required for API auth

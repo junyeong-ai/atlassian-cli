@@ -105,6 +105,27 @@ impl Config {
         email: Option<&String>,
         token: Option<&String>,
     ) -> Result<Self> {
+        Self::load_with_validation(config_path, profile, domain, email, token, true)
+    }
+
+    pub fn load_without_validation(
+        config_path: Option<&PathBuf>,
+        profile: Option<&String>,
+        domain: Option<&String>,
+        email: Option<&String>,
+        token: Option<&String>,
+    ) -> Result<Self> {
+        Self::load_with_validation(config_path, profile, domain, email, token, false)
+    }
+
+    fn load_with_validation(
+        config_path: Option<&PathBuf>,
+        profile: Option<&String>,
+        domain: Option<&String>,
+        email: Option<&String>,
+        token: Option<&String>,
+        validate: bool,
+    ) -> Result<Self> {
         let mut config = Self::default();
 
         // 1. Load global config
@@ -201,7 +222,9 @@ impl Config {
         }
 
         // 6. Validate and normalize
-        config.validate()?;
+        if validate {
+            config.validate()?;
+        }
         config.normalize_base_url();
 
         Ok(config)
@@ -366,7 +389,7 @@ impl Config {
     }
 
     pub fn global_config_path() -> Option<PathBuf> {
-        dirs::config_dir().map(|d| d.join("atlassian/config.toml"))
+        dirs::home_dir().map(|h| h.join(".config/atlassian-cli/config.toml"))
     }
 
     pub fn project_config_path() -> Option<PathBuf> {

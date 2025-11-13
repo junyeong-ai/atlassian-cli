@@ -206,15 +206,38 @@ async fn handle_config(cmd: ConfigCommand) -> Result<()> {
             Ok(())
         }
         ConfigSubcommand::Show => {
-            let config = atlassian_cli::Config::load(None, None, None, None, None)?;
+            let config = atlassian_cli::Config::load_without_validation(None, None, None, None, None)?;
 
-            let mut display = config.clone();
-            if let Some(ref token) = display.token {
-                let mask_len = 4.min(token.len());
-                display.token = Some(format!("{}***", &token[..mask_len]));
+            // Display credentials (not in Config struct's TOML serialization)
+            println!("[default]");
+            if let Some(ref domain) = config.domain {
+                println!("domain = {:?}", domain);
+            } else {
+                println!("# domain = (not set)");
             }
+            if let Some(ref email) = config.email {
+                println!("email = {:?}", email);
+            } else {
+                println!("# email = (not set)");
+            }
+            if let Some(ref token) = config.token {
+                let mask_len = 4.min(token.len());
+                println!("token = \"{}***\"", &token[..mask_len]);
+            } else {
+                println!("# token = (not set)");
+            }
+            println!();
 
-            println!("{}", toml::to_string_pretty(&display)?);
+            // Display rest of config via TOML serialization
+            let display = config.clone();
+            let toml_str = toml::to_string_pretty(&display)?;
+            // Skip the empty [default] section if present
+            for line in toml_str.lines() {
+                if line.trim().is_empty() || line.trim() == "[default]" {
+                    continue;
+                }
+                println!("{}", line);
+            }
             Ok(())
         }
         ConfigSubcommand::List => {
@@ -255,7 +278,9 @@ async fn handle_config(cmd: ConfigCommand) -> Result<()> {
             let path = if global {
                 atlassian_cli::Config::global_config_path()
             } else {
+                // Try project config first, fall back to global
                 atlassian_cli::Config::project_config_path()
+                    .or_else(|| atlassian_cli::Config::global_config_path())
             };
 
             if let Some(p) = path {
@@ -269,7 +294,9 @@ async fn handle_config(cmd: ConfigCommand) -> Result<()> {
             let path = if global {
                 atlassian_cli::Config::global_config_path()
             } else {
+                // Try project config first, fall back to global
                 atlassian_cli::Config::project_config_path()
+                    .or_else(|| atlassian_cli::Config::global_config_path())
             };
 
             let path = path.ok_or_else(|| anyhow::anyhow!("Config file not found"))?;

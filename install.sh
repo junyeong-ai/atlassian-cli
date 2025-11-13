@@ -19,6 +19,12 @@ echo "📋 Installing to $INSTALL_DIR/$BINARY_NAME"
 cp "target/release/$BINARY_NAME" "$INSTALL_DIR/$BINARY_NAME"
 chmod +x "$INSTALL_DIR/$BINARY_NAME"
 
+# macOS: Ad-hoc sign the binary to prevent "Killed: 9" errors
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    echo "🔏 Signing binary (macOS)..."
+    codesign --force --deep --sign - "$INSTALL_DIR/$BINARY_NAME" 2>/dev/null || true
+fi
+
 echo
 echo "✅ Installation complete!"
 echo

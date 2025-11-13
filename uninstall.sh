@@ -23,9 +23,9 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     REMOVED=false
 
     # Linux/XDG location
-    if [ -d "$HOME/.config/atlassian" ]; then
-        rm -rf "$HOME/.config/atlassian"
-        echo "✅ Removed ~/.config/atlassian"
+    if [ -d "$HOME/.config/atlassian-cli" ]; then
+        rm -rf "$HOME/.config/atlassian-cli"
+        echo "✅ Removed ~/.config/atlassian-cli"
         REMOVED=true
     fi
 
