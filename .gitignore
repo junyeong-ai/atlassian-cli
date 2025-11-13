@@ -40,5 +40,6 @@ final-*.txt
 
 # Development tools
 .claude/
+!.claude/skills/
 .specify/
 .serena/
