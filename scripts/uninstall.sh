@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-BINARY_NAME="atlassian"
+BINARY_NAME="atlassian-cli"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 SKILL_NAME="jira-confluence"
 USER_SKILL_DIR="$HOME/.claude/skills/$SKILL_NAME"
@@ -108,13 +108,6 @@ case "$choice" in
         if [ -d "$HOME/.config/atlassian-cli" ]; then
             rm -rf "$HOME/.config/atlassian-cli"
             echo "✅ Removed ~/.config/atlassian-cli"
-            REMOVED=true
-        fi
-
-        # macOS location
-        if [ -d "$HOME/Library/Application Support/atlassian" ]; then
-            rm -rf "$HOME/Library/Application Support/atlassian"
-            echo "✅ Removed ~/Library/Application Support/atlassian"
             REMOVED=true
         fi
 

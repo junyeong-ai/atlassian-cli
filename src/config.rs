@@ -313,7 +313,7 @@ impl Config {
                 "ATLASSIAN_DOMAIN not configured. Set via:\n\
                  1. --domain flag\n\
                  2. ATLASSIAN_DOMAIN env var\n\
-                 3. Config file: atlassian config init"
+                 3. Config file: atlassian-cli config init"
             );
         }
 

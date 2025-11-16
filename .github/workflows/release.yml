@@ -60,16 +60,16 @@ jobs:
           target="${{ matrix.target }}"
 
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            binary="target/$target/release/atlassian.exe"
-            archive="atlassian-v${version}-${target}.zip"
-            cp "$binary" atlassian.exe
-            7z a "$archive" atlassian.exe
+            binary="target/$target/release/atlassian-cli.exe"
+            archive="atlassian-cli-v${version}-${target}.zip"
+            cp "$binary" atlassian-cli.exe
+            7z a "$archive" atlassian-cli.exe
             echo "ASSET=$archive" >> $GITHUB_ENV
           else
-            binary="target/$target/release/atlassian"
-            archive="atlassian-v${version}-${target}.tar.gz"
-            cp "$binary" atlassian
-            tar -czf "$archive" atlassian
+            binary="target/$target/release/atlassian-cli"
+            archive="atlassian-cli-v${version}-${target}.tar.gz"
+            cp "$binary" atlassian-cli
+            tar -czf "$archive" atlassian-cli
             echo "ASSET=$archive" >> $GITHUB_ENV
           fi
 

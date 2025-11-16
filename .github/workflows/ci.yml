@@ -104,14 +104,14 @@ jobs:
 
       - name: Check binary size
         run: |
-          ls -lh target/release/atlassian
-          du -h target/release/atlassian
+          ls -lh target/release/atlassian-cli
+          du -h target/release/atlassian-cli
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
           name: release-binary
-          path: target/release/atlassian
+          path: target/release/atlassian-cli
           retention-days: 7
 
   security-audit:

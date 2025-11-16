@@ -164,8 +164,8 @@ let description = args.get_mut("description")
 
 **Check**:
 ```bash
-atlassian config show
-atlassian config path
+atlassian-cli config show
+atlassian-cli config path
 ```
 
 **Fix**: Ensure token in config file or environment variable
@@ -181,7 +181,7 @@ atlassian config path
 
 **Debug**:
 ```bash
-JIRA_SEARCH_DEFAULT_FIELDS="key,summary" atlassian jira search "..."
+JIRA_SEARCH_DEFAULT_FIELDS="key,summary"  atlassian-cli jira search "..."
 ```
 
 ---

@@ -25,15 +25,15 @@
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | bash
 
 # 2. 설정 초기화
-atlassian config init --global
+atlassian-cli config init --global
 
 # 3. 토큰 설정
 # ~/.config/atlassian-cli/config.toml 편집
 # domain, email, token 입력
 
 # 4. 사용 시작! 🎉
-atlassian jira search "status = Open" --limit 5
-atlassian confluence search "type=page AND space=TEAM"
+atlassian-cli jira search "status = Open" --limit 5
+atlassian-cli confluence search "type=page AND space=TEAM"
 ```
 
 **Tip**: [API Token 생성](https://id.atlassian.com/manage-profile/security/api-tokens) 필요
@@ -45,61 +45,61 @@ atlassian confluence search "type=page AND space=TEAM"
 ### Jira 작업
 ```bash
 # 이슈 검색 (JQL)
-atlassian jira search "project = TMS AND status = Open" --limit 10
-atlassian jira search "assignee = currentUser() AND status != Done"
+atlassian-cli jira search "project = TMS AND status = Open" --limit 10
+atlassian-cli jira search "assignee = currentUser() AND status != Done"
 
 # 이슈 조회
-atlassian jira get PROJ-123
+atlassian-cli jira get PROJ-123
 
 # 이슈 생성
-atlassian jira create PROJ "버그 수정" Bug --description "상세 내용"
+atlassian-cli jira create PROJ "버그 수정" Bug --description "상세 내용"
 
 # 이슈 수정
-atlassian jira update PROJ-123 '{"summary":"새 제목"}'
+atlassian-cli jira update PROJ-123 '{"summary":"새 제목"}'
 
 # 댓글 추가
-atlassian jira comment add PROJ-123 "작업 완료"
+atlassian-cli jira comment add PROJ-123 "작업 완료"
 
 # 상태 전환
-atlassian jira transitions PROJ-123
-atlassian jira transition PROJ-123 31
+atlassian-cli jira transitions PROJ-123
+atlassian-cli jira transition PROJ-123 31
 ```
 
 ### Confluence 작업
 ```bash
 # 페이지 검색 (CQL)
-atlassian confluence search 'type=page AND space="TEAM"' --limit 10
+atlassian-cli confluence search 'type=page AND space="TEAM"' --limit 10
 
 # 페이지 조회
-atlassian confluence get 123456
+atlassian-cli confluence get 123456
 
 # 페이지 생성
-atlassian confluence create TEAM "API 문서" "<p>내용</p>"
+atlassian-cli confluence create TEAM "API 문서" "<p>내용</p>"
 
 # 페이지 수정
-atlassian confluence update 123456 "API 문서 v2" "<p>새 내용</p>"
+atlassian-cli confluence update 123456 "API 문서 v2" "<p>새 내용</p>"
 
 # 하위 페이지 목록
-atlassian confluence children 123456
+atlassian-cli confluence children 123456
 
 # 댓글 조회
-atlassian confluence comments 123456
+atlassian-cli confluence comments 123456
 ```
 
 ### 설정 & 최적화
 ```bash
 # 설정 관리
-atlassian config show            # 설정 표시 (토큰 마스킹)
-atlassian config path            # 설정 파일 경로
-atlassian config edit            # 에디터로 수정
+atlassian-cli config show            # 설정 표시 (토큰 마스킹)
+atlassian-cli config path            # 설정 파일 경로
+atlassian-cli config edit            # 에디터로 수정
 
 # 필드 최적화 (60-70% 크기 감소)
-atlassian jira search "project = PROJ" --fields key,summary,status
+atlassian-cli jira search "project = PROJ" --fields key,summary,status
 export JIRA_SEARCH_DEFAULT_FIELDS="key,summary,status"
 export JIRA_SEARCH_CUSTOM_FIELDS="customfield_10015"
 
 # JSON 출력
-atlassian jira get PROJ-123 | jq -r '.fields.summary'
+atlassian-cli jira get PROJ-123 | jq -r '.fields.summary'
 ```
 
 **중요 사항**:
@@ -120,8 +120,8 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scri
 
 **수동 설치**:
 1. [Releases](https://github.com/junyeong-ai/atlassian-cli/releases)에서 바이너리 다운로드
-2. 압축 해제: `tar -xzf atlassian-*.tar.gz`
-3. PATH에 이동: `mv atlassian ~/.local/bin/`
+2. 압축 해제: `tar -xzf atlassian-cli-*.tar.gz`
+3. PATH에 이동: `mv atlassian-cli ~/.local/bin/`
 
 **지원 플랫폼**:
 - Linux: x86_64, aarch64
@@ -134,7 +134,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scri
 git clone https://github.com/junyeong-ai/atlassian-cli
 cd atlassian-cli
 cargo build --release
-cp target/release/atlassian ~/.local/bin/
+cp target/release/atlassian-cli ~/.local/bin/
 ```
 
 **Requirements**: Rust 1.91.1+
@@ -171,7 +171,7 @@ cp target/release/atlassian ~/.local/bin/
 - Windows: `%APPDATA%\atlassian-cli\config.toml`
 - Project: `./.atlassian.toml`
 
-**기본 설정** (`atlassian config init`로 생성):
+**기본 설정** (`atlassian-cli config init`로 생성):
 ```toml
 [default]
 domain = "company.atlassian.net"
@@ -210,7 +210,7 @@ CLI 플래그 > 환경 변수 > 프로젝트 설정 > 전역 설정
 **예시**:
 ```bash
 # 설정 파일 오버라이드
-atlassian --domain company.atlassian.net --email user@example.com \
+atlassian-cli --domain company.atlassian.net --email user@example.com \
   jira search "status = Open"
 ```
 
@@ -228,13 +228,13 @@ atlassian --domain company.atlassian.net --email user@example.com \
 ### 설정을 찾을 수 없음
 
 **확인 사항**:
-- [ ] 설정 파일 존재: `atlassian config path`
-- [ ] 설정 내용 확인: `atlassian config show`
+- [ ] 설정 파일 존재: `atlassian-cli config path`
+- [ ] 설정 내용 확인: `atlassian-cli config show`
 - [ ] Domain 형식: `company.atlassian.net` (https:// 없이)
 
 **해결**:
 ```bash
-atlassian config init --global
+atlassian-cli config init --global
 ```
 
 ### API 인증 실패
@@ -244,7 +244,7 @@ atlassian config init --global
 - [ ] Token 정확 (복사/붙여넣기 공백 주의)
 - [ ] Domain 형식 확인
 
-**Token 테스트**: `atlassian config show`로 마스킹된 토큰 확인
+**Token 테스트**: `atlassian-cli config show`로 마스킹된 토큰 확인
 
 ### 필드 필터링 안 됨
 
@@ -255,7 +255,7 @@ atlassian config init --global
 
 ```bash
 # 테스트
-JIRA_SEARCH_DEFAULT_FIELDS="key,summary" atlassian jira search "project = PROJ"
+JIRA_SEARCH_DEFAULT_FIELDS="key,summary" atlassian-cli jira search "project = PROJ"
 ```
 
 ### 프로젝트 접근 제한
@@ -274,35 +274,35 @@ JIRA_SEARCH_DEFAULT_FIELDS="key,summary" atlassian jira search "project = PROJ"
 
 | 명령어 | 설명 | 예제 |
 |--------|------|------|
-| `get <KEY>` | 이슈 조회 | `atlassian jira get PROJ-123` |
-| `search <JQL>` | JQL 검색 | `atlassian jira search "status = Open" --limit 10` |
-| `create <PROJECT> <SUMMARY> <TYPE>` | 이슈 생성 | `atlassian jira create PROJ "Title" Bug --description "Text"` |
-| `update <KEY> <JSON>` | 이슈 수정 | `atlassian jira update PROJ-123 '{"summary":"New"}'` |
-| `comment add <KEY> <TEXT>` | 댓글 추가 | `atlassian jira comment add PROJ-123 "Comment"` |
-| `comment update <KEY> <ID> <TEXT>` | 댓글 수정 | `atlassian jira comment update PROJ-123 123 "Updated"` |
-| `transitions <KEY>` | 가능한 전환 목록 | `atlassian jira transitions PROJ-123` |
-| `transition <KEY> <ID>` | 상태 전환 | `atlassian jira transition PROJ-123 31` |
+| `get <KEY>` | 이슈 조회 | `atlassian-cli jira get PROJ-123` |
+| `search <JQL>` | JQL 검색 | `atlassian-cli jira search "status = Open" --limit 10` |
+| `create <PROJECT> <SUMMARY> <TYPE>` | 이슈 생성 | `atlassian-cli jira create PROJ "Title" Bug --description "Text"` |
+| `update <KEY> <JSON>` | 이슈 수정 | `atlassian-cli jira update PROJ-123 '{"summary":"New"}'` |
+| `comment add <KEY> <TEXT>` | 댓글 추가 | `atlassian-cli jira comment add PROJ-123 "Comment"` |
+| `comment update <KEY> <ID> <TEXT>` | 댓글 수정 | `atlassian-cli jira comment update PROJ-123 123 "Updated"` |
+| `transitions <KEY>` | 가능한 전환 목록 | `atlassian-cli jira transitions PROJ-123` |
+| `transition <KEY> <ID>` | 상태 전환 | `atlassian-cli jira transition PROJ-123 31` |
 
 ### Confluence 명령어 (6개)
 
 | 명령어 | 설명 | 예제 |
 |--------|------|------|
-| `search <CQL>` | CQL 검색 | `atlassian confluence search "type=page" --limit 10` |
-| `get <ID>` | 페이지 조회 | `atlassian confluence get 123456` |
-| `create <SPACE> <TITLE> <CONTENT>` | 페이지 생성 | `atlassian confluence create TEAM "Title" "<p>HTML</p>"` |
-| `update <ID> <TITLE> <CONTENT>` | 페이지 수정 | `atlassian confluence update 123456 "Title" "<p>HTML</p>"` |
-| `children <ID>` | 하위 페이지 목록 | `atlassian confluence children 123456` |
-| `comments <ID>` | 댓글 조회 | `atlassian confluence comments 123456` |
+| `search <CQL>` | CQL 검색 | `atlassian-cli confluence search "type=page" --limit 10` |
+| `get <ID>` | 페이지 조회 | `atlassian-cli confluence get 123456` |
+| `create <SPACE> <TITLE> <CONTENT>` | 페이지 생성 | `atlassian-cli confluence create TEAM "Title" "<p>HTML</p>"` |
+| `update <ID> <TITLE> <CONTENT>` | 페이지 수정 | `atlassian-cli confluence update 123456 "Title" "<p>HTML</p>"` |
+| `children <ID>` | 하위 페이지 목록 | `atlassian-cli confluence children 123456` |
+| `comments <ID>` | 댓글 조회 | `atlassian-cli confluence comments 123456` |
 
 ### Config 명령어 (5개)
 
 | 명령어 | 설명 | 예제 |
 |--------|------|------|
-| `init [--global]` | 설정 초기화 | `atlassian config init --global` |
-| `show` | 설정 표시 (토큰 마스킹) | `atlassian config show` |
-| `list` | 설정 위치 나열 | `atlassian config list` |
-| `path [--global]` | 설정 파일 경로 | `atlassian config path` |
-| `edit [--global]` | 에디터로 수정 | `atlassian config edit` |
+| `init [--global]` | 설정 초기화 | `atlassian-cli config init --global` |
+| `show` | 설정 표시 (토큰 마스킹) | `atlassian-cli config show` |
+| `list` | 설정 위치 나열 | `atlassian-cli config list` |
+| `path [--global]` | 설정 파일 경로 | `atlassian-cli config path` |
+| `edit [--global]` | 에디터로 수정 | `atlassian-cli config edit` |
 
 ### 공통 옵션
 

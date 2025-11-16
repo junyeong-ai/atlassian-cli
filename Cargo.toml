@@ -16,7 +16,7 @@ name = "atlassian_cli"
 path = "src/lib.rs"
 
 [[bin]]
-name = "atlassian"
+name = "atlassian-cli"
 path = "src/main.rs"
 
 [dependencies]

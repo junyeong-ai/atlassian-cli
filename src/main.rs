@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "atlassian", version, about = "CLI for Atlassian Jira and Confluence", long_about = None)]
+#[command(name = "atlassian-cli", version, about = "CLI for Atlassian Jira and Confluence", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Command,

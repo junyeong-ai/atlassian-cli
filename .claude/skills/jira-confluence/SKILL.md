@@ -12,8 +12,8 @@ Binary: `atlassian`
 ## Quick Start
 
 ```bash
-atlassian --version
-atlassian config show
+atlassian-cli --version
+atlassian-cli config show
 ```
 
 ## Authentication (4-Tier Priority)
@@ -29,13 +29,13 @@ Domain format: `company.atlassian.net` (NOT `https://company.atlassian.net`)
 
 ### Get Issue
 ```bash
-atlassian jira get PROJ-123
+atlassian-cli jira get PROJ-123
 ```
 
 ### Search Issues (JQL)
 ```bash
-atlassian jira search "assignee = currentUser() AND status != Done" --limit 50
-atlassian jira search "project = PROJ ORDER BY priority DESC" --fields key,summary,status
+atlassian-cli jira search "assignee = currentUser() AND status != Done" --limit 50
+atlassian-cli jira search "project = PROJ ORDER BY priority DESC" --fields key,summary,status
 ```
 
 **Field optimization** (60-70% reduction):
@@ -46,16 +46,16 @@ atlassian jira search "project = PROJ ORDER BY priority DESC" --fields key,summa
 
 ### Create Issue
 ```bash
-atlassian jira create PROJ "Bug title" Bug --description "Plain text description"
-atlassian jira create PROJ "Task" Task --description '{"type":"doc","version":1,"content":[...]}'
+atlassian-cli jira create PROJ "Bug title" Bug --description "Plain text description"
+atlassian-cli jira create PROJ "Task" Task --description '{"type":"doc","version":1,"content":[...]}'
 ```
 
 ADF processing: Auto-converts plain text to ADF format, or validates JSON ADF
 
 ### Update Issue
 ```bash
-atlassian jira update PROJ-123 '{"summary": "Updated title"}'
-atlassian jira update PROJ-123 '{"description": "New description"}'
+atlassian-cli jira update PROJ-123 '{"summary": "Updated title"}'
+atlassian-cli jira update PROJ-123 '{"description": "New description"}'
 ```
 
 Returns `{}` (empty = success)
@@ -63,52 +63,52 @@ Returns `{}` (empty = success)
 ### Comments
 ```bash
 # Add comment
-atlassian jira comment add PROJ-123 "Comment text"
+atlassian-cli jira comment add PROJ-123 "Comment text"
 
 # Update comment
-comment_id=$(atlassian jira get PROJ-123 | jq -r '.fields.comment.comments[0].id')
-atlassian jira comment update PROJ-123 "$comment_id" "Updated text"
+comment_id=$(atlassian-cli jira get PROJ-123 | jq -r '.fields.comment.comments[0].id')
+atlassian-cli jira comment update PROJ-123 "$comment_id" "Updated text"
 ```
 
 ### Transitions
 ```bash
 # List available transitions
-atlassian jira transitions PROJ-123
+atlassian-cli jira transitions PROJ-123
 
 # Execute transition (returns {} empty = success)
-trans_id=$(atlassian jira transitions PROJ-123 | jq -r '.[] | select(.name=="In Progress").id')
-atlassian jira transition PROJ-123 "$trans_id"
+trans_id=$(atlassian-cli jira transitions PROJ-123 | jq -r '.[] | select(.name=="In Progress").id')
+atlassian-cli jira transition PROJ-123 "$trans_id"
 ```
 
 ## Confluence Operations (6 Commands)
 
 ### Search Pages (CQL)
 ```bash
-atlassian confluence search "title ~ 'Meeting Notes'" --limit 20
-atlassian confluence search "space = TEAM AND created >= now()-7d"
+atlassian-cli confluence search "title ~ 'Meeting Notes'" --limit 20
+atlassian-cli confluence search "space = TEAM AND created >= now()-7d"
 ```
 
 ### Get Page
 ```bash
-atlassian confluence get 12345
+atlassian-cli confluence get 12345
 ```
 
 ### Page Children & Comments
 ```bash
-atlassian confluence children 12345
-atlassian confluence comments 12345
+atlassian-cli confluence children 12345
+atlassian-cli confluence comments 12345
 ```
 
 ### Create Page
 ```bash
-atlassian confluence create SPACE "Page Title" "<p>HTML content with <strong>formatting</strong></p>"
+atlassian-cli confluence create SPACE "Page Title" "<p>HTML content with <strong>formatting</strong></p>"
 ```
 
 Use space KEY (e.g., "TEAM"), not ID. Content format: HTML storage format (NOT Markdown).
 
 ### Update Page
 ```bash
-atlassian confluence update 12345 "Updated Title" "<p>New content</p>"
+atlassian-cli confluence update 12345 "Updated Title" "<p>New content</p>"
 ```
 
 Version handling: CLI auto-increments version (no manual version needed).
@@ -118,13 +118,13 @@ Version handling: CLI auto-increments version (no manual version needed).
 ### Bulk Operations
 ```bash
 # Serial execution with error handling
-for key in $(atlassian jira search "status=Open" --limit 100 | jq -r '.items[].key'); do
-  atlassian jira comment add "$key" "Bulk comment" || echo "Failed: $key"
+for key in $(atlassian-cli jira search "status=Open" --limit 100 | jq -r '.items[].key'); do
+  atlassian-cli jira comment add "$key" "Bulk comment" || echo "Failed: $key"
 done
 
 # Parallel execution (4 concurrent)
-atlassian jira search "status=Open" | jq -r '.items[].key' | \
-  xargs -P 4 -I {} atlassian jira comment add {} "Comment"
+atlassian-cli jira search "status=Open" | jq -r '.items[].key' | \
+  xargs -P 4 -I {} atlassian-cli jira comment add {} "Comment"
 ```
 
 ### Project/Space Auto-Injection
@@ -143,7 +143,7 @@ ORDER BY is correctly placed outside parentheses.
 ### Multi-line Content
 ```bash
 # From file
-atlassian confluence create SPACE "Title" "$(cat page.html)"
+atlassian-cli confluence create SPACE "Title" "$(cat page.html)"
 
 # Heredoc
 content="$(cat <<'EOF'
@@ -151,44 +151,44 @@ Line 1
 Line 2 with "quotes"
 EOF
 )"
-atlassian jira create PROJ "Title" Bug --description "$content"
+atlassian-cli jira create PROJ "Title" Bug --description "$content"
 ```
 
 ### JSON Escaping
 ```bash
 # Single quotes (no variable expansion)
-atlassian jira update PROJ-123 '{"summary":"New title"}'
+atlassian-cli jira update PROJ-123 '{"summary":"New title"}'
 
 # With variables: double quotes + escape
 title="Bug fix"
-atlassian jira update PROJ-123 "{\"summary\":\"$title\"}"
+atlassian-cli jira update PROJ-123 "{\"summary\":\"$title\"}"
 ```
 
 ### JQL/CQL Quote Escaping
 ```bash
-atlassian jira search "summary ~ \"bug fix\""
+atlassian-cli jira search "summary ~ \"bug fix\""
 ```
 
 ## Config Commands (5 Utilities)
 
 ```bash
-atlassian config init [--global]     # Create config file
-atlassian config show                # Display current config (token masked)
-atlassian config list                # List config locations + env vars
-atlassian config path [--global]     # Print config file path
-atlassian config edit [--global]     # Open config in $EDITOR
+atlassian-cli config init [--global]     # Create config file
+atlassian-cli config show                # Display current config (token masked)
+atlassian-cli config list                # List config locations + env vars
+atlassian-cli config path [--global]     # Print config file path
+atlassian-cli config edit [--global]     # Open config in $EDITOR
 ```
 
 ## ADF (Atlassian Document Format)
 
 **Plain text** (recommended):
 ```bash
-atlassian jira create PROJ "Title" Bug --description "Plain text"
+atlassian-cli jira create PROJ "Title" Bug --description "Plain text"
 ```
 
 **JSON ADF** (advanced):
 ```bash
-atlassian jira create PROJ "Title" Bug --description '{
+atlassian-cli jira create PROJ "Title" Bug --description '{
   "type": "doc",
   "version": 1,
   "content": [
@@ -207,34 +207,34 @@ atlassian jira create PROJ "Title" Bug --description '{
 ### Daily Standup Report
 ```bash
 # Get my issues updated today
-atlassian jira search "assignee = currentUser() AND updated >= startOfDay()" \
+atlassian-cli jira search "assignee = currentUser() AND updated >= startOfDay()" \
   --fields key,summary,status | jq -r '.items[] | "\(.key): \(.fields.summary)"'
 ```
 
 ### Sprint Planning
 ```bash
 # Create stories for new feature
-atlassian jira create PROJ "User authentication" Story --description "Implement OAuth2"
-atlassian jira create PROJ "API integration" Story --description "Connect to external API"
+atlassian-cli jira create PROJ "User authentication" Story --description "Implement OAuth2"
+atlassian-cli jira create PROJ "API integration" Story --description "Connect to external API"
 ```
 
 ### Documentation Workflow
 ```bash
 # Create meeting notes
-atlassian confluence create TEAM "Meeting Notes $(date +%Y-%m-%d)" \
+atlassian-cli confluence create TEAM "Meeting Notes $(date +%Y-%m-%d)" \
   "<h1>Attendees</h1><ul><li>Person 1</li></ul>"
 
 # Update existing page
-page_id=$(atlassian confluence search "title=ProjectSpec" | jq -r '.items[0].id')
-atlassian confluence update "$page_id" "Project Spec v2" "$(cat spec.html)"
+page_id=$(atlassian-cli confluence search "title=ProjectSpec" | jq -r '.items[0].id')
+atlassian-cli confluence update "$page_id" "Project Spec v2" "$(cat spec.html)"
 ```
 
 ### Bulk Transition
 ```bash
 # Move all open bugs to "In Progress"
-trans_id=$(atlassian jira transitions PROJ-1 | jq -r '.[] | select(.name=="In Progress").id')
+trans_id=$(atlassian-cli jira transitions PROJ-1 | jq -r '.[] | select(.name=="In Progress").id')
 
-atlassian jira search "project=PROJ AND status=Open AND issuetype=Bug" | \
+atlassian-cli jira search "project=PROJ AND status=Open AND issuetype=Bug" | \
   jq -r '.items[].key' | \
-  xargs -I {} atlassian jira transition {} "$trans_id"
+  xargs -I {} atlassian-cli jira transition {} "$trans_id"
 ```
