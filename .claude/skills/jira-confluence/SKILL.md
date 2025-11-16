@@ -2,12 +2,10 @@
 name: jira-confluence
 version: 0.1.0
 description: Execute Jira/Confluence queries via atlassian CLI. Search issues with JQL, manage pages with CQL, create/update tickets, handle comments and transitions, work with ADF format. Use when working with Jira tickets, Confluence pages, sprint planning, issue tracking, or Atlassian workspace queries.
-allowed-tools: Bash, Read, Grep, Glob
+allowed-tools: Bash
 ---
 
-# Jira & Confluence CLI
-
-Binary: `atlassian`
+# atlassian-cli: Jira & Confluence CLI
 
 ## Quick Start
 
@@ -25,7 +23,7 @@ atlassian-cli config show
 
 Domain format: `company.atlassian.net` (NOT `https://company.atlassian.net`)
 
-## Jira Operations (8 Commands)
+## Jira Operations (7 Commands)
 
 ### Get Issue
 ```bash
@@ -47,18 +45,13 @@ atlassian-cli jira search "project = PROJ ORDER BY priority DESC" --fields key,s
 ### Create Issue
 ```bash
 atlassian-cli jira create PROJ "Bug title" Bug --description "Plain text description"
-atlassian-cli jira create PROJ "Task" Task --description '{"type":"doc","version":1,"content":[...]}'
 ```
-
-ADF processing: Auto-converts plain text to ADF format, or validates JSON ADF
 
 ### Update Issue
 ```bash
 atlassian-cli jira update PROJ-123 '{"summary": "Updated title"}'
 atlassian-cli jira update PROJ-123 '{"description": "New description"}'
 ```
-
-Returns `{}` (empty = success)
 
 ### Comments
 ```bash
@@ -75,7 +68,7 @@ atlassian-cli jira comment update PROJ-123 "$comment_id" "Updated text"
 # List available transitions
 atlassian-cli jira transitions PROJ-123
 
-# Execute transition (returns {} empty = success)
+# Execute transition
 trans_id=$(atlassian-cli jira transitions PROJ-123 | jq -r '.[] | select(.name=="In Progress").id')
 atlassian-cli jira transition PROJ-123 "$trans_id"
 ```
@@ -169,7 +162,7 @@ atlassian-cli jira update PROJ-123 "{\"summary\":\"$title\"}"
 atlassian-cli jira search "summary ~ \"bug fix\""
 ```
 
-## Config Commands (5 Utilities)
+## Config Commands (5 Commands)
 
 ```bash
 atlassian-cli config init [--global]     # Create config file
@@ -179,62 +172,18 @@ atlassian-cli config path [--global]     # Print config file path
 atlassian-cli config edit [--global]     # Open config in $EDITOR
 ```
 
-## ADF (Atlassian Document Format)
+## Common Workflows
 
-**Plain text** (recommended):
 ```bash
-atlassian-cli jira create PROJ "Title" Bug --description "Plain text"
-```
-
-**JSON ADF** (advanced):
-```bash
-atlassian-cli jira create PROJ "Title" Bug --description '{
-  "type": "doc",
-  "version": 1,
-  "content": [
-    {"type": "paragraph", "content": [{"type": "text", "text": "Rich text"}]}
-  ]
-}'
-```
-
-**Validation rules** (top-level):
-- `type` must be "doc"
-- `version` must be 1
-- `content` must be array
-
-## Practical Examples
-
-### Daily Standup Report
-```bash
-# Get my issues updated today
+# Daily standup: my issues updated today
 atlassian-cli jira search "assignee = currentUser() AND updated >= startOfDay()" \
   --fields key,summary,status | jq -r '.items[] | "\(.key): \(.fields.summary)"'
-```
 
-### Sprint Planning
-```bash
-# Create stories for new feature
-atlassian-cli jira create PROJ "User authentication" Story --description "Implement OAuth2"
-atlassian-cli jira create PROJ "API integration" Story --description "Connect to external API"
-```
-
-### Documentation Workflow
-```bash
-# Create meeting notes
-atlassian-cli confluence create TEAM "Meeting Notes $(date +%Y-%m-%d)" \
-  "<h1>Attendees</h1><ul><li>Person 1</li></ul>"
-
-# Update existing page
-page_id=$(atlassian-cli confluence search "title=ProjectSpec" | jq -r '.items[0].id')
-atlassian-cli confluence update "$page_id" "Project Spec v2" "$(cat spec.html)"
-```
-
-### Bulk Transition
-```bash
-# Move all open bugs to "In Progress"
+# Bulk transition: move bugs to In Progress
 trans_id=$(atlassian-cli jira transitions PROJ-1 | jq -r '.[] | select(.name=="In Progress").id')
-
-atlassian-cli jira search "project=PROJ AND status=Open AND issuetype=Bug" | \
-  jq -r '.items[].key' | \
+atlassian-cli jira search "status=Open AND issuetype=Bug" | jq -r '.items[].key' | \
   xargs -I {} atlassian-cli jira transition {} "$trans_id"
+
+# Meeting notes with date
+atlassian-cli confluence create TEAM "Notes $(date +%Y-%m-%d)" "<h1>Attendees</h1><ul><li>Person 1</li></ul>"
 ```
