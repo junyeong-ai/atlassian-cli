@@ -358,14 +358,15 @@ impl Config {
     }
 
     fn normalize_base_url(&mut self) {
-        let domain = self.domain.as_ref().unwrap();
-        self.base_url = if domain.starts_with("https://") {
-            domain.clone()
-        } else if domain.starts_with("http://") {
-            domain.replace("http://", "https://")
-        } else {
-            format!("https://{}", domain)
-        };
+        if let Some(domain) = &self.domain {
+            self.base_url = if domain.starts_with("https://") {
+                domain.clone()
+            } else if domain.starts_with("http://") {
+                domain.replace("http://", "https://")
+            } else {
+                format!("https://{}", domain)
+            };
+        }
     }
 
     #[inline]
