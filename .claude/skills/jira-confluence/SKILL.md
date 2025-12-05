@@ -1,7 +1,6 @@
 ---
 name: jira-confluence
-version: 0.1.0
-description: Execute Jira/Confluence queries via atlassian CLI. Search issues with JQL, manage pages with CQL, create/update tickets, handle comments and transitions, work with ADF format. Use when working with Jira tickets, Confluence pages, sprint planning, issue tracking, or Atlassian workspace queries.
+description: Execute Jira/Confluence queries via atlassian CLI. Search issues with JQL, manage pages with CQL, create/update tickets, handle comments and transitions, work with ADF format. Supports full pagination with --all flag. Use when working with Jira tickets, Confluence pages, sprint planning, issue tracking, or Atlassian workspace queries.
 allowed-tools: Bash
 ---
 
@@ -23,12 +22,7 @@ atlassian-cli config show
 
 Domain format: `company.atlassian.net` (NOT `https://company.atlassian.net`)
 
-## Jira Operations (7 Commands)
-
-### Get Issue
-```bash
-atlassian-cli jira get PROJ-123
-```
+## Jira Operations
 
 ### Search Issues (JQL)
 ```bash
@@ -38,91 +32,87 @@ atlassian-cli jira search "project = PROJ ORDER BY priority DESC" --fields key,s
 
 **Field optimization** (60-70% reduction):
 - Default 17 fields exclude `description`, `id`, `renderedFields`
-- Override: `--fields key,summary,status` (highest priority)
-- Environment: `JIRA_SEARCH_DEFAULT_FIELDS=key,summary` (replaces defaults)
-- Environment: `JIRA_SEARCH_CUSTOM_FIELDS=customfield_10015` (extends defaults)
+- Override: `--fields key,summary,status`
+- Env: `JIRA_SEARCH_DEFAULT_FIELDS`, `JIRA_SEARCH_CUSTOM_FIELDS`
 
-### Create Issue
+### Get/Create/Update Issue
 ```bash
-atlassian-cli jira create PROJ "Bug title" Bug --description "Plain text description"
-```
-
-### Update Issue
-```bash
+atlassian-cli jira get PROJ-123
+atlassian-cli jira create PROJ "Bug title" Bug --description "Plain text"
 atlassian-cli jira update PROJ-123 '{"summary": "Updated title"}'
-atlassian-cli jira update PROJ-123 '{"description": "New description"}'
 ```
 
-### Comments
+### Comments & Transitions
 ```bash
-# Add comment
 atlassian-cli jira comment add PROJ-123 "Comment text"
-
-# Update comment
-comment_id=$(atlassian-cli jira get PROJ-123 | jq -r '.fields.comment.comments[0].id')
-atlassian-cli jira comment update PROJ-123 "$comment_id" "Updated text"
-```
-
-### Transitions
-```bash
-# List available transitions
 atlassian-cli jira transitions PROJ-123
-
-# Execute transition
-trans_id=$(atlassian-cli jira transitions PROJ-123 | jq -r '.[] | select(.name=="In Progress").id')
-atlassian-cli jira transition PROJ-123 "$trans_id"
+atlassian-cli jira transition PROJ-123 31
 ```
 
-## Confluence Operations (6 Commands)
+## Confluence Operations
 
 ### Search Pages (CQL)
 ```bash
+# Basic search
 atlassian-cli confluence search "title ~ 'Meeting Notes'" --limit 20
-atlassian-cli confluence search "space = TEAM AND created >= now()-7d"
+
+# Full pagination (all results)
+atlassian-cli confluence search "space = TEAM" --all
+
+# JSONL streaming (memory efficient for large results)
+atlassian-cli confluence search "space = TEAM" --all --stream
+
+# With expanded fields
+atlassian-cli confluence search "type=page" --expand body.storage,ancestors
 ```
 
-### Get Page
+**Pagination options**:
+- `--limit N`: Max results per request (default: 10, max: 250)
+- `--all`: Fetch all results via cursor-based pagination
+- `--stream`: Output JSONL format (requires --all)
+- `--expand`: Expand fields (body.storage, ancestors, version, etc.)
+
+### Get/Create/Update Page
 ```bash
 atlassian-cli confluence get 12345
+atlassian-cli confluence create SPACE "Page Title" "<p>HTML content</p>"
+atlassian-cli confluence update 12345 "Updated Title" "<p>New content</p>"
 ```
 
-### Page Children & Comments
+Use space KEY (e.g., "TEAM"), not ID. Content: HTML storage format (NOT Markdown).
+
+### Children & Comments
 ```bash
 atlassian-cli confluence children 12345
 atlassian-cli confluence comments 12345
 ```
 
-### Create Page
+## Config Commands
+
 ```bash
-atlassian-cli confluence create SPACE "Page Title" "<p>HTML content with <strong>formatting</strong></p>"
+atlassian-cli config init [--global]
+atlassian-cli config show
+atlassian-cli config path [--global]
+atlassian-cli config edit [--global]
 ```
-
-Use space KEY (e.g., "TEAM"), not ID. Content format: HTML storage format (NOT Markdown).
-
-### Update Page
-```bash
-atlassian-cli confluence update 12345 "Updated Title" "<p>New content</p>"
-```
-
-Version handling: CLI auto-increments version (no manual version needed).
 
 ## Advanced Patterns
 
 ### Bulk Operations
 ```bash
-# Serial execution with error handling
-for key in $(atlassian-cli jira search "status=Open" --limit 100 | jq -r '.items[].key'); do
-  atlassian-cli jira comment add "$key" "Bulk comment" || echo "Failed: $key"
+# Serial with error handling
+for key in $(atlassian-cli jira search "status=Open" | jq -r '.items[].key'); do
+  atlassian-cli jira comment add "$key" "Comment" || echo "Failed: $key"
 done
 
-# Parallel execution (4 concurrent)
+# Parallel (4 concurrent)
 atlassian-cli jira search "status=Open" | jq -r '.items[].key' | \
   xargs -P 4 -I {} atlassian-cli jira comment add {} "Comment"
 ```
 
 ### Project/Space Auto-Injection
 ```toml
-# .atlassian.toml or ~/.config/atlassian-cli/config.toml
+# .atlassian.toml
 [default.jira]
 projects_filter = ["PROJ1", "PROJ2"]
 
@@ -131,45 +121,15 @@ spaces_filter = ["SPACE1"]
 ```
 
 Effect: JQL becomes `project IN (PROJ1,PROJ2) AND (your_jql)`
-ORDER BY is correctly placed outside parentheses.
 
 ### Multi-line Content
 ```bash
-# From file
 atlassian-cli confluence create SPACE "Title" "$(cat page.html)"
-
-# Heredoc
-content="$(cat <<'EOF'
+atlassian-cli jira create PROJ "Title" Bug --description "$(cat <<'EOF'
 Line 1
-Line 2 with "quotes"
+Line 2
 EOF
 )"
-atlassian-cli jira create PROJ "Title" Bug --description "$content"
-```
-
-### JSON Escaping
-```bash
-# Single quotes (no variable expansion)
-atlassian-cli jira update PROJ-123 '{"summary":"New title"}'
-
-# With variables: double quotes + escape
-title="Bug fix"
-atlassian-cli jira update PROJ-123 "{\"summary\":\"$title\"}"
-```
-
-### JQL/CQL Quote Escaping
-```bash
-atlassian-cli jira search "summary ~ \"bug fix\""
-```
-
-## Config Commands (5 Commands)
-
-```bash
-atlassian-cli config init [--global]     # Create config file
-atlassian-cli config show                # Display current config (token masked)
-atlassian-cli config list                # List config locations + env vars
-atlassian-cli config path [--global]     # Print config file path
-atlassian-cli config edit [--global]     # Open config in $EDITOR
 ```
 
 ## Common Workflows
@@ -179,10 +139,8 @@ atlassian-cli config edit [--global]     # Open config in $EDITOR
 atlassian-cli jira search "assignee = currentUser() AND updated >= startOfDay()" \
   --fields key,summary,status | jq -r '.items[] | "\(.key): \(.fields.summary)"'
 
-# Bulk transition: move bugs to In Progress
-trans_id=$(atlassian-cli jira transitions PROJ-1 | jq -r '.[] | select(.name=="In Progress").id')
-atlassian-cli jira search "status=Open AND issuetype=Bug" | jq -r '.items[].key' | \
-  xargs -I {} atlassian-cli jira transition {} "$trans_id"
+# Export all Confluence pages in a space
+atlassian-cli confluence search "space=TEAM AND type=page" --all --stream > pages.jsonl
 
 # Meeting notes with date
 atlassian-cli confluence create TEAM "Notes $(date +%Y-%m-%d)" "<h1>Attendees</h1><ul><li>Person 1</li></ul>"
