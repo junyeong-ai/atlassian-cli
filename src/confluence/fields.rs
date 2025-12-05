@@ -197,8 +197,10 @@ mod tests {
 
     #[test]
     fn test_custom_includes_query_params() {
-        let mut config = FieldConfiguration::default();
-        config.custom_includes = vec!["ancestors".to_string(), "history".to_string()];
+        let config = FieldConfiguration {
+            custom_includes: vec!["ancestors".to_string(), "history".to_string()],
+            ..Default::default()
+        };
         let params = config.to_query_params();
 
         assert_eq!(params.len(), 4);
