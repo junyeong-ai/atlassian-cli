@@ -108,7 +108,11 @@ enum ConfluenceSubcommand {
         all: bool,
         #[arg(long, help = "Stream results as JSONL (requires --all)")]
         stream: bool,
-        #[arg(long, value_delimiter = ',', help = "Fields to expand (e.g., body.storage,ancestors)")]
+        #[arg(
+            long,
+            value_delimiter = ',',
+            help = "Fields to expand (e.g., body.storage,ancestors)"
+        )]
         expand: Option<Vec<String>>,
     },
     Get {
