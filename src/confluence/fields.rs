@@ -108,28 +108,38 @@ pub fn apply_v2_filtering(
     config.to_query_params()
 }
 
-pub fn apply_expand_filtering(
-    url: &str,
+pub fn build_search_expand(
     include_all_fields: Option<bool>,
     additional_expand: Option<Vec<String>>,
-) -> (String, Option<String>) {
-    let expand_params = if include_all_fields.unwrap_or(false) {
-        vec!["body.storage", "version", "space", "history", "metadata"]
+) -> String {
+    let base_params = if include_all_fields.unwrap_or(false) {
+        vec![
+            "content.body.storage",
+            "content.version",
+            "content.space",
+            "content.history",
+            "content.metadata",
+        ]
     } else {
-        vec!["body.storage", "version"]
+        vec!["content.body.storage", "content.version"]
     };
 
-    let mut expand: Vec<String> = expand_params.iter().map(|s| s.to_string()).collect();
+    let mut expand: Vec<String> = base_params.iter().map(|s| s.to_string()).collect();
 
     if let Some(additional) = additional_expand {
         for param in additional {
-            if !expand.contains(&param) {
-                expand.push(param);
+            let prefixed = if param.starts_with("content.") {
+                param
+            } else {
+                format!("content.{}", param)
+            };
+            if !expand.contains(&prefixed) {
+                expand.push(prefixed);
             }
         }
     }
 
-    (url.to_string(), Some(expand.join(",")))
+    expand.join(",")
 }
 
 #[cfg(test)]
@@ -197,42 +207,34 @@ mod tests {
     }
 
     #[test]
-    fn test_expand_filtering_default() {
-        let (url, expand) = apply_expand_filtering(
-            "https://test.atlassian.net/wiki/rest/api/search",
-            None,
-            None,
-        );
-
-        assert_eq!(url, "https://test.atlassian.net/wiki/rest/api/search");
-        assert_eq!(expand, Some("body.storage,version".to_string()));
+    fn test_search_expand_default() {
+        let expand = build_search_expand(None, None);
+        assert_eq!(expand, "content.body.storage,content.version");
     }
 
     #[test]
-    fn test_expand_filtering_all_fields() {
-        let (_, expand) = apply_expand_filtering(
-            "https://test.atlassian.net/wiki/rest/api/search",
-            Some(true),
-            None,
-        );
-
-        assert_eq!(
-            expand,
-            Some("body.storage,version,space,history,metadata".to_string())
-        );
+    fn test_search_expand_all_fields() {
+        let expand = build_search_expand(Some(true), None);
+        assert!(expand.contains("content.body.storage"));
+        assert!(expand.contains("content.version"));
+        assert!(expand.contains("content.space"));
+        assert!(expand.contains("content.history"));
+        assert!(expand.contains("content.metadata"));
     }
 
     #[test]
-    fn test_expand_filtering_with_additional() {
+    fn test_search_expand_with_additional() {
         let additional = vec!["ancestors".to_string(), "children".to_string()];
-        let (_, expand) = apply_expand_filtering(
-            "https://test.atlassian.net/wiki/rest/api/search",
-            None,
-            Some(additional),
-        );
+        let expand = build_search_expand(None, Some(additional));
+        assert!(expand.contains("content.ancestors"));
+        assert!(expand.contains("content.children"));
+    }
 
-        let expand_str = expand.unwrap();
-        assert!(expand_str.contains("ancestors"));
-        assert!(expand_str.contains("children"));
+    #[test]
+    fn test_search_expand_already_prefixed() {
+        let additional = vec!["content.space".to_string()];
+        let expand = build_search_expand(None, Some(additional));
+        assert!(expand.contains("content.space"));
+        assert_eq!(expand.matches("content.space").count(), 1);
     }
 }

@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::confluence::fields::{apply_expand_filtering, apply_v2_filtering};
+use crate::confluence::fields::{apply_v2_filtering, build_search_expand};
 use crate::confluence::markdown::convert_to_markdown;
 use crate::filter;
 use crate::http;
@@ -12,6 +12,7 @@ use tokio::time::sleep;
 
 const MAX_LIMIT: u32 = 250;
 const RATE_LIMIT_DELAY_MS: u64 = 200;
+const SEARCH_BODY_LIMIT: u32 = 50;
 
 fn apply_space_filter(cql: &str, config: &Config) -> String {
     if config.confluence.spaces_filter.is_empty() {
@@ -55,24 +56,20 @@ pub async fn search(
 ) -> Result<Value> {
     let final_cql = apply_space_filter(query, config);
     let client = http::client(config);
-    // Use content/search API which supports body.storage expand
-    let url = format!("{}/wiki/rest/api/content/search", config.base_url());
-    let (url, expand_param) = apply_expand_filtering(&url, include_all_fields, additional_expand);
+    let url = format!("{}/wiki/rest/api/search", config.base_url());
+    let expand = build_search_expand(include_all_fields, additional_expand);
 
-    let mut query_params = vec![
-        ("cql".to_string(), final_cql),
-        ("limit".to_string(), limit.min(MAX_LIMIT).to_string()),
-    ];
-
-    if let Some(expand) = expand_param {
-        query_params.push(("expand".to_string(), expand));
-    }
+    let effective_limit = limit.min(MAX_LIMIT).min(SEARCH_BODY_LIMIT);
 
     let response = client
         .get(&url)
         .header("Authorization", http::auth_header(config))
         .header("Accept", "application/json")
-        .query(&query_params)
+        .query(&[
+            ("cql", final_cql.as_str()),
+            ("limit", &effective_limit.to_string()),
+            ("expand", &expand),
+        ])
         .send()
         .await?;
 
@@ -84,17 +81,12 @@ pub async fn search(
 
     let mut data: Value = response.json().await?;
 
-    if as_markdown {
-        convert_results_to_markdown(&mut data);
-    }
-
-    let results = data["results"].as_array().cloned().unwrap_or_default();
-    let count = results.len();
-    let total = data["totalSize"].as_u64().unwrap_or(count as u64);
+    let items = extract_content_from_results(&mut data, as_markdown);
+    let total = data["totalSize"].as_u64().unwrap_or(items.len() as u64);
 
     let mut output = json!({
-        "items": results,
-        "count": count,
+        "items": items,
+        "count": items.len(),
         "total": total
     });
 
@@ -113,54 +105,43 @@ pub async fn search_all(
     let final_cql = apply_space_filter(query, config);
     let client = http::client(config);
     let base_url = config.base_url();
-    // Use content/search API which supports body.storage expand
-    let initial_url = format!("{}/wiki/rest/api/content/search", base_url);
-    let (_, expand_param) =
-        apply_expand_filtering(&initial_url, include_all_fields, additional_expand.clone());
+    let initial_url = format!("{}/wiki/rest/api/search", base_url);
+    let expand = build_search_expand(include_all_fields, additional_expand);
 
     let mut all_items: Vec<Value> = Vec::new();
     let mut page_num = 1;
     let mut next_url: Option<String> = None;
+    let mut total_size: u64 = 0;
 
     loop {
         let mut data = if let Some(ref url) = next_url {
             fetch_page(&client, url, config).await?
         } else {
-            fetch_initial_page(
-                &client,
-                &initial_url,
-                &final_cql,
-                expand_param.as_deref(),
-                config,
-            )
-            .await?
+            fetch_initial_page(&client, &initial_url, &final_cql, &expand, config).await?
         };
 
-        filter::apply(&mut data, config);
-
-        if as_markdown {
-            convert_results_to_markdown(&mut data);
+        if page_num == 1 {
+            total_size = data["totalSize"].as_u64().unwrap_or(0);
         }
 
-        let results = data["results"].as_array().cloned().unwrap_or_default();
-        let count = results.len();
-        let total = data["totalSize"].as_u64().unwrap_or(0);
+        let items = extract_content_from_results(&mut data, as_markdown);
+        let count = items.len();
 
         if stream {
-            for item in &results {
+            for item in &items {
                 println!("{}", serde_json::to_string(item)?);
             }
             io::stdout().flush()?;
         }
 
-        all_items.extend(results);
+        all_items.extend(items);
 
         eprintln!(
-            "  Page {}: {} items (total: {}/{})",
+            "  Page {}: {} items (fetched: {}/{})",
             page_num,
             count,
             all_items.len(),
-            total
+            total_size
         );
 
         let next_path = data["_links"]["next"].as_str();
@@ -168,7 +149,6 @@ pub async fn search_all(
             break;
         }
 
-        // Use _links.base from API response (includes /wiki), not config.base_url()
         let links_base = data["_links"]["base"].as_str().unwrap_or(base_url);
         next_url = Some(build_next_url(links_base, next_path.unwrap()));
         page_num += 1;
@@ -191,20 +171,15 @@ async fn fetch_initial_page(
     client: &Client,
     url: &str,
     cql: &str,
-    expand: Option<&str>,
+    expand: &str,
     config: &Config,
 ) -> Result<Value> {
-    let mut query_params = vec![("cql", cql), ("limit", "250")];
-
-    if let Some(exp) = expand {
-        query_params.push(("expand", exp));
-    }
-
+    let limit = SEARCH_BODY_LIMIT.to_string();
     let response = client
         .get(url)
         .header("Authorization", http::auth_header(config))
         .header("Accept", "application/json")
-        .query(&query_params)
+        .query(&[("cql", cql), ("limit", &limit), ("expand", expand)])
         .send()
         .await?;
 
@@ -470,22 +445,30 @@ pub async fn update_page(
     }))
 }
 
-fn convert_results_to_markdown(data: &mut Value) {
+fn extract_content_from_results(data: &mut Value, as_markdown: bool) -> Vec<Value> {
     let Some(results) = data.get_mut("results").and_then(|r| r.as_array_mut()) else {
-        return;
+        return vec![];
     };
-    for item in results {
-        let Some(body) = item
-            .get_mut("body")
-            .and_then(|b| b.get_mut("storage"))
-            .and_then(|s| s.get_mut("value"))
-        else {
-            continue;
-        };
-        if let Some(html) = body.as_str().map(|s| s.to_string()) {
-            *body = Value::String(convert_to_markdown(&html));
-        }
-    }
+
+    results
+        .iter_mut()
+        .filter_map(|item| {
+            let mut content = item.get_mut("content")?.take();
+
+            if as_markdown
+                && let Some(html) = content
+                    .get("body")
+                    .and_then(|b| b.get("storage"))
+                    .and_then(|s| s.get("value"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            {
+                content["body"]["storage"]["value"] = Value::String(convert_to_markdown(&html));
+            }
+
+            Some(content)
+        })
+        .collect()
 }
 
 fn convert_page_to_markdown(data: &mut Value) {
