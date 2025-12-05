@@ -2,9 +2,46 @@ use crate::config::Config;
 use crate::confluence::fields::{apply_expand_filtering, apply_v2_filtering};
 use crate::http;
 use anyhow::Result;
+use reqwest::Client;
 use serde_json::{Value, json};
+use std::io::{self, Write};
+use std::time::Duration;
+use tokio::time::sleep;
 
-/// Search Confluence using CQL query
+const MAX_LIMIT: u32 = 250;
+const RATE_LIMIT_DELAY_MS: u64 = 200;
+
+fn apply_space_filter(cql: &str, config: &Config) -> String {
+    if config.confluence.spaces_filter.is_empty() {
+        return cql.to_string();
+    }
+
+    let cql_lower = cql.to_lowercase();
+    if cql_lower.contains("space ")
+        || cql_lower.contains("space=")
+        || cql_lower.contains("space in")
+    {
+        cql.to_string()
+    } else {
+        let spaces = config
+            .confluence
+            .spaces_filter
+            .iter()
+            .map(|s| format!("\"{}\"", s))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("space IN ({}) AND ({})", spaces, cql)
+    }
+}
+
+fn build_next_url(base_url: &str, next_path: &str) -> String {
+    if next_path.starts_with("http") {
+        next_path.to_string()
+    } else {
+        format!("{}{}", base_url.trim_end_matches("/wiki"), next_path)
+    }
+}
+
 pub async fn search(
     query: &str,
     limit: u32,
@@ -12,41 +49,14 @@ pub async fn search(
     additional_expand: Option<Vec<String>>,
     config: &Config,
 ) -> Result<Value> {
-    let cql = query;
-
-    // Apply space filter if configured and not already in CQL
-    let final_cql = if !config.confluence.spaces_filter.is_empty() {
-        let cql_lower = cql.to_lowercase();
-        // Check if CQL already contains space condition
-        if cql_lower.contains("space ")
-            || cql_lower.contains("space=")
-            || cql_lower.contains("space in")
-        {
-            // User explicitly specified space, use their CQL as-is
-            cql.to_string()
-        } else {
-            // Add space filter
-            let spaces = config
-                .confluence
-                .spaces_filter
-                .iter()
-                .map(|s| format!("\"{}\"", s))
-                .collect::<Vec<_>>()
-                .join(",");
-            format!("space IN ({}) AND ({})", spaces, cql)
-        }
-    } else {
-        cql.to_string()
-    };
-
+    let final_cql = apply_space_filter(query, config);
     let client = http::client(config);
     let url = format!("{}/wiki/rest/api/search", config.base_url());
-
     let (url, expand_param) = apply_expand_filtering(&url, include_all_fields, additional_expand);
 
     let mut query_params = vec![
         ("cql".to_string(), final_cql),
-        ("limit".to_string(), limit.to_string()),
+        ("limit".to_string(), limit.min(MAX_LIMIT).to_string()),
     ];
 
     if let Some(expand) = expand_param {
@@ -70,6 +80,124 @@ pub async fn search(
         "items": data["results"],
         "total": data["totalSize"]
     }))
+}
+
+pub async fn search_all(
+    query: &str,
+    include_all_fields: Option<bool>,
+    additional_expand: Option<Vec<String>>,
+    stream: bool,
+    config: &Config,
+) -> Result<Value> {
+    let final_cql = apply_space_filter(query, config);
+    let client = http::client(config);
+    let base_url = config.base_url();
+    let initial_url = format!("{}/wiki/rest/api/search", base_url);
+    let (_, expand_param) =
+        apply_expand_filtering(&initial_url, include_all_fields, additional_expand.clone());
+
+    let mut all_items: Vec<Value> = Vec::new();
+    let mut page_num = 1;
+    let mut next_url: Option<String> = None;
+
+    loop {
+        let data = if let Some(ref url) = next_url {
+            fetch_page(&client, url, config).await?
+        } else {
+            fetch_initial_page(
+                &client,
+                &initial_url,
+                &final_cql,
+                expand_param.as_deref(),
+                config,
+            )
+            .await?
+        };
+
+        let results = data["results"].as_array().cloned().unwrap_or_default();
+        let count = results.len();
+        let total = data["totalSize"].as_u64().unwrap_or(0);
+
+        if stream {
+            for item in &results {
+                println!("{}", serde_json::to_string(item)?);
+            }
+            io::stdout().flush()?;
+        }
+
+        all_items.extend(results);
+
+        eprintln!(
+            "  Page {}: {} items (total: {}/{})",
+            page_num,
+            count,
+            all_items.len(),
+            total
+        );
+
+        let next_path = data["_links"]["next"].as_str();
+        if next_path.is_none() || count == 0 {
+            break;
+        }
+
+        next_url = Some(build_next_url(base_url, next_path.unwrap()));
+        page_num += 1;
+        sleep(Duration::from_millis(RATE_LIMIT_DELAY_MS)).await;
+    }
+
+    eprintln!("\nTotal: {} items fetched", all_items.len());
+
+    if stream {
+        Ok(json!({"streamed": true, "total": all_items.len()}))
+    } else {
+        Ok(json!({
+            "items": all_items,
+            "total": all_items.len()
+        }))
+    }
+}
+
+async fn fetch_initial_page(
+    client: &Client,
+    url: &str,
+    cql: &str,
+    expand: Option<&str>,
+    config: &Config,
+) -> Result<Value> {
+    let mut query_params = vec![("cql", cql), ("limit", "250")];
+
+    if let Some(exp) = expand {
+        query_params.push(("expand", exp));
+    }
+
+    let response = client
+        .get(url)
+        .header("Authorization", http::auth_header(config))
+        .header("Accept", "application/json")
+        .query(&query_params)
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        anyhow::bail!("Search failed: {}", response.status());
+    }
+
+    response.json().await.map_err(Into::into)
+}
+
+async fn fetch_page(client: &Client, url: &str, config: &Config) -> Result<Value> {
+    let response = client
+        .get(url)
+        .header("Authorization", http::auth_header(config))
+        .header("Accept", "application/json")
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        anyhow::bail!("Search failed: {}", response.status());
+    }
+
+    response.json().await.map_err(Into::into)
 }
 
 pub async fn get_page(
@@ -304,86 +432,61 @@ mod tests {
     use super::*;
     use crate::test_utils::create_test_config_with_filters;
 
-    // Helper function to create test config with confluence spaces filter
     fn create_test_config(confluence_spaces_filter: Vec<String>) -> Config {
         create_test_config_with_filters(vec![], confluence_spaces_filter)
     }
 
-    // T017: Confluence search tests
-
     #[test]
-    fn test_search_default_limit() {
-        let limit = 10u32;
-        assert_eq!(limit, 10);
+    fn test_max_limit_constant() {
+        assert_eq!(MAX_LIMIT, 250);
     }
 
     #[test]
-    fn test_search_custom_limit() {
-        let limit = 25u32;
-        assert_eq!(limit, 25);
+    fn test_rate_limit_delay() {
+        assert_eq!(RATE_LIMIT_DELAY_MS, 200);
     }
 
     #[test]
-    fn test_search_space_filter_injection() {
+    fn test_apply_space_filter_injection() {
         let config = create_test_config(vec!["SPACE1".to_string(), "SPACE2".to_string()]);
-        let cql = "type = page";
+        let result = apply_space_filter("type = page", &config);
+        assert_eq!(result, "space IN (\"SPACE1\",\"SPACE2\") AND (type = page)");
+    }
 
-        // Simulate space filter logic
-        let final_cql = if !config.confluence.spaces_filter.is_empty() {
-            let cql_lower = cql.to_lowercase();
-            if cql_lower.contains("space ")
-                || cql_lower.contains("space=")
-                || cql_lower.contains("space in")
-            {
-                cql.to_string()
-            } else {
-                let spaces = config
-                    .confluence
-                    .spaces_filter
-                    .iter()
-                    .map(|s| format!("\"{}\"", s))
-                    .collect::<Vec<_>>()
-                    .join(",");
-                format!("space IN ({}) AND ({})", spaces, cql)
-            }
-        } else {
-            cql.to_string()
-        };
+    #[test]
+    fn test_apply_space_filter_not_injected_when_present() {
+        let config = create_test_config(vec!["SPACE1".to_string()]);
+        let result = apply_space_filter("space = MYSPACE AND type = page", &config);
+        assert_eq!(result, "space = MYSPACE AND type = page");
+    }
 
+    #[test]
+    fn test_apply_space_filter_empty_filter() {
+        let config = create_test_config(vec![]);
+        let result = apply_space_filter("type = page", &config);
+        assert_eq!(result, "type = page");
+    }
+
+    #[test]
+    fn test_build_next_url_relative_path() {
+        let base_url = "https://test.atlassian.net/wiki";
+        let next_path = "/wiki/rest/api/search?cql=type%3Dpage&cursor=abc123";
+        let result = build_next_url(base_url, next_path);
         assert_eq!(
-            final_cql,
-            "space IN (\"SPACE1\",\"SPACE2\") AND (type = page)"
+            result,
+            "https://test.atlassian.net/wiki/rest/api/search?cql=type%3Dpage&cursor=abc123"
         );
     }
 
     #[test]
-    fn test_search_space_filter_not_injected_when_present() {
-        let config = create_test_config(vec!["SPACE1".to_string()]);
-        let cql = "space = MYSPACE AND type = page";
-
-        // Simulate space filter logic
-        let final_cql = if !config.confluence.spaces_filter.is_empty() {
-            let cql_lower = cql.to_lowercase();
-            if cql_lower.contains("space ")
-                || cql_lower.contains("space=")
-                || cql_lower.contains("space in")
-            {
-                cql.to_string()
-            } else {
-                let spaces = config
-                    .confluence
-                    .spaces_filter
-                    .iter()
-                    .map(|s| format!("\"{}\"", s))
-                    .collect::<Vec<_>>()
-                    .join(",");
-                format!("space IN ({}) AND ({})", spaces, cql)
-            }
-        } else {
-            cql.to_string()
-        };
-
-        assert_eq!(final_cql, "space = MYSPACE AND type = page");
+    fn test_build_next_url_absolute() {
+        let base_url = "https://test.atlassian.net/wiki";
+        let next_path = "https://other.atlassian.net/wiki/rest/api/search?cursor=xyz";
+        let result = build_next_url(base_url, next_path);
+        assert_eq!(
+            result,
+            "https://other.atlassian.net/wiki/rest/api/search?cursor=xyz"
+        );
     }
 
     // T018: Remaining Confluence handlers tests

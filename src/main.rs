@@ -104,6 +104,10 @@ enum ConfluenceSubcommand {
         query: String,
         #[arg(long, default_value = "10")]
         limit: u32,
+        #[arg(long, help = "Fetch all pages using cursor-based pagination")]
+        all: bool,
+        #[arg(long, help = "Stream results as JSONL (requires --all)")]
+        stream: bool,
     },
     Get {
         page_id: String,
@@ -392,8 +396,17 @@ async fn handle_confluence(
     use atlassian_cli::confluence;
 
     match cmd.subcommand {
-        ConfluenceSubcommand::Search { query, limit } => {
-            confluence::search(&query, limit, None, None, config).await
+        ConfluenceSubcommand::Search {
+            query,
+            limit,
+            all,
+            stream,
+        } => {
+            if all {
+                confluence::search_all(&query, None, None, stream, config).await
+            } else {
+                confluence::search(&query, limit, None, None, config).await
+            }
         }
         ConfluenceSubcommand::Get { page_id } => {
             confluence::get_page(&page_id, None, None, config).await
