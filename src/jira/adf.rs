@@ -172,6 +172,381 @@ pub fn process_comment_input(value: Value) -> Result<Value> {
     process_adf_input(value, "comment")
 }
 
+/// Converts an ADF document to Markdown format.
+pub fn adf_to_markdown(adf: &Value) -> String {
+    let Some(content) = adf.get("content").and_then(|c| c.as_array()) else {
+        return String::new();
+    };
+
+    let blocks: Vec<String> = content
+        .iter()
+        .filter_map(|node| convert_block_node(node, 0))
+        .collect();
+
+    normalize_markdown(&blocks.join("\n\n"))
+}
+
+fn convert_block_node(node: &Value, depth: usize) -> Option<String> {
+    let node_type = node.get("type")?.as_str()?;
+
+    match node_type {
+        "paragraph" => convert_paragraph(node),
+        "heading" => convert_heading(node),
+        "bulletList" => convert_bullet_list(node, depth),
+        "orderedList" => convert_ordered_list(node, depth),
+        "listItem" => convert_list_item(node, depth),
+        "codeBlock" => convert_code_block(node),
+        "blockquote" => convert_blockquote(node),
+        "rule" => Some("---".to_string()),
+        "panel" => convert_panel(node),
+        "table" => convert_table(node),
+        "mediaSingle" | "mediaGroup" => convert_media(node),
+        "expand" => convert_expand(node),
+        _ => convert_paragraph(node),
+    }
+}
+
+fn convert_paragraph(node: &Value) -> Option<String> {
+    let content = node.get("content")?.as_array()?;
+    let text = convert_inline_nodes(content);
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+fn convert_heading(node: &Value) -> Option<String> {
+    let level = node
+        .get("attrs")
+        .and_then(|a| a.get("level"))
+        .and_then(|l| l.as_u64())
+        .unwrap_or(1) as usize;
+
+    let content = node.get("content").and_then(|c| c.as_array())?;
+    let text = convert_inline_nodes(content);
+
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(format!("{} {}", "#".repeat(level.min(6)), text))
+    }
+}
+
+fn convert_bullet_list(node: &Value, depth: usize) -> Option<String> {
+    let items = node.get("content")?.as_array()?;
+    let lines: Vec<String> = items
+        .iter()
+        .filter_map(|item| {
+            let content = convert_list_item(item, depth)?;
+            Some(format!("{}- {}", "  ".repeat(depth), content))
+        })
+        .collect();
+
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
+}
+
+fn convert_ordered_list(node: &Value, depth: usize) -> Option<String> {
+    let items = node.get("content")?.as_array()?;
+    let lines: Vec<String> = items
+        .iter()
+        .enumerate()
+        .filter_map(|(i, item)| {
+            let content = convert_list_item(item, depth)?;
+            Some(format!("{}{}. {}", "  ".repeat(depth), i + 1, content))
+        })
+        .collect();
+
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
+}
+
+fn convert_list_item(node: &Value, depth: usize) -> Option<String> {
+    let content = node.get("content")?.as_array()?;
+    let mut parts: Vec<String> = Vec::new();
+
+    for child in content {
+        let child_type = child.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        match child_type {
+            "paragraph" => {
+                if let Some(text) = convert_paragraph(child) {
+                    parts.push(text);
+                }
+            }
+            "bulletList" => {
+                if let Some(list) = convert_bullet_list(child, depth + 1) {
+                    parts.push(format!("\n{}", list));
+                }
+            }
+            "orderedList" => {
+                if let Some(list) = convert_ordered_list(child, depth + 1) {
+                    parts.push(format!("\n{}", list));
+                }
+            }
+            _ => {
+                if let Some(text) = convert_block_node(child, depth + 1) {
+                    parts.push(text);
+                }
+            }
+        }
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" "))
+    }
+}
+
+fn convert_code_block(node: &Value) -> Option<String> {
+    let language = node
+        .get("attrs")
+        .and_then(|a| a.get("language"))
+        .and_then(|l| l.as_str())
+        .unwrap_or("");
+
+    let content = node.get("content").and_then(|c| c.as_array());
+    let code = content
+        .map(|nodes| {
+            nodes
+                .iter()
+                .filter_map(|n| n.get("text").and_then(|t| t.as_str()))
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default();
+
+    Some(format!("```{}\n{}\n```", language, code))
+}
+
+fn convert_blockquote(node: &Value) -> Option<String> {
+    let content = node.get("content")?.as_array()?;
+    let lines: Vec<String> = content
+        .iter()
+        .filter_map(|child| convert_block_node(child, 0))
+        .flat_map(|text| text.lines().map(|l| format!("> {}", l)).collect::<Vec<_>>())
+        .collect();
+
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
+}
+
+fn convert_panel(node: &Value) -> Option<String> {
+    let panel_type = node
+        .get("attrs")
+        .and_then(|a| a.get("panelType"))
+        .and_then(|p| p.as_str())
+        .unwrap_or("info")
+        .to_uppercase();
+
+    let content = node.get("content")?.as_array()?;
+    let text: Vec<String> = content
+        .iter()
+        .filter_map(|child| convert_block_node(child, 0))
+        .collect();
+
+    if text.is_empty() {
+        None
+    } else {
+        Some(format!("> **{}**: {}", panel_type, text.join(" ")))
+    }
+}
+
+fn convert_table(node: &Value) -> Option<String> {
+    let rows = node.get("content")?.as_array()?;
+    if rows.is_empty() {
+        return None;
+    }
+
+    let mut result: Vec<String> = Vec::new();
+    let mut is_header = true;
+
+    for row in rows {
+        let cells = row.get("content").and_then(|c| c.as_array())?;
+        let cell_texts: Vec<String> = cells
+            .iter()
+            .map(|cell| {
+                cell.get("content")
+                    .and_then(|c| c.as_array())
+                    .map(|content| {
+                        content
+                            .iter()
+                            .filter_map(|n| convert_block_node(n, 0))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    })
+                    .unwrap_or_default()
+            })
+            .collect();
+
+        result.push(format!("| {} |", cell_texts.join(" | ")));
+
+        if is_header {
+            let separator: Vec<&str> = vec!["---"; cell_texts.len()];
+            result.push(format!("| {} |", separator.join(" | ")));
+            is_header = false;
+        }
+    }
+
+    Some(result.join("\n"))
+}
+
+fn convert_media(node: &Value) -> Option<String> {
+    let content = node.get("content").and_then(|c| c.as_array())?;
+    for media in content {
+        if let Some(attrs) = media.get("attrs") {
+            let alt = attrs
+                .get("alt")
+                .and_then(|a| a.as_str())
+                .or_else(|| attrs.get("id").and_then(|i| i.as_str()))
+                .unwrap_or("media");
+            return Some(format!("[Media: {}]", alt));
+        }
+    }
+    Some("[Media]".to_string())
+}
+
+fn convert_expand(node: &Value) -> Option<String> {
+    let title = node
+        .get("attrs")
+        .and_then(|a| a.get("title"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("Details");
+
+    let content = node.get("content")?.as_array()?;
+    let text: Vec<String> = content
+        .iter()
+        .filter_map(|child| convert_block_node(child, 0))
+        .collect();
+
+    if text.is_empty() {
+        None
+    } else {
+        Some(format!("**{}**\n\n{}", title, text.join("\n\n")))
+    }
+}
+
+fn convert_inline_nodes(nodes: &[Value]) -> String {
+    nodes.iter().map(convert_inline_node).collect()
+}
+
+fn convert_inline_node(node: &Value) -> String {
+    let node_type = node.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+    match node_type {
+        "text" => convert_text_node(node),
+        "hardBreak" => "\n".to_string(),
+        "mention" => convert_mention(node),
+        "emoji" => convert_emoji(node),
+        "inlineCard" => convert_inline_card(node),
+        _ => String::new(),
+    }
+}
+
+fn convert_text_node(node: &Value) -> String {
+    let text = node
+        .get("text")
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let Some(marks) = node.get("marks").and_then(|m| m.as_array()) else {
+        return text;
+    };
+
+    let mut result = text;
+    for mark in marks {
+        let mark_type = mark.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        result = match mark_type {
+            "strong" => format!("**{}**", result),
+            "em" => format!("*{}*", result),
+            "code" => format!("`{}`", result),
+            "strike" => format!("~~{}~~", result),
+            "link" => {
+                let href = mark
+                    .get("attrs")
+                    .and_then(|a| a.get("href"))
+                    .and_then(|h| h.as_str())
+                    .unwrap_or("");
+                format!("[{}]({})", result, href)
+            }
+            _ => result,
+        };
+    }
+
+    result
+}
+
+fn convert_mention(node: &Value) -> String {
+    let attrs = node.get("attrs");
+    let text = attrs
+        .and_then(|a| a.get("text"))
+        .and_then(|t| t.as_str())
+        .or_else(|| attrs.and_then(|a| a.get("id")).and_then(|i| i.as_str()))
+        .unwrap_or("user");
+
+    format!("@{}", text.trim_start_matches('@'))
+}
+
+fn convert_emoji(node: &Value) -> String {
+    node.get("attrs")
+        .and_then(|a| a.get("shortName"))
+        .and_then(|s| s.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_default()
+}
+
+fn convert_inline_card(node: &Value) -> String {
+    let url = node
+        .get("attrs")
+        .and_then(|a| a.get("url"))
+        .and_then(|u| u.as_str())
+        .unwrap_or("");
+
+    if url.is_empty() {
+        String::new()
+    } else {
+        format!("[{}]({})", url, url)
+    }
+}
+
+fn normalize_markdown(text: &str) -> String {
+    let mut lines: Vec<&str> = Vec::new();
+    let mut prev_empty = false;
+
+    for line in text.lines() {
+        let is_empty = line.trim().is_empty();
+        if is_empty {
+            if !prev_empty {
+                lines.push("");
+            }
+            prev_empty = true;
+        } else {
+            lines.push(line);
+            prev_empty = false;
+        }
+    }
+
+    while lines.first() == Some(&"") {
+        lines.remove(0);
+    }
+    while lines.last() == Some(&"") {
+        lines.pop();
+    }
+
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -937,5 +1312,240 @@ mod tests {
             result.is_ok(),
             "Document with 150 paragraphs should be valid"
         );
+    }
+
+    // Tests for adf_to_markdown function
+
+    #[test]
+    fn test_adf_to_markdown_simple_paragraph() {
+        let adf = json!({
+            "type": "doc",
+            "version": 1,
+            "content": [{
+                "type": "paragraph",
+                "content": [{"type": "text", "text": "Hello world"}]
+            }]
+        });
+
+        let result = adf_to_markdown(&adf);
+        assert_eq!(result, "Hello world");
+    }
+
+    #[test]
+    fn test_adf_to_markdown_heading() {
+        let adf = json!({
+            "type": "doc",
+            "version": 1,
+            "content": [{
+                "type": "heading",
+                "attrs": {"level": 2},
+                "content": [{"type": "text", "text": "Title"}]
+            }]
+        });
+
+        let result = adf_to_markdown(&adf);
+        assert_eq!(result, "## Title");
+    }
+
+    #[test]
+    fn test_adf_to_markdown_bold_italic() {
+        let adf = json!({
+            "type": "doc",
+            "version": 1,
+            "content": [{
+                "type": "paragraph",
+                "content": [
+                    {"type": "text", "text": "bold", "marks": [{"type": "strong"}]},
+                    {"type": "text", "text": " and "},
+                    {"type": "text", "text": "italic", "marks": [{"type": "em"}]}
+                ]
+            }]
+        });
+
+        let result = adf_to_markdown(&adf);
+        assert_eq!(result, "**bold** and *italic*");
+    }
+
+    #[test]
+    fn test_adf_to_markdown_link() {
+        let adf = json!({
+            "type": "doc",
+            "version": 1,
+            "content": [{
+                "type": "paragraph",
+                "content": [{
+                    "type": "text",
+                    "text": "click here",
+                    "marks": [{"type": "link", "attrs": {"href": "https://example.com"}}]
+                }]
+            }]
+        });
+
+        let result = adf_to_markdown(&adf);
+        assert_eq!(result, "[click here](https://example.com)");
+    }
+
+    #[test]
+    fn test_adf_to_markdown_bullet_list() {
+        let adf = json!({
+            "type": "doc",
+            "version": 1,
+            "content": [{
+                "type": "bulletList",
+                "content": [
+                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Item 1"}]}]},
+                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Item 2"}]}]}
+                ]
+            }]
+        });
+
+        let result = adf_to_markdown(&adf);
+        assert!(result.contains("- Item 1"));
+        assert!(result.contains("- Item 2"));
+    }
+
+    #[test]
+    fn test_adf_to_markdown_ordered_list() {
+        let adf = json!({
+            "type": "doc",
+            "version": 1,
+            "content": [{
+                "type": "orderedList",
+                "content": [
+                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "First"}]}]},
+                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Second"}]}]}
+                ]
+            }]
+        });
+
+        let result = adf_to_markdown(&adf);
+        assert!(result.contains("1. First"));
+        assert!(result.contains("2. Second"));
+    }
+
+    #[test]
+    fn test_adf_to_markdown_code_block() {
+        let adf = json!({
+            "type": "doc",
+            "version": 1,
+            "content": [{
+                "type": "codeBlock",
+                "attrs": {"language": "rust"},
+                "content": [{"type": "text", "text": "fn main() {}"}]
+            }]
+        });
+
+        let result = adf_to_markdown(&adf);
+        assert!(result.contains("```rust"));
+        assert!(result.contains("fn main() {}"));
+        assert!(result.contains("```"));
+    }
+
+    #[test]
+    fn test_adf_to_markdown_inline_code() {
+        let adf = json!({
+            "type": "doc",
+            "version": 1,
+            "content": [{
+                "type": "paragraph",
+                "content": [
+                    {"type": "text", "text": "Use "},
+                    {"type": "text", "text": "code", "marks": [{"type": "code"}]},
+                    {"type": "text", "text": " here"}
+                ]
+            }]
+        });
+
+        let result = adf_to_markdown(&adf);
+        assert_eq!(result, "Use `code` here");
+    }
+
+    #[test]
+    fn test_adf_to_markdown_panel() {
+        let adf = json!({
+            "type": "doc",
+            "version": 1,
+            "content": [{
+                "type": "panel",
+                "attrs": {"panelType": "info"},
+                "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Important note"}]}]
+            }]
+        });
+
+        let result = adf_to_markdown(&adf);
+        assert!(result.contains("**INFO**"));
+        assert!(result.contains("Important note"));
+    }
+
+    #[test]
+    fn test_adf_to_markdown_mention() {
+        let adf = json!({
+            "type": "doc",
+            "version": 1,
+            "content": [{
+                "type": "paragraph",
+                "content": [
+                    {"type": "text", "text": "Hello "},
+                    {"type": "mention", "attrs": {"text": "@john"}}
+                ]
+            }]
+        });
+
+        let result = adf_to_markdown(&adf);
+        assert!(result.contains("@john"));
+    }
+
+    #[test]
+    fn test_adf_to_markdown_table() {
+        let adf = json!({
+            "type": "doc",
+            "version": 1,
+            "content": [{
+                "type": "table",
+                "content": [
+                    {"type": "tableRow", "content": [
+                        {"type": "tableHeader", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "A"}]}]},
+                        {"type": "tableHeader", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "B"}]}]}
+                    ]},
+                    {"type": "tableRow", "content": [
+                        {"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "1"}]}]},
+                        {"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "2"}]}]}
+                    ]}
+                ]
+            }]
+        });
+
+        let result = adf_to_markdown(&adf);
+        assert!(result.contains("| A | B |"));
+        assert!(result.contains("| --- | --- |"));
+        assert!(result.contains("| 1 | 2 |"));
+    }
+
+    #[test]
+    fn test_adf_to_markdown_empty_content() {
+        let adf = json!({
+            "type": "doc",
+            "version": 1,
+            "content": []
+        });
+
+        let result = adf_to_markdown(&adf);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_adf_to_markdown_rule() {
+        let adf = json!({
+            "type": "doc",
+            "version": 1,
+            "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "Above"}]},
+                {"type": "rule"},
+                {"type": "paragraph", "content": [{"type": "text", "text": "Below"}]}
+            ]
+        });
+
+        let result = adf_to_markdown(&adf);
+        assert!(result.contains("---"));
     }
 }

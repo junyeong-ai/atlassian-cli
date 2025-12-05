@@ -1,6 +1,13 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
+
+#[derive(Clone, Copy, Default, ValueEnum)]
+pub enum OutputFormat {
+    #[default]
+    Html,
+    Markdown,
+}
 
 #[derive(Parser)]
 #[command(name = "atlassian-cli", version, about = "CLI for Atlassian Jira and Confluence", long_about = None)]
@@ -47,6 +54,13 @@ struct JiraCommand {
 enum JiraSubcommand {
     Get {
         issue_key: String,
+        #[arg(
+            long,
+            value_enum,
+            default_value = "html",
+            help = "Output format for description/comments"
+        )]
+        format: OutputFormat,
     },
     Search {
         jql: String,
@@ -54,6 +68,13 @@ enum JiraSubcommand {
         limit: u32,
         #[arg(long, value_delimiter = ',')]
         fields: Option<Vec<String>>,
+        #[arg(
+            long,
+            value_enum,
+            default_value = "html",
+            help = "Output format for description/comments"
+        )]
+        format: OutputFormat,
     },
     Create {
         project: String,
@@ -114,9 +135,23 @@ enum ConfluenceSubcommand {
             help = "Fields to expand (e.g., body.storage,ancestors)"
         )]
         expand: Option<Vec<String>>,
+        #[arg(
+            long,
+            value_enum,
+            default_value = "html",
+            help = "Output format for body content"
+        )]
+        format: OutputFormat,
     },
     Get {
         page_id: String,
+        #[arg(
+            long,
+            value_enum,
+            default_value = "html",
+            help = "Output format for body content"
+        )]
+        format: OutputFormat,
     },
     Create {
         space: String,
@@ -348,9 +383,18 @@ async fn handle_jira(
     use atlassian_cli::jira;
 
     match cmd.subcommand {
-        JiraSubcommand::Get { issue_key } => jira::get_issue(&issue_key, config).await,
-        JiraSubcommand::Search { jql, limit, fields } => {
-            jira::search(&jql, limit, fields, config).await
+        JiraSubcommand::Get { issue_key, format } => {
+            let as_markdown = matches!(format, OutputFormat::Markdown);
+            jira::get_issue(&issue_key, as_markdown, config).await
+        }
+        JiraSubcommand::Search {
+            jql,
+            limit,
+            fields,
+            format,
+        } => {
+            let as_markdown = matches!(format, OutputFormat::Markdown);
+            jira::search(&jql, limit, fields, as_markdown, config).await
         }
         JiraSubcommand::Create {
             project,
@@ -401,6 +445,17 @@ async fn handle_confluence(
 ) -> Result<serde_json::Value> {
     use atlassian_cli::confluence;
 
+    let as_markdown = matches!(
+        cmd.subcommand,
+        ConfluenceSubcommand::Search {
+            format: OutputFormat::Markdown,
+            ..
+        } | ConfluenceSubcommand::Get {
+            format: OutputFormat::Markdown,
+            ..
+        }
+    );
+
     match cmd.subcommand {
         ConfluenceSubcommand::Search {
             query,
@@ -408,15 +463,16 @@ async fn handle_confluence(
             all,
             stream,
             expand,
+            format: _,
         } => {
             if all {
-                confluence::search_all(&query, None, expand, stream, config).await
+                confluence::search_all(&query, None, expand, stream, as_markdown, config).await
             } else {
-                confluence::search(&query, limit, None, expand, config).await
+                confluence::search(&query, limit, None, expand, as_markdown, config).await
             }
         }
-        ConfluenceSubcommand::Get { page_id } => {
-            confluence::get_page(&page_id, None, None, config).await
+        ConfluenceSubcommand::Get { page_id, format: _ } => {
+            confluence::get_page(&page_id, None, None, as_markdown, config).await
         }
         ConfluenceSubcommand::Create {
             space,

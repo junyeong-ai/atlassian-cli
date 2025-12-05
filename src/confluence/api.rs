@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::confluence::fields::{apply_expand_filtering, apply_v2_filtering};
+use crate::confluence::markdown::convert_to_markdown;
 use crate::http;
 use anyhow::Result;
 use reqwest::Client;
@@ -48,6 +49,7 @@ pub async fn search(
     limit: u32,
     include_all_fields: Option<bool>,
     additional_expand: Option<Vec<String>>,
+    as_markdown: bool,
     config: &Config,
 ) -> Result<Value> {
     let final_cql = apply_space_filter(query, config);
@@ -77,7 +79,12 @@ pub async fn search(
         anyhow::bail!("Search failed: {}", response.status());
     }
 
-    let data: Value = response.json().await?;
+    let mut data: Value = response.json().await?;
+
+    if as_markdown {
+        convert_results_to_markdown(&mut data);
+    }
+
     Ok(json!({
         "items": data["results"],
         "total": data["totalSize"]
@@ -89,6 +96,7 @@ pub async fn search_all(
     include_all_fields: Option<bool>,
     additional_expand: Option<Vec<String>>,
     stream: bool,
+    as_markdown: bool,
     config: &Config,
 ) -> Result<Value> {
     let final_cql = apply_space_filter(query, config);
@@ -104,7 +112,7 @@ pub async fn search_all(
     let mut next_url: Option<String> = None;
 
     loop {
-        let data = if let Some(ref url) = next_url {
+        let mut data = if let Some(ref url) = next_url {
             fetch_page(&client, url, config).await?
         } else {
             fetch_initial_page(
@@ -116,6 +124,10 @@ pub async fn search_all(
             )
             .await?
         };
+
+        if as_markdown {
+            convert_results_to_markdown(&mut data);
+        }
 
         let results = data["results"].as_array().cloned().unwrap_or_default();
         let count = results.len();
@@ -209,6 +221,7 @@ pub async fn get_page(
     page_id: &str,
     include_all_fields: Option<bool>,
     additional_includes: Option<Vec<String>>,
+    as_markdown: bool,
     config: &Config,
 ) -> Result<Value> {
     let client = http::client(config);
@@ -228,7 +241,13 @@ pub async fn get_page(
         anyhow::bail!("Failed to get page: {}", response.status());
     }
 
-    response.json().await.map_err(Into::into)
+    let mut data: Value = response.json().await?;
+
+    if as_markdown {
+        convert_page_to_markdown(&mut data);
+    }
+
+    Ok(data)
 }
 
 pub async fn get_page_children(
@@ -430,6 +449,37 @@ pub async fn update_page(
         "id": data["id"],
         "version": data["version"]["number"]
     }))
+}
+
+fn convert_results_to_markdown(data: &mut Value) {
+    let Some(results) = data.get_mut("results").and_then(|r| r.as_array_mut()) else {
+        return;
+    };
+    for item in results {
+        let Some(body) = item
+            .get_mut("body")
+            .and_then(|b| b.get_mut("storage"))
+            .and_then(|s| s.get_mut("value"))
+        else {
+            continue;
+        };
+        if let Some(html) = body.as_str().map(|s| s.to_string()) {
+            *body = Value::String(convert_to_markdown(&html));
+        }
+    }
+}
+
+fn convert_page_to_markdown(data: &mut Value) {
+    let Some(body) = data
+        .get_mut("body")
+        .and_then(|b| b.get_mut("storage"))
+        .and_then(|s| s.get_mut("value"))
+    else {
+        return;
+    };
+    if let Some(html) = body.as_str().map(|s| s.to_string()) {
+        *body = Value::String(convert_to_markdown(&html));
+    }
 }
 
 #[cfg(test)]

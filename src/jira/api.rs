@@ -5,6 +5,31 @@ use crate::jira::fields;
 use anyhow::Result;
 use serde_json::{Value, json};
 
+/// Convert ADF description field to Markdown in a single issue
+fn convert_issue_to_markdown(issue: &mut Value) {
+    let Some(fields) = issue.get_mut("fields") else {
+        return;
+    };
+    let Some(desc) = fields.get_mut("description") else {
+        return;
+    };
+    if desc.is_object() {
+        let markdown = adf::adf_to_markdown(desc);
+        *desc = Value::String(markdown);
+    }
+}
+
+/// Convert ADF description fields to Markdown in search results
+fn convert_issues_to_markdown(result: &mut Value) {
+    let Some(items) = result.get_mut("items").and_then(|i| i.as_array_mut()) else {
+        return;
+    };
+
+    for issue in items {
+        convert_issue_to_markdown(issue);
+    }
+}
+
 /// Apply project filter to JQL query if configured
 fn apply_project_filter(jql: &str, config: &Config) -> String {
     if config.jira.projects_filter.is_empty() {
@@ -52,7 +77,7 @@ fn apply_project_filter(jql: &str, config: &Config) -> String {
     }
 }
 
-pub async fn get_issue(issue_key: &str, config: &Config) -> Result<Value> {
+pub async fn get_issue(issue_key: &str, as_markdown: bool, config: &Config) -> Result<Value> {
     let client = http::client(config);
     let base_url = format!("{}/rest/api/3/issue/{}", config.base_url(), issue_key);
 
@@ -69,13 +94,20 @@ pub async fn get_issue(issue_key: &str, config: &Config) -> Result<Value> {
         anyhow::bail!("Failed to get issue: {}", response.status());
     }
 
-    response.json().await.map_err(Into::into)
+    let mut data: Value = response.json().await?;
+
+    if as_markdown {
+        convert_issue_to_markdown(&mut data);
+    }
+
+    Ok(data)
 }
 
 pub async fn search(
     jql: &str,
     limit: u32,
     fields: Option<Vec<String>>,
+    as_markdown: bool,
     config: &Config,
 ) -> Result<Value> {
     let final_jql = apply_project_filter(jql, config);
@@ -112,10 +144,16 @@ pub async fn search(
     }
 
     let data: Value = response.json().await?;
-    Ok(json!({
+    let mut result = json!({
         "items": data["issues"],
         "total": data["total"]
-    }))
+    });
+
+    if as_markdown {
+        convert_issues_to_markdown(&mut result);
+    }
+
+    Ok(result)
 }
 
 pub async fn create_issue(
