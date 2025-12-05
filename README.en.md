@@ -80,7 +80,7 @@ atlassian-cli confluence update 123456 "New Title" "<p>New content</p>"
 
 # Children/Comments
 atlassian-cli confluence children 123456
-atlassian-cli confluence comments 123456
+atlassian-cli confluence comments 123456 --format markdown
 ```
 
 ### Config & Optimization
@@ -275,6 +275,7 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 | `update <ID> <TITLE> <CONTENT>` | Update page | `confluence update 123456 "Title" "<p>HTML</p>"` |
 | `children <ID>` | List children | `confluence children 123456` |
 | `comments <ID>` | Get comments | `confluence comments 123456` |
+| `comments <ID> --format markdown` | Get comments (Markdown) | `confluence comments 123456 --format markdown` |
 
 ### Config Commands
 
@@ -285,6 +286,7 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 | `edit [--global]` | Edit with editor | `config edit` |
 | `path [--global]` | File path | `config path` |
 | `list` | List locations | `config list` |
+| `validate` | Validate API connection | `config validate` |
 
 ### Common Options
 
@@ -297,7 +299,7 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 | `--all` | All results (pagination) | confluence search |
 | `--stream` | JSONL streaming | confluence search (requires --all) |
 | `--expand` | Expand fields (body.storage, ancestors, etc.) | confluence search |
-| `--format` | Output format (html, markdown) | confluence search, confluence get |
+| `--format` | Output format (html, markdown) | jira get/search, confluence search/get/comments |
 | `--fields` | Specify fields | jira search, jira get |
 
 ---

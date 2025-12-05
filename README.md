@@ -80,7 +80,7 @@ atlassian-cli confluence update 123456 "새 제목" "<p>새 내용</p>"
 
 # 하위 페이지/댓글
 atlassian-cli confluence children 123456
-atlassian-cli confluence comments 123456
+atlassian-cli confluence comments 123456 --format markdown
 ```
 
 ### 설정 & 최적화
@@ -275,6 +275,7 @@ JIRA_SEARCH_DEFAULT_FIELDS="key,summary" atlassian-cli jira search "project = PR
 | `update <ID> <TITLE> <CONTENT>` | 페이지 수정 | `confluence update 123456 "Title" "<p>HTML</p>"` |
 | `children <ID>` | 하위 페이지 | `confluence children 123456` |
 | `comments <ID>` | 댓글 조회 | `confluence comments 123456` |
+| `comments <ID> --format markdown` | 댓글 조회 (Markdown) | `confluence comments 123456 --format markdown` |
 
 ### Config 명령어
 
@@ -285,6 +286,7 @@ JIRA_SEARCH_DEFAULT_FIELDS="key,summary" atlassian-cli jira search "project = PR
 | `edit [--global]` | 에디터로 수정 | `config edit` |
 | `path [--global]` | 파일 경로 | `config path` |
 | `list` | 위치 나열 | `config list` |
+| `validate` | API 연결 검증 | `config validate` |
 
 ### 공통 옵션
 
@@ -297,7 +299,7 @@ JIRA_SEARCH_DEFAULT_FIELDS="key,summary" atlassian-cli jira search "project = PR
 | `--all` | 전체 결과 (페이지네이션) | confluence search |
 | `--stream` | JSONL 스트리밍 | confluence search (--all 필요) |
 | `--expand` | 확장 필드 (body.storage, ancestors 등) | confluence search |
-| `--format` | 출력 형식 (html, markdown) | confluence search, confluence get |
+| `--format` | 출력 형식 (html, markdown) | jira get/search, confluence search/get/comments |
 | `--fields` | 필드 지정 | jira search, jira get |
 
 ---

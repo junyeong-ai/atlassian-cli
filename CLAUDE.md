@@ -136,7 +136,9 @@ fn apply_space_filter(cql: &str, config: &Config) -> String {
 | `--all` | Fetch all results via cursor pagination | search |
 | `--stream` | Output JSONL (requires --all) | search |
 | `--expand` | Expand fields: `body.storage`, `ancestors`, `version`, etc. | search |
-| `--format` | Output format: `html` (default) or `markdown` | search, get |
+| `--format` | Output format: `html` (default) or `markdown` | search, get, comments |
+
+Note: `children` command does not support `--format` (v2 API limitation).
 
 ## Testing
 

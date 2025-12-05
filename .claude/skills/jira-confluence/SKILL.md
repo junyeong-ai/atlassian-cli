@@ -72,17 +72,19 @@ atlassian-cli confluence update 12345 "Title" "<p>Updated</p>"
 
 # Children & Comments
 atlassian-cli confluence children 12345
-atlassian-cli confluence comments 12345
+atlassian-cli confluence comments 12345 --format markdown
 ```
 
 ### Options
-| Option | Description |
-|--------|-------------|
-| `--expand body.storage` | Include page content (required for `--format markdown`) |
-| `--format markdown` | Convert to Markdown |
-| `--limit N` | Max results (default: 10, max: 250) |
-| `--all` | Fetch all pages via cursor pagination |
-| `--stream` | Output JSONL (requires --all) |
+| Option | Description | Applies To |
+|--------|-------------|------------|
+| `--expand body.storage` | Include page content | search |
+| `--format markdown` | Convert to Markdown | search, get, comments |
+| `--limit N` | Max results (default: 10, max: 250) | search |
+| `--all` | Fetch all pages via cursor pagination | search |
+| `--stream` | Output JSONL (requires --all) | search |
+
+Note: `children` does not support `--format` (v2 API limitation).
 
 ## Authentication
 
