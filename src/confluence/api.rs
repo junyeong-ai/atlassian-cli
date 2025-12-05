@@ -11,7 +11,6 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 const MAX_LIMIT: u32 = 250;
-const RATE_LIMIT_DELAY_MS: u64 = 200;
 const SEARCH_BODY_LIMIT: u32 = 50;
 
 fn apply_space_filter(cql: &str, config: &Config) -> String {
@@ -152,7 +151,10 @@ pub async fn search_all(
         let links_base = data["_links"]["base"].as_str().unwrap_or(base_url);
         next_url = Some(build_next_url(links_base, next_path.unwrap()));
         page_num += 1;
-        sleep(Duration::from_millis(RATE_LIMIT_DELAY_MS)).await;
+        sleep(Duration::from_millis(
+            config.performance.rate_limit_delay_ms,
+        ))
+        .await;
     }
 
     eprintln!("\nTotal: {} items fetched", all_items.len());
@@ -517,8 +519,9 @@ mod tests {
     }
 
     #[test]
-    fn test_rate_limit_delay() {
-        assert_eq!(RATE_LIMIT_DELAY_MS, 200);
+    fn test_rate_limit_delay_default() {
+        let config = create_test_config(vec![]);
+        assert_eq!(config.performance.rate_limit_delay_ms, 200);
     }
 
     #[test]

@@ -50,18 +50,26 @@ pub struct ConfluenceConfig {
 pub struct PerformanceConfig {
     #[serde(default = "default_timeout")]
     pub request_timeout_ms: u64,
+
+    #[serde(default = "default_rate_limit_delay")]
+    pub rate_limit_delay_ms: u64,
 }
 
 impl Default for PerformanceConfig {
     fn default() -> Self {
         Self {
             request_timeout_ms: default_timeout(),
+            rate_limit_delay_ms: default_rate_limit_delay(),
         }
     }
 }
 
 fn default_timeout() -> u64 {
     30000
+}
+
+fn default_rate_limit_delay() -> u64 {
+    200
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -442,6 +450,7 @@ spaces_filter = []
 
 [default.performance]
 request_timeout_ms = 30000
+rate_limit_delay_ms = 200
 
 # [default.optimization]
 # response_exclude_fields = ["avatarUrls", "iconUrl"]

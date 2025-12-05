@@ -105,15 +105,15 @@ fn apply_space_filter(cql: &str, config: &Config) -> String {
 2. **main.rs**: Add match arm in `handle_jira` or `handle_confluence`
 3. **api.rs**: Implement async function
 
-## Constants
+## Constants & Configurable Values
 
-| Location | Constant | Value |
-|----------|----------|-------|
-| `jira/fields.rs` | `DEFAULT_SEARCH_FIELDS` | 17 fields |
-| `confluence/api.rs` | `MAX_LIMIT` | 250 |
-| `confluence/api.rs` | `SEARCH_BODY_LIMIT` | 50 |
-| `confluence/api.rs` | `RATE_LIMIT_DELAY_MS` | 200 |
-| `config.rs` | `default_timeout` | 30000ms |
+| Location | Constant/Config | Default | Configurable |
+|----------|----------------|---------|--------------|
+| `jira/fields.rs` | `DEFAULT_SEARCH_FIELDS` | 17 fields | ✅ `[jira]` |
+| `confluence/api.rs` | `MAX_LIMIT` | 250 | ❌ API limit |
+| `confluence/api.rs` | `SEARCH_BODY_LIMIT` | 50 | ❌ API limit |
+| `config.rs` | `request_timeout_ms` | 30000 | ✅ `[performance]` |
+| `config.rs` | `rate_limit_delay_ms` | 200 | ✅ `[performance]` |
 
 ## API Endpoints
 

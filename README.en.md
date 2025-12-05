@@ -188,6 +188,7 @@ spaces_filter = ["TEAM", "DOCS"]
 
 [default.performance]
 request_timeout_ms = 30000
+rate_limit_delay_ms = 200
 ```
 
 ### Config Priority

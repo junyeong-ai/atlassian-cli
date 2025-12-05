@@ -16,6 +16,7 @@ pub fn create_test_config() -> Config {
         base_url: "https://test.atlassian.net".to_string(),
         performance: PerformanceConfig {
             request_timeout_ms: 30000,
+            rate_limit_delay_ms: 200,
         },
         ..Default::default()
     }
