@@ -64,6 +64,7 @@ atlassian-cli jira transition PROJ-123 31
 atlassian-cli confluence search "type=page AND space=TEAM" --limit 10
 atlassian-cli confluence search "type=page" --all           # Fetch all results
 atlassian-cli confluence search "type=page" --all --stream  # JSONL streaming
+atlassian-cli confluence search "type=page" --expand body.storage,ancestors
 
 # Get/Create/Update pages
 atlassian-cli confluence get 123456
@@ -284,6 +285,7 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 | `--limit <N>` | Limit results | search |
 | `--all` | All results (pagination) | confluence search |
 | `--stream` | JSONL streaming | confluence search (requires --all) |
+| `--expand` | Expand fields (body.storage, ancestors, etc.) | confluence search |
 | `--fields` | Specify fields | jira search, jira get |
 
 ---

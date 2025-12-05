@@ -52,7 +52,8 @@ pub async fn search(
 ) -> Result<Value> {
     let final_cql = apply_space_filter(query, config);
     let client = http::client(config);
-    let url = format!("{}/wiki/rest/api/search", config.base_url());
+    // Use content/search API which supports body.storage expand
+    let url = format!("{}/wiki/rest/api/content/search", config.base_url());
     let (url, expand_param) = apply_expand_filtering(&url, include_all_fields, additional_expand);
 
     let mut query_params = vec![
@@ -93,7 +94,8 @@ pub async fn search_all(
     let final_cql = apply_space_filter(query, config);
     let client = http::client(config);
     let base_url = config.base_url();
-    let initial_url = format!("{}/wiki/rest/api/search", base_url);
+    // Use content/search API which supports body.storage expand
+    let initial_url = format!("{}/wiki/rest/api/content/search", base_url);
     let (_, expand_param) =
         apply_expand_filtering(&initial_url, include_all_fields, additional_expand.clone());
 

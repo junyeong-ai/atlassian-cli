@@ -96,8 +96,17 @@ fn apply_space_filter(cql: &str, config: &Config) -> String {
 ## API Endpoints
 
 - Jira: `/rest/api/3/*`
-- Confluence Search: `/wiki/rest/api/search` (v1, uses `expand`)
-- Confluence Pages: `/wiki/api/v2/pages/*` (v2, uses `include-*`)
+- Confluence Search: `/wiki/rest/api/search` (v1, uses `expand` param)
+- Confluence Pages: `/wiki/api/v2/pages/*` (v2, uses `include-*` params)
+
+## CLI Options (Confluence Search)
+
+| Option | Description |
+|--------|-------------|
+| `--limit N` | Max results per request (default: 10, max: 250) |
+| `--all` | Fetch all results via cursor pagination |
+| `--stream` | Output JSONL (requires --all) |
+| `--expand` | Expand fields: `body.storage`, `ancestors`, `version`, etc. |
 
 ## Testing
 
