@@ -111,6 +111,7 @@ fn apply_space_filter(cql: &str, config: &Config) -> String {
 |----------|----------|-------|
 | `jira/fields.rs` | `DEFAULT_SEARCH_FIELDS` | 17 fields |
 | `confluence/api.rs` | `MAX_LIMIT` | 250 |
+| `confluence/api.rs` | `SEARCH_BODY_LIMIT` | 50 |
 | `confluence/api.rs` | `RATE_LIMIT_DELAY_MS` | 200 |
 | `config.rs` | `default_timeout` | 30000ms |
 
@@ -135,7 +136,7 @@ fn apply_space_filter(cql: &str, config: &Config) -> String {
 | `--limit N` | Max results per request (default: 10, max: 250) | search |
 | `--all` | Fetch all results via cursor pagination | search |
 | `--stream` | Output JSONL (requires --all) | search |
-| `--expand` | Expand fields: `body.storage`, `ancestors`, `version`, etc. | search |
+| `--expand` | Additional expand fields: `ancestors`, `space`, etc. (body.storage included by default) | search |
 | `--format` | Output format: `html` (default) or `markdown` | search, get, comments |
 
 Note: `children` command does not support `--format` (v2 API limitation).

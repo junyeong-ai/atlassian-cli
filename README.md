@@ -67,7 +67,7 @@ atlassian-cli jira transition PROJ-123 31
 atlassian-cli confluence search "type=page AND space=TEAM" --limit 10
 atlassian-cli confluence search "type=page" --all           # 전체 결과 조회
 atlassian-cli confluence search "type=page" --all --stream  # JSONL 스트리밍
-atlassian-cli confluence search "type=page" --expand body.storage --format markdown  # Markdown 변환
+atlassian-cli confluence search "type=page" --format markdown  # Markdown 변환 (body 기본 포함)
 
 # 페이지 조회 (Markdown 변환)
 atlassian-cli confluence get 123456 --format markdown
@@ -298,7 +298,7 @@ JIRA_SEARCH_DEFAULT_FIELDS="key,summary" atlassian-cli jira search "project = PR
 | `--limit <N>` | 결과 개수 제한 | search |
 | `--all` | 전체 결과 (페이지네이션) | confluence search |
 | `--stream` | JSONL 스트리밍 | confluence search (--all 필요) |
-| `--expand` | 확장 필드 (body.storage, ancestors 등) | confluence search |
+| `--expand` | 추가 확장 필드 (ancestors 등, body.storage는 기본 포함) | confluence search |
 | `--format` | 출력 형식 (html, markdown) | jira get/search, confluence search/get/comments |
 | `--fields` | 필드 지정 | jira search, jira get |
 

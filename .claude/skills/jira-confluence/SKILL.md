@@ -59,8 +59,8 @@ atlassian-cli confluence get 12345 --format markdown
 # Search (CQL) - metadata only (fast)
 atlassian-cli confluence search "space = TEAM" --limit 20
 
-# Search with content (requires --expand)
-atlassian-cli confluence search "title ~ 'API'" --expand body.storage --format markdown --limit 10
+# Search with content (body included by default)
+atlassian-cli confluence search "title ~ 'API'" --format markdown --limit 10
 
 # Pagination
 atlassian-cli confluence search "space = TEAM" --all --format markdown
@@ -78,11 +78,11 @@ atlassian-cli confluence comments 12345 --format markdown
 ### Options
 | Option | Description | Applies To |
 |--------|-------------|------------|
-| `--expand body.storage` | Include page content | search |
 | `--format markdown` | Convert to Markdown | search, get, comments |
-| `--limit N` | Max results (default: 10, max: 250) | search |
+| `--limit N` | Max results (default: 10, max: 50 with body) | search |
 | `--all` | Fetch all pages via cursor pagination | search |
 | `--stream` | Output JSONL (requires --all) | search |
+| `--expand <fields>` | Additional fields: `ancestors`, `space` (body.storage included by default) | search |
 
 Note: `children` does not support `--format` (v2 API limitation).
 
