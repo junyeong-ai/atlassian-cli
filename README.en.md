@@ -1,194 +1,86 @@
 # Atlassian CLI
 
 [![CI](https://github.com/junyeong-ai/atlassian-cli/workflows/CI/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions)
-[![Lint](https://github.com/junyeong-ai/atlassian-cli/workflows/Lint/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions)
-[![Rust](https://img.shields.io/badge/rust-1.91.1%2B%20(2024%20edition)-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
+[![Rust](https://img.shields.io/badge/rust-1.91.1%2B-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
 
-> **🌐 [한국어](README.md)** | **English**
+English | **[한국어](README.md)**
 
----
+Access Jira and Confluence from your terminal.
 
-> **⚡ Fast and Powerful Atlassian Cloud Command-Line Tool**
->
-> - 🚀 **3.8MB single binary** (no runtime required)
-> - 📊 **14 operations** (Jira 8 + Confluence 6)
-> - 🎯 **Field optimization** (60-70% response size reduction)
-> - 🔧 **4-tier config** (CLI → ENV → Project → Global)
+## Features
 
----
+- **Single binary** — No runtime dependencies
+- **60-70% response optimization** — Fetch only needed fields
+- **Full pagination** — Get all results with `--all`
+- **4-tier config** — CLI > ENV > Project > Global
 
-## ⚡ Quick Start (1 minute)
+## Installation
 
 ```bash
-# 1. Install
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | bash
+```
 
-# 2. Initialize config
+Or download from [Releases](https://github.com/junyeong-ai/atlassian-cli/releases)
+
+## Getting Started
+
+```bash
+# 1. Initialize config
 atlassian-cli config init --global
 
-# 3. Set token
-# Edit ~/.config/atlassian-cli/config.toml
-# Enter domain, email, token
-
-# 4. Start using! 🎉
-atlassian-cli jira search "status = Open" --limit 5
-atlassian-cli confluence search "type=page AND space=TEAM"
+# 2. Edit config (~/.config/atlassian-cli/config.toml)
+atlassian-cli config edit --global
 ```
 
-**Tip**: [Generate API Token](https://id.atlassian.com/manage-profile/security/api-tokens) required
-
----
-
-## 🎯 Key Features
-
-### Jira Operations
-```bash
-# Search issues (JQL)
-atlassian-cli jira search "project = TMS AND status = Open" --limit 10
-atlassian-cli jira search "assignee = currentUser() AND status != Done"
-
-# Get issue
-atlassian-cli jira get PROJ-123
-
-# Create issue
-atlassian-cli jira create PROJ "Bug fix" Bug --description "Details"
-
-# Update issue
-atlassian-cli jira update PROJ-123 '{"summary":"New title"}'
-
-# Add comment
-atlassian-cli jira comment add PROJ-123 "Work completed"
-
-# Transition
-atlassian-cli jira transitions PROJ-123
-atlassian-cli jira transition PROJ-123 31
-```
-
-### Confluence Operations
-```bash
-# Search pages (CQL)
-atlassian-cli confluence search 'type=page AND space="TEAM"' --limit 10
-
-# Get page
-atlassian-cli confluence get 123456
-
-# Create page
-atlassian-cli confluence create TEAM "API Docs" "<p>Content</p>"
-
-# Update page
-atlassian-cli confluence update 123456 "API Docs v2" "<p>New content</p>"
-
-# List children
-atlassian-cli confluence children 123456
-
-# Get comments
-atlassian-cli confluence comments 123456
-```
-
-### Config & Optimization
-```bash
-# Config management
-atlassian-cli config show            # Show config (masked token)
-atlassian-cli config path            # Config file path
-atlassian-cli config edit            # Edit with default editor
-
-# Field optimization (60-70% size reduction)
-atlassian-cli jira search "project = PROJ" --fields key,summary,status
-export JIRA_SEARCH_DEFAULT_FIELDS="key,summary,status"
-export JIRA_SEARCH_CUSTOM_FIELDS="customfield_10015"
-
-# JSON output
-atlassian-cli jira get PROJ-123 | jq -r '.fields.summary'
-```
-
-**Important Notes**:
-- Field optimization: 17 default fields (excludes `description`, `id`, `renderedFields`)
-- Project filter: Access control with `projects_filter`
-- ADF auto-conversion: Plain text → Atlassian Document Format
-
----
-
-## 📦 Installation
-
-### Method 1: Prebuilt Binary (Recommended) ⭐
-
-**Automated install**:
-```bash
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | bash
-```
-
-**Manual install**:
-1. Download binary from [Releases](https://github.com/junyeong-ai/atlassian-cli/releases)
-2. Extract: `tar -xzf atlassian-cli-*.tar.gz`
-3. Move to PATH: `mv atlassian-cli ~/.local/bin/`
-
-**Supported Platforms**:
-- Linux: x86_64, aarch64
-- macOS: Intel (x86_64), Apple Silicon (aarch64)
-- Windows: x86_64
-
-### Method 2: Build from Source
-
-```bash
-git clone https://github.com/junyeong-ai/atlassian-cli
-cd atlassian-cli
-cargo build --release
-cp target/release/atlassian-cli ~/.local/bin/
-```
-
-**Requirements**: Rust 1.91.1+
-
-### 🤖 Claude Code Skill (Optional)
-
-When running `./scripts/install.sh`, you can choose to install the Claude Code skill:
-
-- **User-level** (recommended): Available in all projects
-- **Project-level**: Auto-distributed to team via git
-- **Skip**: Manual installation later
-
-The skill enables natural language Jira/Confluence queries in Claude Code.
-
----
-
-## 🔑 Generate API Token
-
-1. Visit [Atlassian API Tokens](https://id.atlassian.com/manage-profile/security/api-tokens)
-2. Click "Create API token"
-3. Enter label (e.g., "atlassian-cli")
-4. Copy token and add to config file
-
-**Security**: Treat token like password. Regenerate immediately if exposed.
-
----
-
-## ⚙️ Configuration
-
-### Config File
-
-**Location**:
-- macOS/Linux: `~/.config/atlassian-cli/config.toml`
-- Windows: `%APPDATA%\atlassian-cli\config.toml`
-- Project: `./.atlassian.toml`
-
-**Default config** (generated by `atlassian-cli config init`):
 ```toml
 [default]
 domain = "company.atlassian.net"
 email = "user@example.com"
-token = "your-api-token"
-
-[default.jira]
-projects_filter = ["PROJ1", "PROJ2"]
-
-[default.confluence]
-spaces_filter = ["TEAM", "DOCS"]
-
-[performance]
-request_timeout_ms = 30000
+token = "your-api-token"  # https://id.atlassian.com/manage-profile/security/api-tokens
 ```
 
-### Environment Variables
+## Usage
+
+### Jira
+
+```bash
+# Search
+atlassian-cli jira search "status = Open" --limit 10
+atlassian-cli jira search "project = PROJ" --fields key,summary,status
+
+# Get/Create/Update
+atlassian-cli jira get PROJ-123
+atlassian-cli jira create PROJ "Title" Bug --description "Details"
+atlassian-cli jira update PROJ-123 '{"summary":"New title"}'
+
+# Comment/Transition
+atlassian-cli jira comment add PROJ-123 "Done"
+atlassian-cli jira transition PROJ-123 31
+```
+
+### Confluence
+
+```bash
+# Search
+atlassian-cli confluence search "type=page" --limit 10
+atlassian-cli confluence search "space=TEAM" --all          # All results
+atlassian-cli confluence search "space=TEAM" --all --stream # JSONL streaming
+
+# Get/Create/Update
+atlassian-cli confluence get 123456
+atlassian-cli confluence create TEAM "Page Title" "<p>Content</p>"
+atlassian-cli confluence update 123456 "New Title" "<p>New content</p>"
+```
+
+### Config Management
+
+```bash
+atlassian-cli config show   # Current config (token masked)
+atlassian-cli config path   # Config file path
+atlassian-cli config edit   # Open in editor
+```
+
+## Environment Variables
 
 ```bash
 export ATLASSIAN_DOMAIN="company.atlassian.net"
@@ -197,151 +89,26 @@ export ATLASSIAN_API_TOKEN="your-token"
 
 # Field optimization
 export JIRA_SEARCH_DEFAULT_FIELDS="key,summary,status"
-export JIRA_SEARCH_CUSTOM_FIELDS="customfield_10015"
-export CONFLUENCE_CUSTOM_INCLUDES="ancestors,history"
 ```
 
-### Config Priority
+## Command Summary
 
-```
-CLI flags > Environment variables > Project config > Global config
-```
+| Jira | Confluence | Config |
+|------|------------|--------|
+| `get` `search` `create` `update` | `get` `search` `create` `update` | `init` `show` `edit` |
+| `comment add/update` | `children` `comments` | `path` `list` |
+| `transition` `transitions` | | |
 
-**Example**:
-```bash
-# Override config file
-atlassian-cli --domain company.atlassian.net --email user@example.com \
-  jira search "status = Open"
-```
+### Key Options
 
----
+| Option | Description |
+|--------|-------------|
+| `--limit N` | Limit results |
+| `--all` | All results (pagination) |
+| `--stream` | JSONL streaming (requires `--all`) |
+| `--fields` | Specify fields (Jira) |
 
-## 🏗️ Core Architecture
+## Support
 
-4-tier priority config, ADF auto-conversion, field optimization (17 default fields).
-For detailed architecture, see [CLAUDE.md](CLAUDE.md).
-
----
-
-## 🔧 Troubleshooting
-
-### Config Not Found
-
-**Checklist**:
-- [ ] Config file exists: `atlassian-cli config path`
-- [ ] Config content: `atlassian-cli config show`
-- [ ] Domain format: `company.atlassian.net` (without https://)
-
-**Solution**:
-```bash
-atlassian-cli config init --global
-```
-
-### API Authentication Failed
-
-**Checklist**:
-- [ ] Email format valid
-- [ ] Token correct (watch for copy/paste spaces)
-- [ ] Domain format correct
-
-**Test token**: Check masked token with `atlassian-cli config show`
-
-### Field Filtering Not Working
-
-**Priority check**:
-1. CLI `--fields` (highest priority)
-2. `JIRA_SEARCH_DEFAULT_FIELDS` environment variable
-3. Default 17 fields + `JIRA_SEARCH_CUSTOM_FIELDS`
-
-```bash
-# Test
-JIRA_SEARCH_DEFAULT_FIELDS="key,summary" atlassian-cli jira search "project = PROJ"
-```
-
-### Project Access Restriction
-
-With `projects_filter`, JQL auto-injected:
-```
-Input: status = Open
-Executed: project IN (PROJ1,PROJ2) AND (status = Open)
-```
-
----
-
-## 📚 Command Reference
-
-### Jira Commands (8)
-
-| Command | Description | Example |
-|---------|-------------|---------|
-| `get <KEY>` | Get issue | `atlassian-cli jira get PROJ-123` |
-| `search <JQL>` | JQL search | `atlassian-cli jira search "status = Open" --limit 10` |
-| `create <PROJECT> <SUMMARY> <TYPE>` | Create issue | `atlassian-cli jira create PROJ "Title" Bug --description "Text"` |
-| `update <KEY> <JSON>` | Update issue | `atlassian-cli jira update PROJ-123 '{"summary":"New"}'` |
-| `comment add <KEY> <TEXT>` | Add comment | `atlassian-cli jira comment add PROJ-123 "Comment"` |
-| `comment update <KEY> <ID> <TEXT>` | Update comment | `atlassian-cli jira comment update PROJ-123 123 "Updated"` |
-| `transitions <KEY>` | List transitions | `atlassian-cli jira transitions PROJ-123` |
-| `transition <KEY> <ID>` | Transition issue | `atlassian-cli jira transition PROJ-123 31` |
-
-### Confluence Commands (6)
-
-| Command | Description | Example |
-|---------|-------------|---------|
-| `search <CQL>` | CQL search | `atlassian-cli confluence search "type=page" --limit 10` |
-| `get <ID>` | Get page | `atlassian-cli confluence get 123456` |
-| `create <SPACE> <TITLE> <CONTENT>` | Create page | `atlassian-cli confluence create TEAM "Title" "<p>HTML</p>"` |
-| `update <ID> <TITLE> <CONTENT>` | Update page | `atlassian-cli confluence update 123456 "Title" "<p>HTML</p>"` |
-| `children <ID>` | List children | `atlassian-cli confluence children 123456` |
-| `comments <ID>` | Get comments | `atlassian-cli confluence comments 123456` |
-
-### Config Commands (5)
-
-| Command | Description | Example |
-|---------|-------------|---------|
-| `init [--global]` | Initialize config | `atlassian-cli config init --global` |
-| `show` | Show config (masked token) | `atlassian-cli config show` |
-| `list` | List config locations | `atlassian-cli config list` |
-| `path [--global]` | Config file path | `atlassian-cli config path` |
-| `edit [--global]` | Edit with editor | `atlassian-cli config edit` |
-
-### Common Options
-
-| Option | Description | Applies To |
-|--------|-------------|------------|
-| `--domain <DOMAIN>` | Override domain | All commands |
-| `--email <EMAIL>` | Override email | All commands |
-| `--token <TOKEN>` | Override token | All commands |
-| `--profile <NAME>` | Select profile | All commands |
-| `--fields <FIELDS>` | Specify fields (comma-separated) | jira search, jira get |
-| `--limit <N>` | Limit results | jira search, confluence search |
-| `--description <TEXT>` | Description (ADF auto-conversion) | jira create, jira update |
-
-**Notes**:
-- Domain format: `company.atlassian.net` (without https://)
-- ADF auto-conversion: Plain text → JSON ADF
-- Field optimization: 17 default fields (`key,summary,status,...`)
-
----
-
-## 🚀 Developer Guide
-
-**Architecture, debugging, contribution guide**: See [CLAUDE.md](CLAUDE.md)
-
----
-
-## 💬 Support
-
-- **GitHub Issues**: [Report issues](https://github.com/junyeong-ai/atlassian-cli/issues)
-- **Developer Docs**: [CLAUDE.md](CLAUDE.md)
-
----
-
-<div align="center">
-
-**🌐 [한국어](README.md)** | **English**
-
-**Version 0.1.0** • Rust 2024 Edition
-
-Made with ❤️ for productivity
-
-</div>
+- [Issues](https://github.com/junyeong-ai/atlassian-cli/issues)
+- [Developer Guide](CLAUDE.md)
