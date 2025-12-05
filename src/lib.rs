@@ -8,4 +8,3 @@ pub mod jira;
 pub mod test_utils;
 
 pub use config::Config;
-pub use filter::apply as filter_response;

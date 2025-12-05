@@ -1,6 +1,4 @@
-use anyhow::Result;
 use serde_json::Value;
-use std::sync::OnceLock;
 
 pub const DEFAULT_EXCLUDE_FIELDS: &[&str] = &[
     "avatarUrls",
@@ -14,6 +12,7 @@ pub const DEFAULT_EXCLUDE_FIELDS: &[&str] = &[
     "projectTypeKey",
     "simplified",
     "_expandable",
+    "_links",
     "childTypes",
     "macroRenderedOutput",
     "restrictions",
@@ -30,107 +29,47 @@ pub const DEFAULT_EXCLUDE_FIELDS: &[&str] = &[
     "friendlyLastModified",
     "editui",
     "edituiv2",
+    "ari",
+    "base64EncodedAri",
+    "confRev",
+    "syncRev",
+    "syncRevSource",
+    "ncsStepVersion",
+    "ncsStepVersionSource",
+    "embeddedContent",
+    "representation",
+    "extensions",
 ];
 
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Stats {
-    pub fields_removed: usize,
-    pub empty_strings_removed: usize,
+pub fn apply(value: &mut Value, config: &crate::config::Config) {
+    let exclude_fields = config
+        .optimization
+        .response_exclude_fields
+        .as_ref()
+        .map(|v| v.iter().map(String::as_str).collect::<Vec<_>>())
+        .unwrap_or_else(|| DEFAULT_EXCLUDE_FIELDS.to_vec());
+
+    apply_recursive(value, &exclude_fields);
 }
 
-pub struct Filter {
-    exclude_fields: Vec<String>,
-}
-
-impl Filter {
-    pub fn new(config: &crate::config::Config) -> Self {
-        let exclude_fields = config
-            .optimization
-            .response_exclude_fields
-            .clone()
-            .unwrap_or_else(|| {
-                DEFAULT_EXCLUDE_FIELDS
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect()
-            });
-
-        Self { exclude_fields }
-    }
-
-    #[cfg(not(test))]
-    pub fn apply(&self, value: &mut Value) -> Result<()> {
-        self.apply_recursive(value);
-        Ok(())
-    }
-
-    #[cfg(test)]
-    pub fn apply(&self, value: &mut Value) -> Result<Stats> {
-        let mut stats = Stats::default();
-        self.apply_recursive(value, &mut stats);
-        Ok(stats)
-    }
-
-    #[cfg(not(test))]
-    fn apply_recursive(&self, value: &mut Value) {
-        match value {
-            Value::Object(map) => {
-                for field in &self.exclude_fields {
-                    map.remove(field);
-                }
-                map.retain(|_, v| !matches!(v, Value::String(s) if s.is_empty()));
-                for nested in map.values_mut() {
-                    self.apply_recursive(nested);
-                }
+fn apply_recursive(value: &mut Value, exclude_fields: &[&str]) {
+    match value {
+        Value::Object(map) => {
+            for field in exclude_fields {
+                map.remove(*field);
             }
-            Value::Array(arr) => {
-                for item in arr.iter_mut() {
-                    self.apply_recursive(item);
-                }
+            map.retain(|_, v| !matches!(v, Value::String(s) if s.is_empty()));
+            for nested in map.values_mut() {
+                apply_recursive(nested, exclude_fields);
             }
-            _ => {}
         }
-    }
-
-    #[cfg(test)]
-    fn apply_recursive(&self, value: &mut Value, stats: &mut Stats) {
-        match value {
-            Value::Object(map) => {
-                for field in &self.exclude_fields {
-                    if map.remove(field).is_some() {
-                        stats.fields_removed += 1;
-                    }
-                }
-                map.retain(|_, v| {
-                    if let Value::String(s) = v
-                        && s.is_empty()
-                    {
-                        stats.empty_strings_removed += 1;
-                        return false;
-                    }
-                    true
-                });
-                for nested in map.values_mut() {
-                    self.apply_recursive(nested, stats);
-                }
+        Value::Array(arr) => {
+            for item in arr.iter_mut() {
+                apply_recursive(item, exclude_fields);
             }
-            Value::Array(arr) => {
-                for item in arr.iter_mut() {
-                    self.apply_recursive(item, stats);
-                }
-            }
-            _ => {}
         }
+        _ => {}
     }
-}
-
-static FILTER: OnceLock<Filter> = OnceLock::new();
-
-pub fn apply(value: &mut Value, config: &crate::config::Config) -> Result<()> {
-    let filter = FILTER.get_or_init(|| Filter::new(config));
-    filter.apply(value)?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -141,44 +80,44 @@ mod tests {
 
     #[test]
     fn test_default_fields_count() {
-        assert_eq!(DEFAULT_EXCLUDE_FIELDS.len(), 27);
+        assert_eq!(DEFAULT_EXCLUDE_FIELDS.len(), 38);
     }
 
     #[test]
     fn test_remove_excluded_fields() {
         let config = create_test_config();
-        let filter = Filter::new(&config);
         let mut data = json!({
             "name": "John",
             "avatarUrls": {"16x16": "url"},
             "self": "https://api"
         });
 
-        let stats = filter.apply(&mut data).unwrap();
-        assert_eq!(stats.fields_removed, 2);
-        assert!(data.as_object().unwrap().contains_key("name"));
+        apply(&mut data, &config);
+        let obj = data.as_object().unwrap();
+        assert!(obj.contains_key("name"));
+        assert!(!obj.contains_key("avatarUrls"));
+        assert!(!obj.contains_key("self"));
     }
 
     #[test]
     fn test_remove_empty_strings() {
         let config = create_test_config();
-        let filter = Filter::new(&config);
         let mut data = json!({
             "name": "",
             "status": null,
             "valid": "data"
         });
 
-        let stats = filter.apply(&mut data).unwrap();
-        assert_eq!(stats.empty_strings_removed, 1);
-        assert!(!data.as_object().unwrap().contains_key("name"));
-        assert!(data.as_object().unwrap().contains_key("status"));
+        apply(&mut data, &config);
+        let obj = data.as_object().unwrap();
+        assert!(!obj.contains_key("name"));
+        assert!(obj.contains_key("status"));
+        assert!(obj.contains_key("valid"));
     }
 
     #[test]
     fn test_recursive() {
         let config = create_test_config();
-        let filter = Filter::new(&config);
         let mut data = json!({
             "issues": [
                 {"key": "P-1", "self": "url1"},
@@ -186,7 +125,9 @@ mod tests {
             ]
         });
 
-        let stats = filter.apply(&mut data).unwrap();
-        assert_eq!(stats.fields_removed, 2);
+        apply(&mut data, &config);
+        let issues = data["issues"].as_array().unwrap();
+        assert!(!issues[0].as_object().unwrap().contains_key("self"));
+        assert!(!issues[1].as_object().unwrap().contains_key("self"));
     }
 }
