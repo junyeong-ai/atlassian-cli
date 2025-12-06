@@ -3,10 +3,10 @@ use crate::filter;
 use crate::http;
 use crate::jira::adf;
 use crate::jira::fields;
+use crate::markdown::adf_to_markdown;
 use anyhow::Result;
 use serde_json::{Value, json};
 
-/// Convert ADF description field to Markdown in a single issue
 fn convert_issue_to_markdown(issue: &mut Value) {
     let Some(fields) = issue.get_mut("fields") else {
         return;
@@ -15,8 +15,7 @@ fn convert_issue_to_markdown(issue: &mut Value) {
         return;
     };
     if desc.is_object() {
-        let markdown = adf::adf_to_markdown(desc);
-        *desc = Value::String(markdown);
+        *desc = Value::String(adf_to_markdown(desc));
     }
 }
 

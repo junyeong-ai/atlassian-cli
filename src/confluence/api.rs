@@ -1,8 +1,8 @@
 use crate::config::Config;
 use crate::confluence::fields::{apply_v2_filtering, build_search_expand};
-use crate::confluence::markdown::convert_to_markdown;
 use crate::filter;
 use crate::http;
+use crate::markdown::confluence_to_markdown;
 use anyhow::Result;
 use reqwest::Client;
 use serde_json::{Value, json};
@@ -465,7 +465,7 @@ fn extract_content_from_results(data: &mut Value, as_markdown: bool) -> Vec<Valu
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
             {
-                content["body"]["storage"]["value"] = Value::String(convert_to_markdown(&html));
+                content["body"]["storage"]["value"] = Value::String(confluence_to_markdown(&html));
             }
 
             Some(content)
@@ -482,7 +482,7 @@ fn convert_page_to_markdown(data: &mut Value) {
         return;
     };
     if let Some(html) = body.as_str().map(|s| s.to_string()) {
-        *body = Value::String(convert_to_markdown(&html));
+        *body = Value::String(confluence_to_markdown(&html));
     }
 }
 
@@ -499,7 +499,7 @@ fn convert_comments_to_markdown(data: &mut Value) {
             continue;
         };
         if let Some(html) = body.as_str().map(|s| s.to_string()) {
-            *body = Value::String(convert_to_markdown(&html));
+            *body = Value::String(confluence_to_markdown(&html));
         }
     }
 }
