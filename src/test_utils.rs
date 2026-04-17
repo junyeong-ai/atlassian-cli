@@ -1,19 +1,37 @@
 //! Shared test utilities for all modules
-//!
-//! This module provides common test helpers to avoid code duplication
-//! across test modules.
 
+#[cfg(test)]
+use crate::auth::AuthConfig;
 #[cfg(test)]
 use crate::config::{Config, PerformanceConfig};
 
-/// Creates a test configuration with sensible defaults
+/// Creates a test configuration with basic auth defaults
 #[cfg(test)]
 pub fn create_test_config() -> Config {
     Config {
         domain: Some("test.atlassian.net".to_string()),
-        email: Some("test@example.com".to_string()),
-        token: Some("token123".to_string()),
-        base_url: "https://test.atlassian.net".to_string(),
+        auth: Some(AuthConfig::Basic {
+            email: "test@example.com".to_string(),
+            token: "token123".to_string(),
+        }),
+        performance: PerformanceConfig {
+            request_timeout_ms: 30000,
+            rate_limit_delay_ms: 200,
+        },
+        ..Default::default()
+    }
+}
+
+/// Creates a test configuration with OAuth defaults
+#[cfg(test)]
+pub fn create_test_oauth_config() -> Config {
+    Config {
+        domain: None,
+        auth: Some(AuthConfig::OAuth {
+            client_id: "test-client-id".to_string(),
+            client_secret: "test-secret".to_string(),
+            cloud_id: Some("test-cloud-id".to_string()),
+        }),
         performance: PerformanceConfig {
             request_timeout_ms: 30000,
             rate_limit_delay_ms: 200,
@@ -23,10 +41,6 @@ pub fn create_test_config() -> Config {
 }
 
 /// Creates a test configuration with custom field filtering
-///
-/// # Arguments
-/// * `default_fields` - Optional default fields override
-/// * `custom_fields` - Additional custom fields
 #[cfg(test)]
 pub fn create_test_config_with_fields(
     default_fields: Option<Vec<String>>,
@@ -39,10 +53,6 @@ pub fn create_test_config_with_fields(
 }
 
 /// Creates a test configuration with project and space filters
-///
-/// # Arguments
-/// * `projects` - Project keys to filter
-/// * `spaces` - Space keys to filter
 #[cfg(test)]
 pub fn create_test_config_with_filters(projects: Vec<String>, spaces: Vec<String>) -> Config {
     let mut config = create_test_config();
@@ -59,9 +69,30 @@ mod tests {
     fn test_create_test_config() {
         let config = create_test_config();
         assert_eq!(config.domain, Some("test.atlassian.net".to_string()));
-        assert_eq!(config.email, Some("test@example.com".to_string()));
-        assert_eq!(config.token, Some("token123".to_string()));
-        assert_eq!(config.base_url, "https://test.atlassian.net");
+        match &config.auth {
+            Some(AuthConfig::Basic { email, token }) => {
+                assert_eq!(email, "test@example.com");
+                assert_eq!(token, "token123");
+            }
+            _ => panic!("Expected Basic auth"),
+        }
+    }
+
+    #[test]
+    fn test_create_test_oauth_config() {
+        let config = create_test_oauth_config();
+        assert!(config.domain.is_none());
+        match &config.auth {
+            Some(AuthConfig::OAuth {
+                client_id,
+                cloud_id,
+                ..
+            }) => {
+                assert_eq!(client_id, "test-client-id");
+                assert_eq!(cloud_id, &Some("test-cloud-id".to_string()));
+            }
+            _ => panic!("Expected OAuth auth"),
+        }
     }
 
     #[test]

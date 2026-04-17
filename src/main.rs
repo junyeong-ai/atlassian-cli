@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Default, ValueEnum)]
-pub enum OutputFormat {
+enum OutputFormat {
     #[default]
     Html,
     Markdown,
@@ -30,11 +30,33 @@ struct Cli {
     #[arg(long, env = "ATLASSIAN_API_TOKEN")]
     token: Option<String>,
 
+    #[arg(long, env = "ATLASSIAN_CLIENT_ID")]
+    client_id: Option<String>,
+
+    #[arg(long, env = "ATLASSIAN_CLIENT_SECRET")]
+    client_secret: Option<String>,
+
+    #[arg(long, env = "ATLASSIAN_CLOUD_ID")]
+    cloud_id: Option<String>,
+
     #[arg(long, help = "Pretty-print JSON output")]
     pretty: bool,
 
     #[arg(short, long, action = clap::ArgAction::Count, help = "Verbose logging")]
     verbose: u8,
+}
+
+impl Cli {
+    fn to_overrides(&self) -> atlassian_cli::CliOverrides {
+        atlassian_cli::CliOverrides {
+            domain: self.domain.clone(),
+            email: self.email.clone(),
+            token: self.token.clone(),
+            client_id: self.client_id.clone(),
+            client_secret: self.client_secret.clone(),
+            cloud_id: self.cloud_id.clone(),
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -91,6 +113,11 @@ enum JiraSubcommand {
     },
     Transitions {
         issue_key: String,
+    },
+    Comments {
+        issue_key: String,
+        #[arg(long, value_enum, default_value = "html", help = "ADF content format")]
+        format: OutputFormat,
     },
 }
 
@@ -169,20 +196,35 @@ struct ConfigCommand {
 
 #[derive(Subcommand)]
 enum ConfigSubcommand {
+    /// Create a starter config file at the global or project location.
     Init {
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Write to ~/.config/atlassian-cli/config.toml instead of ./.atlassian.toml"
+        )]
         global: bool,
     },
+    /// Print the resolved config (secrets masked).
     Show,
+    /// List config file paths and environment variable status.
     List,
+    /// Open the active config file in $EDITOR.
     Edit {
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Edit the global config even when a project config exists"
+        )]
         global: bool,
     },
+    /// Print the path of the active config file.
     Path {
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Print the global config path even when a project config exists"
+        )]
         global: bool,
     },
+    /// Validate credentials end-to-end against the Atlassian API.
     Validate,
 }
 
@@ -202,38 +244,41 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    match cli.command {
-        Command::Config(cmd) => handle_config(cmd).await,
-        Command::Jira(cmd) => {
-            let config = atlassian_cli::Config::load(
-                cli.config.as_ref(),
-                cli.profile.as_ref(),
-                cli.domain,
-                cli.email,
-                cli.token,
-            )?;
+    let overrides = cli.to_overrides();
+    let config_path = cli.config.clone();
+    let profile = cli.profile.clone();
 
-            let result = handle_jira(cmd, &config).await?;
+    match cli.command {
+        Command::Config(cmd) => {
+            handle_config(cmd, config_path.as_ref(), profile.as_ref(), overrides).await
+        }
+        Command::Jira(cmd) => {
+            let config =
+                atlassian_cli::Config::load(config_path.as_ref(), profile.as_ref(), overrides)?;
+
+            let client = atlassian_cli::ApiClient::new(config).await?;
+            let result = handle_jira(cmd, &client).await?;
             output_json(&result, cli.pretty);
             Ok(())
         }
         Command::Confluence(cmd) => {
-            let config = atlassian_cli::Config::load(
-                cli.config.as_ref(),
-                cli.profile.as_ref(),
-                cli.domain,
-                cli.email,
-                cli.token,
-            )?;
+            let config =
+                atlassian_cli::Config::load(config_path.as_ref(), profile.as_ref(), overrides)?;
 
-            let result = handle_confluence(cmd, &config).await?;
+            let client = atlassian_cli::ApiClient::new(config).await?;
+            let result = handle_confluence(cmd, &client).await?;
             output_json(&result, cli.pretty);
             Ok(())
         }
     }
 }
 
-async fn handle_config(cmd: ConfigCommand) -> Result<()> {
+async fn handle_config(
+    cmd: ConfigCommand,
+    config_path: Option<&PathBuf>,
+    profile: Option<&String>,
+    overrides: atlassian_cli::CliOverrides,
+) -> Result<()> {
     match cmd.subcommand {
         ConfigSubcommand::Init { global } => {
             let path = atlassian_cli::Config::init_config(global)?;
@@ -242,38 +287,10 @@ async fn handle_config(cmd: ConfigCommand) -> Result<()> {
             Ok(())
         }
         ConfigSubcommand::Show => {
+            // Respect --config, --profile, and CLI overrides for accurate "resolved" view.
             let config =
-                atlassian_cli::Config::load_without_validation(None, None, None, None, None)?;
-
-            // Display credentials (not in Config struct's TOML serialization)
-            println!("[default]");
-            if let Some(ref domain) = config.domain {
-                println!("domain = {:?}", domain);
-            } else {
-                println!("# domain = (not set)");
-            }
-            if let Some(ref email) = config.email {
-                println!("email = {:?}", email);
-            } else {
-                println!("# email = (not set)");
-            }
-            if let Some(ref token) = config.token {
-                let mask_len = 4.min(token.len());
-                println!("token = \"{}***\"", &token[..mask_len]);
-            } else {
-                println!("# token = (not set)");
-            }
-            println!();
-
-            // Display rest of config via TOML serialization
-            let toml_str = toml::to_string_pretty(&config)?;
-            // Skip the empty [default] section if present
-            for line in toml_str.lines() {
-                if line.trim().is_empty() || line.trim() == "[default]" {
-                    continue;
-                }
-                println!("{}", line);
-            }
+                atlassian_cli::Config::load_without_validation(config_path, profile, overrides)?;
+            print_resolved_config(&config);
             Ok(())
         }
         ConfigSubcommand::List => {
@@ -291,16 +308,19 @@ async fn handle_config(cmd: ConfigCommand) -> Result<()> {
             }
 
             println!("\nEnvironment variables:");
-            for (key, value) in [
-                ("ATLASSIAN_DOMAIN", std::env::var("ATLASSIAN_DOMAIN").ok()),
-                ("ATLASSIAN_EMAIL", std::env::var("ATLASSIAN_EMAIL").ok()),
-                (
-                    "ATLASSIAN_API_TOKEN",
-                    std::env::var("ATLASSIAN_API_TOKEN")
-                        .ok()
-                        .map(|_| "***".to_string()),
-                ),
-            ] {
+            let env_vars = [
+                ("ATLASSIAN_DOMAIN", false),
+                ("ATLASSIAN_AUTH_METHOD", false),
+                ("ATLASSIAN_EMAIL", false),
+                ("ATLASSIAN_API_TOKEN", true),
+                ("ATLASSIAN_CLIENT_ID", false),
+                ("ATLASSIAN_CLIENT_SECRET", true),
+                ("ATLASSIAN_CLOUD_ID", false),
+            ];
+            for (key, mask) in env_vars {
+                let value = std::env::var(key)
+                    .ok()
+                    .map(|v| if mask { "***".to_string() } else { v });
                 println!(
                     "  {}: {}",
                     key,
@@ -314,7 +334,6 @@ async fn handle_config(cmd: ConfigCommand) -> Result<()> {
             let path = if global {
                 atlassian_cli::Config::global_config_path()
             } else {
-                // Try project config first, fall back to global
                 atlassian_cli::Config::project_config_path()
                     .or_else(atlassian_cli::Config::global_config_path)
             };
@@ -364,31 +383,43 @@ async fn handle_config(cmd: ConfigCommand) -> Result<()> {
             Ok(())
         }
         ConfigSubcommand::Validate => {
-            let config = atlassian_cli::Config::load(None, None, None, None, None)?;
+            let config = atlassian_cli::Config::load(config_path, profile, overrides)?;
 
-            let client = reqwest::Client::new();
-            let url = format!("{}/rest/api/3/myself", config.base_url());
+            // ApiClient::new() performs:
+            //   - Basic: credential encoding (offline)
+            //   - OAuth: token fetch + cloud_id discovery (online)
+            // Any failure here means credentials are invalid.
+            let client = atlassian_cli::ApiClient::new(config).await?;
 
-            let response = client
-                .get(&url)
-                .header(
-                    "Authorization",
-                    format!(
-                        "Basic {}",
-                        base64::Engine::encode(
-                            &base64::engine::general_purpose::STANDARD,
-                            format!("{}:{}", config.email(), config.token())
-                        )
-                    ),
-                )
-                .header("Accept", "application/json")
-                .send()
-                .await?;
+            if client.is_oauth() {
+                // OAuth credentials already verified via token fetch and
+                // accessible-resources call. Additional /myself may fail due
+                // to scope mismatch (e.g. read:jira-work but not read:jira-user),
+                // which doesn't indicate a credential problem.
+                println!("✓ OAuth credentials valid");
+                if let Some(cid) = client.cloud_id() {
+                    println!("  Cloud ID: {}", cid);
+                }
+            } else {
+                // Basic auth: call /myself to show user info and verify token.
+                let response = client
+                    .get(atlassian_cli::Service::Jira, "/rest/api/3/myself")
+                    .await?
+                    .header("Accept", "application/json")
+                    .send()
+                    .await?;
 
-            if response.status().is_success() {
+                if !response.status().is_success() {
+                    let status = response.status();
+                    let body = response.text().await.unwrap_or_default();
+                    anyhow::bail!("Authentication failed ({}): {}", status, body);
+                }
+
                 let data: serde_json::Value = response.json().await?;
-                println!("✓ Configuration valid");
-                println!("  Domain: {}", config.domain());
+                println!("✓ Basic auth credentials valid");
+                if let Some(domain) = client.config().domain.as_ref() {
+                    println!("  Domain: {}", domain);
+                }
                 println!(
                     "  User: {}",
                     data["displayName"].as_str().unwrap_or("Unknown")
@@ -397,10 +428,6 @@ async fn handle_config(cmd: ConfigCommand) -> Result<()> {
                     "  Email: {}",
                     data["emailAddress"].as_str().unwrap_or("Unknown")
                 );
-            } else {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                anyhow::bail!("Authentication failed ({}): {}", status, body);
             }
 
             Ok(())
@@ -410,14 +437,14 @@ async fn handle_config(cmd: ConfigCommand) -> Result<()> {
 
 async fn handle_jira(
     cmd: JiraCommand,
-    config: &atlassian_cli::Config,
+    client: &atlassian_cli::ApiClient,
 ) -> Result<serde_json::Value> {
     use atlassian_cli::jira;
 
     match cmd.subcommand {
         JiraSubcommand::Get { issue_key, format } => {
             let as_markdown = matches!(format, OutputFormat::Markdown);
-            jira::get_issue(&issue_key, as_markdown, config).await
+            jira::get_issue(&issue_key, as_markdown, client).await
         }
         JiraSubcommand::Search {
             jql,
@@ -432,9 +459,9 @@ async fn handle_jira(
             }
             let as_markdown = matches!(format, OutputFormat::Markdown);
             if all {
-                jira::search_all(&jql, fields, stream, as_markdown, config).await
+                jira::search_all(&jql, fields, stream, as_markdown, client).await
             } else {
-                jira::search(&jql, limit, fields, as_markdown, config).await
+                jira::search(&jql, limit, fields, as_markdown, client).await
             }
         }
         JiraSubcommand::Create {
@@ -446,15 +473,20 @@ async fn handle_jira(
             let desc = description
                 .map(serde_json::Value::String)
                 .unwrap_or(serde_json::Value::Null);
-            jira::create_issue(&project, &summary, &issue_type, desc, config).await
+            jira::create_issue(&project, &summary, &issue_type, desc, client).await
         }
         JiraSubcommand::Update { issue_key, fields } => {
-            let fields_value: serde_json::Value = serde_json::from_str(&fields)?;
-            jira::update_issue(&issue_key, fields_value, config).await
+            let fields_value: serde_json::Value = serde_json::from_str(&fields).map_err(|e| {
+                anyhow::anyhow!(
+                    "Invalid JSON for update fields: {}. Example: {{\"summary\":\"New title\"}}",
+                    e
+                )
+            })?;
+            jira::update_issue(&issue_key, fields_value, client).await
         }
         JiraSubcommand::Comment { action } => match action {
             CommentAction::Add { issue_key, text } => {
-                jira::add_comment(&issue_key, serde_json::Value::String(text), config).await
+                jira::add_comment(&issue_key, serde_json::Value::String(text), client).await
             }
             CommentAction::Update {
                 issue_key,
@@ -465,7 +497,7 @@ async fn handle_jira(
                     &issue_key,
                     &comment_id,
                     serde_json::Value::String(text),
-                    config,
+                    client,
                 )
                 .await
             }
@@ -473,16 +505,20 @@ async fn handle_jira(
         JiraSubcommand::Transition {
             issue_key,
             transition_id,
-        } => jira::transition_issue(&issue_key, &transition_id, config).await,
+        } => jira::transition_issue(&issue_key, &transition_id, client).await,
         JiraSubcommand::Transitions { issue_key } => {
-            jira::get_transitions(&issue_key, config).await
+            jira::get_transitions(&issue_key, client).await
+        }
+        JiraSubcommand::Comments { issue_key, format } => {
+            let as_markdown = matches!(format, OutputFormat::Markdown);
+            jira::get_comments(&issue_key, as_markdown, client).await
         }
     }
 }
 
 async fn handle_confluence(
     cmd: ConfluenceCommand,
-    config: &atlassian_cli::Config,
+    client: &atlassian_cli::ApiClient,
 ) -> Result<serde_json::Value> {
     use atlassian_cli::confluence;
 
@@ -500,39 +536,137 @@ async fn handle_confluence(
             }
             let as_markdown = matches!(format, OutputFormat::Markdown);
             if all {
-                confluence::search_all(&query, None, expand, stream, as_markdown, config).await
+                confluence::search_all(&query, None, expand, stream, as_markdown, client).await
             } else {
-                confluence::search(&query, limit, None, expand, as_markdown, config).await
+                confluence::search(&query, limit, None, expand, as_markdown, client).await
             }
         }
         ConfluenceSubcommand::Get { page_id, format } => {
             let as_markdown = matches!(format, OutputFormat::Markdown);
-            confluence::get_page(&page_id, None, None, as_markdown, config).await
+            confluence::get_page(&page_id, None, None, as_markdown, client).await
         }
         ConfluenceSubcommand::Create {
             space,
             title,
             content,
-        } => confluence::create_page(&space, &title, &content, None, None, config).await,
+        } => confluence::create_page(&space, &title, &content, None, None, client).await,
         ConfluenceSubcommand::Update {
             page_id,
             title,
             content,
-        } => confluence::update_page(&page_id, &title, &content, None, None, config).await,
+        } => confluence::update_page(&page_id, &title, &content, None, None, client).await,
         ConfluenceSubcommand::Children { page_id } => {
-            confluence::get_page_children(&page_id, config).await
+            confluence::get_page_children(&page_id, client).await
         }
         ConfluenceSubcommand::Comments { page_id, format } => {
             let as_markdown = matches!(format, OutputFormat::Markdown);
-            confluence::get_comments(&page_id, as_markdown, config).await
+            confluence::get_comments(&page_id, as_markdown, client).await
         }
     }
 }
 
 fn output_json(value: &serde_json::Value, pretty: bool) {
+    // Null is a sentinel used by streaming commands that have already
+    // written to stdout — emitting "null" would corrupt that output.
+    if value.is_null() {
+        return;
+    }
     if pretty {
         println!("{}", serde_json::to_string_pretty(value).unwrap());
     } else {
         println!("{}", serde_json::to_string(value).unwrap());
+    }
+}
+
+/// Mask a secret by showing only the first 4 characters.
+/// Handles short secrets safely (returns "***" if length < 4).
+fn mask_secret(secret: &str) -> String {
+    if secret.len() < 4 {
+        "***".to_string()
+    } else {
+        format!("{}***", &secret[..4])
+    }
+}
+
+/// Print the resolved config in valid TOML profile format.
+/// Secrets are masked; empty/unspecified sections are omitted.
+/// The output is copy-pasteable into a config file (after unmasking secrets).
+fn print_resolved_config(config: &atlassian_cli::Config) {
+    use atlassian_cli::AuthConfig;
+
+    println!("[default]");
+    match &config.domain {
+        Some(d) => println!("domain = {:?}", d),
+        None => println!("# domain = (not set)"),
+    }
+
+    println!();
+    match &config.auth {
+        Some(AuthConfig::Basic { email, token }) => {
+            println!("[default.auth]");
+            println!("method = \"basic\"");
+            println!("email = {:?}", email);
+            if token.is_empty() {
+                println!("# token = (not set — provide via ATLASSIAN_API_TOKEN)");
+            } else {
+                println!("token = \"{}\"", mask_secret(token));
+            }
+        }
+        Some(AuthConfig::OAuth {
+            client_id,
+            client_secret,
+            cloud_id,
+        }) => {
+            println!("[default.auth]");
+            println!("method = \"oauth\"");
+            println!("client_id = {:?}", client_id);
+            if client_secret.is_empty() {
+                println!("# client_secret = (not set — provide via ATLASSIAN_CLIENT_SECRET)");
+            } else {
+                println!("client_secret = \"{}\"", mask_secret(client_secret));
+            }
+            if let Some(cid) = cloud_id {
+                println!("cloud_id = {:?}", cid);
+            } else {
+                println!("# cloud_id = (will be auto-discovered)");
+            }
+        }
+        None => {
+            println!("# [default.auth] (not configured — set ATLASSIAN_AUTH_METHOD)");
+        }
+    }
+
+    println!();
+    println!("[default.jira]");
+    println!("projects_filter = {:?}", config.jira.projects_filter);
+    if let Some(ref fields) = config.jira.search_default_fields {
+        println!("search_default_fields = {:?}", fields);
+    }
+    if !config.jira.search_custom_fields.is_empty() {
+        println!(
+            "search_custom_fields = {:?}",
+            config.jira.search_custom_fields
+        );
+    }
+
+    println!();
+    println!("[default.confluence]");
+    println!("spaces_filter = {:?}", config.confluence.spaces_filter);
+
+    println!();
+    println!("[default.performance]");
+    println!(
+        "request_timeout_ms = {}",
+        config.performance.request_timeout_ms
+    );
+    println!(
+        "rate_limit_delay_ms = {}",
+        config.performance.rate_limit_delay_ms
+    );
+
+    if let Some(ref excludes) = config.optimization.response_exclude_fields {
+        println!();
+        println!("[default.optimization]");
+        println!("response_exclude_fields = {:?}", excludes);
     }
 }

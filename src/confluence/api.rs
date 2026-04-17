@@ -1,10 +1,9 @@
+use crate::client::{ApiClient, Service};
 use crate::config::Config;
 use crate::confluence::fields::{apply_v2_filtering, build_search_expand};
 use crate::filter;
-use crate::http;
 use crate::markdown::confluence_to_markdown;
 use anyhow::Result;
-use reqwest::Client;
 use serde_json::{Value, json};
 use std::io::{self, Write};
 use std::time::Duration;
@@ -51,18 +50,17 @@ pub async fn search(
     include_all_fields: Option<bool>,
     additional_expand: Option<Vec<String>>,
     as_markdown: bool,
-    config: &Config,
+    client: &ApiClient,
 ) -> Result<Value> {
-    let final_cql = apply_space_filter(query, config);
-    let client = http::client(config);
-    let url = format!("{}/wiki/rest/api/search", config.base_url());
+    let final_cql = apply_space_filter(query, client.config());
+    let url = "/wiki/rest/api/search";
     let expand = build_search_expand(include_all_fields, additional_expand);
 
     let effective_limit = limit.min(MAX_LIMIT).min(SEARCH_BODY_LIMIT);
 
     let response = client
-        .get(&url)
-        .header("Authorization", http::auth_header(config))
+        .get(Service::Confluence, url)
+        .await?
         .header("Accept", "application/json")
         .query(&[
             ("cql", final_cql.as_str()),
@@ -89,7 +87,7 @@ pub async fn search(
         "total": total
     });
 
-    filter::apply(&mut output, config);
+    filter::apply(&mut output, client.config());
     Ok(output)
 }
 
@@ -99,12 +97,9 @@ pub async fn search_all(
     additional_expand: Option<Vec<String>>,
     stream: bool,
     as_markdown: bool,
-    config: &Config,
+    client: &ApiClient,
 ) -> Result<Value> {
-    let final_cql = apply_space_filter(query, config);
-    let client = http::client(config);
-    let base_url = config.base_url();
-    let initial_url = format!("{}/wiki/rest/api/search", base_url);
+    let final_cql = apply_space_filter(query, client.config());
     let expand = build_search_expand(include_all_fields, additional_expand);
 
     let mut all_items: Vec<Value> = Vec::new();
@@ -114,9 +109,9 @@ pub async fn search_all(
 
     loop {
         let mut data = if let Some(ref url) = next_url {
-            fetch_page(&client, url, config).await?
+            fetch_page(client, url).await?
         } else {
-            fetch_initial_page(&client, &initial_url, &final_cql, &expand, config).await?
+            fetch_initial_page(client, &final_cql, &expand).await?
         };
 
         if page_num == 1 {
@@ -143,24 +138,36 @@ pub async fn search_all(
             total_size
         );
 
-        let next_path = data["_links"]["next"].as_str();
-        if next_path.is_none() || count == 0 {
+        // _links.next is our signal to continue paginating; absence means we're done.
+        // `let-else` keeps the happy path flat and removes the unwraps below.
+        let Some(next_path) = data["_links"]["next"].as_str() else {
+            break;
+        };
+        if count == 0 {
             break;
         }
 
-        let links_base = data["_links"]["base"].as_str().unwrap_or(base_url);
-        next_url = Some(build_next_url(links_base, next_path.unwrap()));
+        // _links.base is the site URL (e.g. "https://domain.atlassian.net/wiki").
+        // If missing, next_path must already be absolute.
+        let raw_url = match data["_links"]["base"].as_str() {
+            Some(base) => build_next_url(base, next_path),
+            None => next_path.to_string(),
+        };
+        next_url = Some(client.rewrite_url(Service::Confluence, &raw_url));
+
         page_num += 1;
         sleep(Duration::from_millis(
-            config.performance.rate_limit_delay_ms,
+            client.config().performance.rate_limit_delay_ms,
         ))
         .await;
     }
 
     eprintln!("\nTotal: {} items fetched", all_items.len());
 
+    // See `jira::search_all` — Null signals `output_json` to skip, so the
+    // trailing summary doesn't pollute the JSONL stream.
     if stream {
-        Ok(json!({"streamed": true, "total": all_items.len()}))
+        Ok(Value::Null)
     } else {
         Ok(json!({
             "items": all_items,
@@ -169,17 +176,13 @@ pub async fn search_all(
     }
 }
 
-async fn fetch_initial_page(
-    client: &Client,
-    url: &str,
-    cql: &str,
-    expand: &str,
-    config: &Config,
-) -> Result<Value> {
+async fn fetch_initial_page(client: &ApiClient, cql: &str, expand: &str) -> Result<Value> {
+    let url = "/wiki/rest/api/search";
     let limit = SEARCH_BODY_LIMIT.to_string();
+
     let response = client
-        .get(url)
-        .header("Authorization", http::auth_header(config))
+        .get(Service::Confluence, url)
+        .await?
         .header("Accept", "application/json")
         .query(&[("cql", cql), ("limit", &limit), ("expand", expand)])
         .send()
@@ -194,10 +197,10 @@ async fn fetch_initial_page(
     response.json().await.map_err(Into::into)
 }
 
-async fn fetch_page(client: &Client, url: &str, config: &Config) -> Result<Value> {
+async fn fetch_page(client: &ApiClient, url: &str) -> Result<Value> {
     let response = client
-        .get(url)
-        .header("Authorization", http::auth_header(config))
+        .get_absolute(url)
+        .await?
         .header("Accept", "application/json")
         .send()
         .await?;
@@ -216,16 +219,15 @@ pub async fn get_page(
     include_all_fields: Option<bool>,
     additional_includes: Option<Vec<String>>,
     as_markdown: bool,
-    config: &Config,
+    client: &ApiClient,
 ) -> Result<Value> {
-    let client = http::client(config);
-    let url = format!("{}/wiki/api/v2/pages/{}", config.base_url(), page_id);
+    let url = format!("/wiki/api/v2/pages/{}", page_id);
 
     let query_params = apply_v2_filtering(include_all_fields, additional_includes);
 
     let response = client
-        .get(&url)
-        .header("Authorization", http::auth_header(config))
+        .get(Service::Confluence, &url)
+        .await?
         .header("Accept", "application/json")
         .query(&query_params)
         .send()
@@ -238,7 +240,7 @@ pub async fn get_page(
     }
 
     let mut data: Value = response.json().await?;
-    filter::apply(&mut data, config);
+    filter::apply(&mut data, client.config());
 
     if as_markdown {
         convert_page_to_markdown(&mut data);
@@ -247,17 +249,12 @@ pub async fn get_page(
     Ok(data)
 }
 
-pub async fn get_page_children(page_id: &str, config: &Config) -> Result<Value> {
-    let client = http::client(config);
-    let url = format!(
-        "{}/wiki/api/v2/pages/{}/children",
-        config.base_url(),
-        page_id
-    );
+pub async fn get_page_children(page_id: &str, client: &ApiClient) -> Result<Value> {
+    let url = format!("/wiki/api/v2/pages/{}/children", page_id);
 
     let response = client
-        .get(&url)
-        .header("Authorization", http::auth_header(config))
+        .get(Service::Confluence, &url)
+        .await?
         .header("Accept", "application/json")
         .send()
         .await?;
@@ -269,22 +266,17 @@ pub async fn get_page_children(page_id: &str, config: &Config) -> Result<Value> 
     }
 
     let mut data: Value = response.json().await?;
-    filter::apply(&mut data, config);
+    filter::apply(&mut data, client.config());
 
     Ok(json!({"items": data["results"]}))
 }
 
-pub async fn get_comments(page_id: &str, as_markdown: bool, config: &Config) -> Result<Value> {
-    let client = http::client(config);
-    let url = format!(
-        "{}/wiki/api/v2/pages/{}/footer-comments",
-        config.base_url(),
-        page_id
-    );
+pub async fn get_comments(page_id: &str, as_markdown: bool, client: &ApiClient) -> Result<Value> {
+    let url = format!("/wiki/api/v2/pages/{}/footer-comments", page_id);
 
     let response = client
-        .get(&url)
-        .header("Authorization", http::auth_header(config))
+        .get(Service::Confluence, &url)
+        .await?
         .header("Accept", "application/json")
         .query(&[("body-format", "storage")])
         .send()
@@ -297,7 +289,7 @@ pub async fn get_comments(page_id: &str, as_markdown: bool, config: &Config) -> 
     }
 
     let mut data: Value = response.json().await?;
-    filter::apply(&mut data, config);
+    filter::apply(&mut data, client.config());
 
     if as_markdown {
         convert_comments_to_markdown(&mut data);
@@ -312,17 +304,15 @@ pub async fn create_page(
     content: &str,
     include_all_fields: Option<bool>,
     additional_includes: Option<Vec<String>>,
-    config: &Config,
+    client: &ApiClient,
 ) -> Result<Value> {
-    let client = http::client(config);
-
     // First, convert space_key to space_id using v2 API
-    let space_url = format!("{}/wiki/api/v2/spaces", config.base_url());
+    let space_url = "/wiki/api/v2/spaces";
 
     let space_response = client
-        .get(&space_url)
-        .query(&[("keys", space_key)]) // Automatic URL encoding
-        .header("Authorization", http::auth_header(config))
+        .get(Service::Confluence, space_url)
+        .await?
+        .query(&[("keys", space_key)])
         .header("Accept", "application/json")
         .send()
         .await?;
@@ -341,7 +331,7 @@ pub async fn create_page(
         .ok_or_else(|| anyhow::anyhow!("Space '{}' not found", space_key))?;
 
     // Now create the page with v2 API
-    let url = format!("{}/wiki/api/v2/pages", config.base_url());
+    let url = "/wiki/api/v2/pages";
 
     let query_params = apply_v2_filtering(include_all_fields, additional_includes);
 
@@ -355,8 +345,8 @@ pub async fn create_page(
     });
 
     let response = client
-        .post(&url)
-        .header("Authorization", http::auth_header(config))
+        .post(Service::Confluence, url)
+        .await?
         .header("Content-Type", "application/json")
         .query(&query_params)
         .json(&body)
@@ -382,16 +372,14 @@ pub async fn update_page(
     content: &str,
     include_all_fields: Option<bool>,
     additional_includes: Option<Vec<String>>,
-    config: &Config,
+    client: &ApiClient,
 ) -> Result<Value> {
-    let client = http::client(config);
-
     // First, get the current page to get the version number using v2 API
-    let get_url = format!("{}/wiki/api/v2/pages/{}", config.base_url(), page_id);
+    let get_url = format!("/wiki/api/v2/pages/{}", page_id);
 
     let get_response = client
-        .get(&get_url)
-        .header("Authorization", http::auth_header(config))
+        .get(Service::Confluence, &get_url)
+        .await?
         .header("Accept", "application/json")
         .query(&[("include-version", "true")])
         .send()
@@ -409,7 +397,7 @@ pub async fn update_page(
         .ok_or_else(|| anyhow::anyhow!("Failed to get current version"))?;
 
     // Now update the page with v2 API
-    let update_url = format!("{}/wiki/api/v2/pages/{}", config.base_url(), page_id);
+    let update_url = format!("/wiki/api/v2/pages/{}", page_id);
 
     let query_params = apply_v2_filtering(include_all_fields, additional_includes);
 
@@ -426,8 +414,8 @@ pub async fn update_page(
     });
 
     let response = client
-        .put(&update_url)
-        .header("Authorization", http::auth_header(config))
+        .put(Service::Confluence, &update_url)
+        .await?
         .header("Content-Type", "application/json")
         .query(&query_params)
         .json(&body)
@@ -547,7 +535,6 @@ mod tests {
 
     #[test]
     fn test_build_next_url_relative_path() {
-        // _links.base from API includes /wiki, _links.next does NOT include /wiki
         let links_base = "https://test.atlassian.net/wiki";
         let next_path = "/rest/api/search?cql=type%3Dpage&cursor=abc123";
         let result = build_next_url(links_base, next_path);
@@ -568,56 +555,6 @@ mod tests {
         );
     }
 
-    // T018: Remaining Confluence handlers tests
-
-    // get_page tests
-    #[test]
-    fn test_get_page_url_construction() {
-        let config = create_test_config(vec![]);
-        let page_id = "12345";
-
-        let url = format!("{}/wiki/api/v2/pages/{}", config.base_url(), page_id);
-
-        assert_eq!(url, "https://test.atlassian.net/wiki/api/v2/pages/12345");
-    }
-
-    // get_page_children tests
-    #[test]
-    fn test_get_page_children_url_construction() {
-        let config = create_test_config(vec![]);
-        let page_id = "12345";
-
-        let url = format!(
-            "{}/wiki/api/v2/pages/{}/children",
-            config.base_url(),
-            page_id
-        );
-
-        assert_eq!(
-            url,
-            "https://test.atlassian.net/wiki/api/v2/pages/12345/children"
-        );
-    }
-
-    // get_comments tests
-    #[test]
-    fn test_get_comments_url_construction() {
-        let config = create_test_config(vec![]);
-        let page_id = "12345";
-
-        let url = format!(
-            "{}/wiki/api/v2/pages/{}/footer-comments",
-            config.base_url(),
-            page_id
-        );
-
-        assert_eq!(
-            url,
-            "https://test.atlassian.net/wiki/api/v2/pages/12345/footer-comments"
-        );
-    }
-
-    // create_page tests
     #[test]
     fn test_create_page_body_format() {
         let title = "Test Page";
@@ -639,7 +576,6 @@ mod tests {
         assert_eq!(body["body"]["value"], "<p>Test content</p>");
     }
 
-    // update_page tests
     #[test]
     fn test_update_page_body_format() {
         let page_id = "12345";
