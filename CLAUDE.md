@@ -1,153 +1,71 @@
-# Atlassian CLI - AI Agent Guide
+# atlassian-cli
 
-## Project Structure
+Rust 2024 edition, single binary. CLI for Atlassian Cloud (Jira + Confluence).
 
-```
-src/
-├── main.rs          # CLI parsing (clap), command handlers
-├── config.rs        # 4-tier config: CLI > ENV > project(.atlassian.toml) > global
-├── http.rs          # reqwest client, auth header
-├── filter.rs        # Response field filtering
-├── jira/
-│   ├── api.rs       # Jira REST API v3
-│   ├── fields.rs    # DEFAULT_SEARCH_FIELDS (17 fields)
-│   └── adf.rs       # Atlassian Document Format conversion
-└── confluence/
-    ├── api.rs       # Confluence REST API v1/v2, pagination
-    ├── fields.rs    # v2 include params, v1 expand params
-    └── markdown.rs  # HTML→Markdown conversion (htmd)
-```
-
-## Key Patterns
-
-### Config Priority Chain
-```rust
-// config.rs - CLI flag > ENV > file
-let domain = cli_domain
-    .or_else(|| env::var("ATLASSIAN_DOMAIN").ok())
-    .or_else(|| file_config.domain);
-```
-
-### Field Optimization
-```rust
-// jira/fields.rs - excludes description, id, renderedFields
-const DEFAULT_SEARCH_FIELDS: &[&str] = &[
-    "key", "summary", "status", "priority", "issuetype",
-    "assignee", "reporter", "creator", "created", "updated",
-    "duedate", "resolutiondate", "project", "labels",
-    "components", "parent", "subtasks",
-];
-```
-
-### ADF Conversion
-```rust
-// jira/adf.rs - bidirectional ADF ↔ Markdown/Text conversion
-// Input: plain text → ADF JSON (for create/update)
-pub fn process_adf_input(value: Value) -> Result<Value> {
-    match value {
-        Value::String(text) => Ok(text_to_adf(&text)),
-        Value::Object(_) => { validate_adf(&value)?; Ok(value) }
-        _ => bail!("must be string or ADF")
-    }
-}
-
-// Output: ADF → Markdown (for reading)
-pub fn adf_to_markdown(adf: &Value) -> String {
-    // Handles: paragraph, heading, bulletList, orderedList,
-    // codeBlock, panel, table, mentions, links, marks
-}
-```
-
-### Cursor-Based Pagination
-```rust
-// confluence/api.rs - search_all uses _links.next
-loop {
-    let data = fetch_page(&client, &url, config).await?;
-    all_items.extend(data["results"].as_array());
-
-    match data["_links"]["next"].as_str() {
-        Some(next) => url = build_next_url(base_url, next),
-        None => break,
-    }
-    sleep(Duration::from_millis(200)).await; // rate limit
-}
-```
-
-### HTML→Markdown Conversion
-```rust
-// confluence/markdown.rs - Confluence HTML to Markdown
-pub fn convert_to_markdown(html: &str) -> String {
-    let converter = HtmlToMarkdown::builder()
-        .skip_tags(vec!["script", "style"])
-        .build();
-    // Handles ac:*, ri:* tags, images, macros
-    let cleaned = clean_confluence_html(html);
-    converter.convert(&cleaned)...
-}
-```
-
-### Auto-Injected Filters
-```rust
-// JQL: projects_filter adds "project IN (...) AND"
-// CQL: spaces_filter adds "space IN (...) AND"
-fn apply_space_filter(cql: &str, config: &Config) -> String {
-    if cql.to_lowercase().contains("space ") {
-        cql.to_string()  // user specified, skip injection
-    } else {
-        format!("space IN ({}) AND ({})", spaces, cql)
-    }
-}
-```
-
-## Adding Commands
-
-1. **main.rs**: Add variant to `JiraSubcommand` or `ConfluenceSubcommand`
-2. **main.rs**: Add match arm in `handle_jira` or `handle_confluence`
-3. **api.rs**: Implement async function
-
-## Constants & Configurable Values
-
-| Location | Constant/Config | Default | Configurable |
-|----------|----------------|---------|--------------|
-| `jira/fields.rs` | `DEFAULT_SEARCH_FIELDS` | 17 fields | ✅ `[jira]` |
-| `confluence/api.rs` | `MAX_LIMIT` | 250 | ❌ API limit |
-| `confluence/api.rs` | `SEARCH_BODY_LIMIT` | 50 | ❌ API limit |
-| `config.rs` | `request_timeout_ms` | 30000 | ✅ `[performance]` |
-| `config.rs` | `rate_limit_delay_ms` | 200 | ✅ `[performance]` |
-| `jira/api.rs` | `MAX_RESULTS_PER_PAGE` | 100 | ❌ API optimal |
-
-## API Endpoints
-
-- Jira: `/rest/api/3/*`
-- Confluence Search: `/wiki/rest/api/search` (v1, uses `expand` param)
-- Confluence Pages: `/wiki/api/v2/pages/*` (v2, uses `include-*` params)
-
-## CLI Options (Jira)
-
-| Option | Description | Applies To |
-|--------|-------------|------------|
-| `--format` | Output format: `html` (default, raw ADF) or `markdown` | get, search |
-| `--fields` | Specify fields to return | search |
-| `--limit N` | Max results per page (default: 100) | search |
-| `--all` | Fetch all results via token pagination | search |
-| `--stream` | Output JSONL (requires --all) | search |
-
-## CLI Options (Confluence)
-
-| Option | Description | Applies To |
-|--------|-------------|------------|
-| `--limit N` | Max results per request (default: 10, max: 250) | search |
-| `--all` | Fetch all results via cursor pagination | search |
-| `--stream` | Output JSONL (requires --all) | search |
-| `--expand` | Additional expand fields: `ancestors`, `space`, etc. (body.storage included by default) | search |
-| `--format` | Output format: `html` (default) or `markdown` | search, get, comments |
-
-Note: `children` command does not support `--format` (v2 API limitation).
-
-## Testing
+## Build / test / lint
 
 ```bash
-cargo test                    # all tests
-cargo test confluence         # module tests
-cargo clippy && cargo fmt     # lint
+cargo build --release           # production binary at target/release/atlassian-cli
+cargo test                      # unit tests (env-var tests serialize via an internal Mutex)
+cargo clippy                    # lint; CI requires zero warnings
+cargo fmt                       # format; CI enforces rustfmt
+cargo audit                     # transitive-CVE check; CI runs this (rustls-webpki CVEs have hit us)
 ```
+
+## Auth model (non-obvious)
+
+Two auth methods, selected **explicitly** via `ATLASSIAN_AUTH_METHOD=basic|oauth` or the `method` field inside `[default.auth]`. No heuristic detection.
+
+| Method | Base URL | Required fields |
+|--------|----------|-----------------|
+| Basic  | `https://{domain}/rest/...`                       | `domain`, `email`, `token` |
+| OAuth  | `https://api.atlassian.com/ex/{jira,confluence}/{cloud_id}/rest/...` | `client_id`, `client_secret`; `cloud_id` auto-discovered if omitted |
+
+- The base URL divergence is the reason `ApiClient` exists — API functions take `&ApiClient` and service-relative paths, never absolute URLs.
+- OAuth tokens are refreshed automatically (5-minute buffer before expiry) inside `token::TokenManager`.
+- Confluence pagination returns absolute URLs from the API; `ApiClient::rewrite_url` rewrites them to the proxy host under OAuth.
+
+## Config resolution
+
+`config::AuthResolver` is the single source of truth for auth fields. Precedence is strict and per-field: **CLI flag > env var > config file**. Method precedence: `ATLASSIAN_AUTH_METHOD` env beats the method in the config file; when the env method differs, file fields for the other method are dropped (not leaked into the new variant).
+
+Config files use `#[serde(deny_unknown_fields)]`. Legacy flat-top `email`/`token` fields will fail to parse — they belong under `[default.auth]`.
+
+Profile search walks: global (`~/.config/atlassian-cli/config.toml`) → project (`.atlassian.toml` upward from cwd) → `--config` path. A profile must exist in at least one file; absence in any single file is not an error.
+
+## API-version mix (intentional)
+
+- **Jira**: all endpoints use `/rest/api/3/`. Search goes through `POST /rest/api/3/search/jql` (the old GET `/search` is deprecated).
+- **Confluence search**: `GET /wiki/rest/api/search` (v1) — v2 has no CQL equivalent yet.
+- **Confluence pages/spaces/comments**: `/wiki/api/v2/*`.
+
+This mix is deliberate — do not "modernize" the Confluence search path.
+
+## Write-side behavior to know
+
+- `jira create`/`update`/`comment`: plain text args auto-convert to ADF via `jira::adf::process_*_input`. For rich text, pass an ADF JSON document directly.
+- `--format markdown` on reads does **not** return pure markdown — it keeps the JSON envelope and converts content fields (description, body) in place.
+- `--stream` writes JSONL to stdout; progress/totals go to stderr. The function returns `Value::Null` so `output_json` suppresses any trailing output. Do not re-introduce a trailing summary line — it breaks `| jq`.
+
+## Auto-injected filters
+
+When `config.jira.projects_filter` is non-empty, bare JQL is wrapped: `status = Open` → `project IN ("P1","P2") AND (status = Open)`. Injection is skipped when the JQL already contains a `project` clause — detection uses a word-boundary regex (not substring) so `projectId = 10` does not count. Confluence's `space` filter follows the same shape.
+
+## Adding a new command
+
+1. Add a variant to `JiraSubcommand`/`ConfluenceSubcommand`/`ConfigSubcommand` in `main.rs` (include doc comment + flag `help` strings — clap surfaces them in `--help`).
+2. Add the match arm in `handle_jira`/`handle_confluence`/`handle_config`.
+3. Implement the async function in `jira/api.rs` or `confluence/api.rs`, taking `client: &ApiClient` and using `client.get/post/put(Service::X, "/service-relative/path")`. Service-relative paths only — never construct absolute URLs.
+4. If it's a read operation and you're adding new tests, extend `test_utils.rs` rather than duplicating fixtures.
+
+## Debugging
+
+- `-v` (info), `-vv` (debug), `-vvv` (trace) — logs go to stderr.
+- `config validate` runs the full auth path end-to-end; for OAuth this means token fetch + accessible-resources lookup, so a successful run means credentials are truly valid (not just well-formed).
+- `--profile <name>` switches between config profiles (e.g. an OAuth `default` and a Basic `fallback`).
+
+## Security invariants
+
+- Domain validation requires `ends_with(".atlassian.net")` — substring match would let `evil.atlassian.net.attacker.com` through.
+- Secrets are `#[serde(skip_serializing)]` on `AuthConfig`, and the `config show` output masks them to first-4 + `***`. Don't print resolved tokens anywhere else.
+- Config files at 0600 are recommended; the loader warns (does not bail) on looser permissions.
