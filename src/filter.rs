@@ -1,4 +1,5 @@
 use serde_json::Value;
+use std::collections::HashSet;
 
 pub const DEFAULT_EXCLUDE_FIELDS: &[&str] = &[
     "avatarUrls",
@@ -42,23 +43,26 @@ pub const DEFAULT_EXCLUDE_FIELDS: &[&str] = &[
 ];
 
 pub fn apply(value: &mut Value, config: &crate::config::Config) {
-    let exclude_fields = config
+    // Build a HashSet once so each lookup is O(1) instead of O(n) over the
+    // ~38-entry exclude list for every object in every nested response.
+    let exclude_fields: HashSet<&str> = config
         .optimization
         .response_exclude_fields
         .as_ref()
-        .map(|v| v.iter().map(String::as_str).collect::<Vec<_>>())
-        .unwrap_or_else(|| DEFAULT_EXCLUDE_FIELDS.to_vec());
+        .map(|v| v.iter().map(String::as_str).collect())
+        .unwrap_or_else(|| DEFAULT_EXCLUDE_FIELDS.iter().copied().collect());
 
     apply_recursive(value, &exclude_fields);
 }
 
-fn apply_recursive(value: &mut Value, exclude_fields: &[&str]) {
+fn apply_recursive(value: &mut Value, exclude_fields: &HashSet<&str>) {
     match value {
         Value::Object(map) => {
-            for field in exclude_fields {
-                map.remove(*field);
-            }
-            map.retain(|_, v| !matches!(v, Value::String(s) if s.is_empty()));
+            // Single-pass: drop excluded keys and empty-string values together.
+            map.retain(|k, v| {
+                !exclude_fields.contains(k.as_str())
+                    && !matches!(v, Value::String(s) if s.is_empty())
+            });
             for nested in map.values_mut() {
                 apply_recursive(nested, exclude_fields);
             }
