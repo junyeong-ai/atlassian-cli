@@ -1,10 +1,21 @@
 ---
 name: jira-confluence
+version: 0.1.2
 description: Execute Jira/Confluence queries via atlassian-cli. Search issues with JQL, manage pages with CQL, create/update tickets, handle comments and transitions, work with ADF format. Use when working with Jira tickets, Confluence pages, sprint planning, issue tracking, or Atlassian workspace queries.
 allowed-tools: Bash
 ---
 
 # atlassian-cli
+
+Atlassian Cloud CLI for Jira and Confluence. Use `--format markdown` for human-readable content; JSON remains the canonical machine-readable output.
+
+Global options must come before the service subcommand:
+
+```bash
+atlassian-cli --profile work --pretty jira get PROJ-123
+atlassian-cli --config ./.atlassian.toml confluence search "space = TEAM"
+atlassian-cli -vv jira search "project = PROJ"
+```
 
 ## Jira
 
@@ -30,6 +41,8 @@ atlassian-cli jira update PROJ-123 '{"summary": "New title", "description": "Pla
 
 # Comments & Transitions
 atlassian-cli jira comment add PROJ-123 "Comment text"
+atlassian-cli jira comment update PROJ-123 10042 "Edited comment"
+atlassian-cli jira comments PROJ-123 --format markdown
 atlassian-cli jira transitions PROJ-123
 atlassian-cli jira transition PROJ-123 31
 ```
@@ -101,24 +114,25 @@ Note: `children` does not support `--format` (v2 API limitation).
 
 ## Authentication
 
-Priority: CLI flags > Environment > Project config > Global config
+Assume credentials are already configured. Do not print, request, or infer secrets.
+
+Before destructive writes or large `--all` reads, validate the active profile:
 
 ```bash
-# Environment variables
-export ATLASSIAN_DOMAIN=company.atlassian.net
-export ATLASSIAN_EMAIL=user@example.com
-export ATLASSIAN_API_TOKEN=token
+atlassian-cli config validate
 ```
 
-## Auto-Injection Filter
+If auth fails, tell the user to check `atlassian-cli config validate` output. Only use `--profile` or `--config` when the user specifies which Atlassian workspace/profile to target.
 
-```toml
-# .atlassian.toml
-[default.jira]
-projects_filter = ["PROJ1", "PROJ2"]
+## Query Behavior
 
-[default.confluence]
-spaces_filter = ["SPACE1"]
-```
+- Jira/Confluence project or space filters may be preconfigured and auto-injected.
+- If a user explicitly names a project or space in the query, the CLI does not add a duplicate filter.
+- Use `--fields` for Jira searches when the user only needs a few fields; use `--all --stream` for large machine-readable exports.
 
-Effect: JQL becomes `project IN (PROJ1,PROJ2) AND (your_jql)`
+## API Version Notes
+
+- Jira issue search uses `POST /rest/api/3/search/jql`.
+- Confluence page, space, and comment APIs use `/wiki/api/v2/*`.
+- Confluence CQL search intentionally uses `/wiki/rest/api/search`; v2 does not provide a CQL-equivalent search endpoint.
+- Confluence CQL user-specific fields are restricted by Atlassian Cloud. Prefer account IDs/public names where applicable.
