@@ -36,16 +36,17 @@ struct AuthResolver<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AuthMethod {
     Basic,
-    OAuth,
+    ServiceAccount,
 }
 
 impl AuthMethod {
     fn parse(s: &str) -> Result<Self> {
-        match s.to_lowercase().as_str() {
+        let normalized = s.trim().to_lowercase();
+        match normalized.as_str() {
             "basic" => Ok(AuthMethod::Basic),
-            "oauth" => Ok(AuthMethod::OAuth),
+            "service_account" => Ok(AuthMethod::ServiceAccount),
             other => bail!(
-                "Unknown {ENV_AUTH_METHOD}: '{}'. Use 'basic' or 'oauth'",
+                "Unknown {ENV_AUTH_METHOD}: '{}'. Use 'basic' or 'service_account'",
                 other
             ),
         }
@@ -54,7 +55,7 @@ impl AuthMethod {
     fn of(auth: &AuthConfig) -> Self {
         match auth {
             AuthConfig::Basic { .. } => AuthMethod::Basic,
-            AuthConfig::OAuth { .. } => AuthMethod::OAuth,
+            AuthConfig::ServiceAccount { .. } => AuthMethod::ServiceAccount,
         }
     }
 }
@@ -94,23 +95,23 @@ impl AuthResolver<'_> {
                         format!("API token required (set via --token, {ENV_API_TOKEN}, or config)")
                     })?,
             },
-            AuthMethod::OAuth => AuthConfig::OAuth {
+            AuthMethod::ServiceAccount => AuthConfig::ServiceAccount {
                 client_id: self
                     .pick(self.cli.client_id.clone(), ENV_CLIENT_ID, |a| match a {
-                        AuthConfig::OAuth { client_id, .. } if file_matches => {
+                        AuthConfig::ServiceAccount { client_id, .. } if file_matches => {
                             Some(client_id.clone())
                         }
                         _ => None,
                     })
                     .with_context(|| {
                         format!(
-                            "OAuth client_id required (set via --client-id, {ENV_CLIENT_ID}, or config)"
+                            "Service account client_id required (set via --client-id, {ENV_CLIENT_ID}, or config)"
                         )
                     })?,
                 client_secret: self
                     .pick(self.cli.client_secret.clone(), ENV_CLIENT_SECRET, |a| {
                         match a {
-                            AuthConfig::OAuth { client_secret, .. } if file_matches => {
+                            AuthConfig::ServiceAccount { client_secret, .. } if file_matches => {
                                 Some(client_secret.clone())
                             }
                             _ => None,
@@ -118,11 +119,11 @@ impl AuthResolver<'_> {
                     })
                     .with_context(|| {
                         format!(
-                            "OAuth client_secret required (set via --client-secret, {ENV_CLIENT_SECRET}, or config)"
+                            "Service account client_secret required (set via --client-secret, {ENV_CLIENT_SECRET}, or config)"
                         )
                     })?,
                 cloud_id: self.pick(self.cli.cloud_id.clone(), ENV_CLOUD_ID, |a| match a {
-                    AuthConfig::OAuth { cloud_id, .. } if file_matches => cloud_id.clone(),
+                    AuthConfig::ServiceAccount { cloud_id, .. } if file_matches => cloud_id.clone(),
                     _ => None,
                 }),
             },
@@ -153,10 +154,10 @@ pub struct CliOverrides {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     /// Site domain (e.g. "company.atlassian.net").
-    /// Required for Basic auth. Ignored for OAuth (cloud_id is used instead).
+    /// Required for Basic auth. Ignored for Service account (cloud_id is used instead).
     pub domain: Option<String>,
 
-    /// Authentication configuration (Basic or OAuth).
+    /// Authentication configuration (Basic or Service account).
     #[serde(default)]
     pub auth: Option<AuthConfig>,
 
@@ -507,16 +508,16 @@ impl Config {
                     bail!("API token is empty");
                 }
             }
-            AuthConfig::OAuth {
+            AuthConfig::ServiceAccount {
                 client_id,
                 client_secret,
                 ..
             } => {
                 if client_id.is_empty() {
-                    bail!("OAuth client_id is empty");
+                    bail!("Service account client_id is empty");
                 }
                 if client_secret.is_empty() {
-                    bail!("OAuth client_secret is empty");
+                    bail!("Service account client_secret is empty");
                 }
             }
         }
@@ -576,9 +577,9 @@ impl Config {
 # email = "user@example.com"
 # token = "..."  # Prefer ATLASSIAN_API_TOKEN env var
 
-# === OAuth 2.0 (Service Account) ===
+# === OAuth 2.0 Service Account ===
 # [default.auth]
-# method = "oauth"
+# method = "service_account"
 # client_id = "your-client-id"
 # client_secret = "..."  # Prefer ATLASSIAN_CLIENT_SECRET env var
 # cloud_id = "..."  # Optional, auto-discovered if omitted
@@ -608,7 +609,7 @@ rate_limit_delay_ms = 200
 
 # [service]
 # [service.auth]
-# method = "oauth"
+# method = "service_account"
 # client_id = "..."
 # client_secret = "..."
 "#;
@@ -717,12 +718,12 @@ mod tests {
 
     #[test]
     fn test_resolver_method_switch_drops_file_fields() {
-        // File has OAuth; CLI has basic credentials; env selects basic method.
+        // File has Service account; CLI has basic credentials; env selects basic method.
         // File fields belong to a different method → must not leak into Basic.
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         clear_auth_env();
         unsafe { std::env::set_var(ENV_AUTH_METHOD, "basic") };
-        let file = AuthConfig::OAuth {
+        let file = AuthConfig::ServiceAccount {
             client_id: "fid".into(),
             client_secret: "fsec".into(),
             cloud_id: None,
@@ -763,6 +764,35 @@ mod tests {
     }
 
     #[test]
+    fn test_resolver_env_method_is_trimmed() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_auth_env();
+        unsafe {
+            std::env::set_var(ENV_AUTH_METHOD, " service_account ");
+            std::env::set_var(ENV_CLIENT_ID, "cid");
+            std::env::set_var(ENV_CLIENT_SECRET, "secret");
+        }
+        let overrides = CliOverrides::default();
+        let r = AuthResolver {
+            file_auth: None,
+            cli: &overrides,
+        };
+        let result = r.resolve().unwrap().unwrap();
+        match result {
+            AuthConfig::ServiceAccount {
+                client_id,
+                client_secret,
+                ..
+            } => {
+                assert_eq!(client_id, "cid");
+                assert_eq!(client_secret, "secret");
+            }
+            _ => panic!("expected service account auth"),
+        }
+        clear_auth_env();
+    }
+
+    #[test]
     fn test_resolver_missing_field_reports_all_sources() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         clear_auth_env();
@@ -799,10 +829,10 @@ mod tests {
         }
     }
 
-    fn create_oauth_config() -> Config {
+    fn create_service_account_config() -> Config {
         Config {
             domain: None,
-            auth: Some(AuthConfig::OAuth {
+            auth: Some(AuthConfig::ServiceAccount {
                 client_id: "test-cid".to_string(),
                 client_secret: "test-secret".to_string(),
                 cloud_id: Some("cloud-123".to_string()),
@@ -818,8 +848,8 @@ mod tests {
     }
 
     #[test]
-    fn test_oauth_validation() {
-        let config = create_oauth_config();
+    fn test_service_account_validation() {
+        let config = create_service_account_config();
         assert!(config.validate().is_ok());
     }
 
@@ -903,10 +933,10 @@ mod tests {
     }
 
     #[test]
-    fn test_oauth_empty_client_id_fails() {
+    fn test_service_account_empty_client_id_fails() {
         let config = Config {
             domain: None,
-            auth: Some(AuthConfig::OAuth {
+            auth: Some(AuthConfig::ServiceAccount {
                 client_id: String::new(),
                 client_secret: "secret".to_string(),
                 cloud_id: None,
@@ -917,10 +947,10 @@ mod tests {
     }
 
     #[test]
-    fn test_oauth_empty_secret_fails() {
+    fn test_service_account_empty_secret_fails() {
         let config = Config {
             domain: None,
-            auth: Some(AuthConfig::OAuth {
+            auth: Some(AuthConfig::ServiceAccount {
                 client_id: "cid".to_string(),
                 client_secret: String::new(),
                 cloud_id: None,
@@ -931,8 +961,8 @@ mod tests {
     }
 
     #[test]
-    fn test_oauth_without_domain_passes() {
-        let config = create_oauth_config();
+    fn test_service_account_without_domain_passes() {
+        let config = create_service_account_config();
         assert!(config.validate().is_ok());
     }
 
@@ -1047,10 +1077,10 @@ mod tests {
     }
 
     #[test]
-    fn test_domain_normalization_not_needed_for_oauth() {
+    fn test_domain_normalization_not_needed_for_service_account() {
         let config = Config {
             domain: None,
-            auth: Some(AuthConfig::OAuth {
+            auth: Some(AuthConfig::ServiceAccount {
                 client_id: "cid".to_string(),
                 client_secret: "secret".to_string(),
                 cloud_id: Some("cloud-123".to_string()),

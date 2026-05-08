@@ -3,7 +3,7 @@ use serde::Deserialize;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
-const OAUTH_TOKEN_URL: &str = "https://auth.atlassian.com/oauth/token";
+const SERVICE_ACCOUNT_TOKEN_URL: &str = "https://auth.atlassian.com/oauth/token";
 const ACCESSIBLE_RESOURCES_URL: &str = "https://api.atlassian.com/oauth/token/accessible-resources";
 /// Refresh token 5 minutes before expiry to handle network latency
 /// and prevent token expiration during long pagination sequences.
@@ -26,7 +26,7 @@ struct TokenState {
     expires_at: Instant,
 }
 
-/// Thread-safe OAuth 2.0 token manager with transparent refresh.
+/// Thread-safe OAuth 2.0 service account token manager with transparent refresh.
 ///
 /// # Concurrency
 /// Uses `tokio::sync::Mutex` for the cached token state. The lock is held
@@ -35,13 +35,13 @@ struct TokenState {
 /// stale. In CLI (sequential) usage this is optimal; in highly concurrent
 /// library usage, at most one refresh happens per expiry interval while
 /// other callers wait and then see the fresh cached token.
-pub struct TokenManager {
+pub struct ServiceAccountTokenManager {
     client_id: String,
     client_secret: String,
     state: Mutex<Option<TokenState>>,
 }
 
-impl TokenManager {
+impl ServiceAccountTokenManager {
     pub fn new(client_id: String, client_secret: String) -> Self {
         Self {
             client_id,
@@ -68,26 +68,30 @@ impl TokenManager {
 
     async fn fetch_token(&self, http: &reqwest::Client) -> Result<TokenState> {
         let response = http
-            .post(OAUTH_TOKEN_URL)
-            .json(&serde_json::json!({
-                "grant_type": "client_credentials",
-                "client_id": self.client_id,
-                "client_secret": self.client_secret,
-            }))
+            .post(SERVICE_ACCOUNT_TOKEN_URL)
+            .form(&[
+                ("grant_type", "client_credentials"),
+                ("client_id", self.client_id.as_str()),
+                ("client_secret", self.client_secret.as_str()),
+            ])
             .send()
             .await
-            .context("Failed to connect to OAuth token endpoint")?;
+            .context("Failed to connect to service account token endpoint")?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            bail!("OAuth token request failed ({}): {}", status, body);
+            bail!(
+                "Service account token request failed ({}): {}",
+                status,
+                body
+            );
         }
 
         let token_response: TokenResponse = response
             .json()
             .await
-            .context("Failed to parse OAuth token response")?;
+            .context("Failed to parse service account token response")?;
 
         let expires_at = Instant::now()
             + Duration::from_secs(
@@ -129,7 +133,7 @@ impl TokenManager {
             .context("Failed to parse accessible-resources response")?;
 
         match resources.len() {
-            0 => bail!("No accessible Atlassian sites found for this OAuth credential"),
+            0 => bail!("No accessible Atlassian sites found for this service account credential"),
             1 => Ok(resources.into_iter().next().unwrap().id),
             n => {
                 let sites: Vec<String> = resources
@@ -152,7 +156,8 @@ mod tests {
 
     #[test]
     fn test_token_manager_creation() {
-        let manager = TokenManager::new("client-id".to_string(), "client-secret".to_string());
+        let manager =
+            ServiceAccountTokenManager::new("client-id".to_string(), "client-secret".to_string());
         assert_eq!(manager.client_id, "client-id");
         assert_eq!(manager.client_secret, "client-secret");
     }

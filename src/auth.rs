@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 /// token = "api-token"
 ///
 /// [default.auth]
-/// method = "oauth"
+/// method = "service_account"
 /// client_id = "your-client-id"
 /// client_secret = "your-secret"
 /// cloud_id = "optional-cloud-id"
@@ -29,7 +29,8 @@ pub enum AuthConfig {
         #[serde(default, skip_serializing)]
         token: String,
     },
-    OAuth {
+    #[serde(rename = "service_account")]
+    ServiceAccount {
         /// Defaults to "" when omitted in config file (overridden by env var or CLI flag).
         #[serde(default)]
         client_id: String,
@@ -63,15 +64,15 @@ mod tests {
     }
 
     #[test]
-    fn test_oauth_deserialization() {
+    fn test_service_account_deserialization() {
         let toml_str = r#"
-            method = "oauth"
+            method = "service_account"
             client_id = "test-client-id"
             client_secret = "test-secret"
         "#;
         let auth: AuthConfig = toml::from_str(toml_str).unwrap();
         match auth {
-            AuthConfig::OAuth {
+            AuthConfig::ServiceAccount {
                 client_id,
                 client_secret,
                 cloud_id,
@@ -80,24 +81,24 @@ mod tests {
                 assert_eq!(client_secret, "test-secret");
                 assert!(cloud_id.is_none());
             }
-            _ => panic!("Expected OAuth auth"),
+            _ => panic!("Expected Service account auth"),
         }
     }
 
     #[test]
-    fn test_oauth_with_cloud_id() {
+    fn test_service_account_with_cloud_id() {
         let toml_str = r#"
-            method = "oauth"
+            method = "service_account"
             client_id = "cid"
             client_secret = "secret"
             cloud_id = "abc-123"
         "#;
         let auth: AuthConfig = toml::from_str(toml_str).unwrap();
         match auth {
-            AuthConfig::OAuth { cloud_id, .. } => {
+            AuthConfig::ServiceAccount { cloud_id, .. } => {
                 assert_eq!(cloud_id, Some("abc-123".to_string()));
             }
-            _ => panic!("Expected OAuth auth"),
+            _ => panic!("Expected Service account auth"),
         }
     }
 
@@ -113,13 +114,14 @@ mod tests {
     }
 
     #[test]
-    fn test_oauth_serialization_skips_secret() {
-        let auth = AuthConfig::OAuth {
+    fn test_service_account_serialization_skips_secret() {
+        let auth = AuthConfig::ServiceAccount {
             client_id: "cid".to_string(),
             client_secret: "secret".to_string(),
             cloud_id: None,
         };
         let serialized = toml::to_string(&auth).unwrap();
+        assert!(serialized.contains("method = \"service_account\""));
         assert!(serialized.contains("client_id"));
         assert!(!serialized.contains("secret"));
     }
@@ -143,15 +145,15 @@ mod tests {
     }
 
     #[test]
-    fn test_oauth_partial_config_deserializes() {
+    fn test_service_account_partial_config_deserializes() {
         // client_secret may come from env var only
         let toml_str = r#"
-            method = "oauth"
+            method = "service_account"
             client_id = "cid"
         "#;
         let auth: AuthConfig = toml::from_str(toml_str).unwrap();
         match auth {
-            AuthConfig::OAuth {
+            AuthConfig::ServiceAccount {
                 client_id,
                 client_secret,
                 ..
@@ -159,7 +161,7 @@ mod tests {
                 assert_eq!(client_id, "cid");
                 assert_eq!(client_secret, ""); // to be filled by env var
             }
-            _ => panic!("Expected OAuth auth"),
+            _ => panic!("Expected Service account auth"),
         }
     }
 

@@ -224,7 +224,7 @@ enum ConfigSubcommand {
         )]
         global: bool,
     },
-    /// Validate credentials end-to-end against the Atlassian API.
+    /// Validate configured credentials against Atlassian auth/API endpoints.
     Validate,
 }
 
@@ -357,7 +357,7 @@ async fn handle_config(
 
             if !path.exists() {
                 anyhow::bail!(
-                    "Config file does not exist: {:?}\nRun 'atlassian config init{}' to create it.",
+                    "Config file does not exist: {:?}\nRun 'atlassian-cli config init{}' to create it.",
                     path,
                     if global { " --global" } else { "" }
                 );
@@ -387,19 +387,22 @@ async fn handle_config(
 
             // ApiClient::new() performs:
             //   - Basic: credential encoding (offline)
-            //   - OAuth: token fetch + cloud_id discovery (online)
+            //   - Service account: token fetch + cloud_id discovery (online)
             // Any failure here means credentials are invalid.
             let client = atlassian_cli::ApiClient::new(config).await?;
 
-            if client.is_oauth() {
-                // OAuth credentials already verified via token fetch and
+            if client.is_service_account() {
+                // service account credentials already verified via token fetch and
                 // accessible-resources call. Additional /myself may fail due
                 // to scope mismatch (e.g. read:jira-work but not read:jira-user),
                 // which doesn't indicate a credential problem.
-                println!("✓ OAuth credentials valid");
+                println!("✓ service account credentials and cloud access valid");
                 if let Some(cid) = client.cloud_id() {
                     println!("  Cloud ID: {}", cid);
                 }
+                println!(
+                    "  Note: individual Jira/Confluence operations still require matching OAuth scopes and product permissions."
+                );
             } else {
                 // Basic auth: call /myself to show user info and verify token.
                 let response = client
@@ -612,13 +615,13 @@ fn print_resolved_config(config: &atlassian_cli::Config) {
                 println!("token = \"{}\"", mask_secret(token));
             }
         }
-        Some(AuthConfig::OAuth {
+        Some(AuthConfig::ServiceAccount {
             client_id,
             client_secret,
             cloud_id,
         }) => {
             println!("[default.auth]");
-            println!("method = \"oauth\"");
+            println!("method = \"service_account\"");
             println!("client_id = {:?}", client_id);
             if client_secret.is_empty() {
                 println!("# client_secret = (not set — provide via ATLASSIAN_CLIENT_SECRET)");

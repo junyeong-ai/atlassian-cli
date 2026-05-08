@@ -22,12 +22,12 @@ pub fn create_test_config() -> Config {
     }
 }
 
-/// Creates a test configuration with OAuth defaults
+/// Creates a test configuration with Service account defaults
 #[cfg(test)]
-pub fn create_test_oauth_config() -> Config {
+pub fn create_test_service_account_config() -> Config {
     Config {
         domain: None,
-        auth: Some(AuthConfig::OAuth {
+        auth: Some(AuthConfig::ServiceAccount {
             client_id: "test-client-id".to_string(),
             client_secret: "test-secret".to_string(),
             cloud_id: Some("test-cloud-id".to_string()),
@@ -79,11 +79,11 @@ mod tests {
     }
 
     #[test]
-    fn test_create_test_oauth_config() {
-        let config = create_test_oauth_config();
+    fn test_create_test_service_account_config() {
+        let config = create_test_service_account_config();
         assert!(config.domain.is_none());
         match &config.auth {
-            Some(AuthConfig::OAuth {
+            Some(AuthConfig::ServiceAccount {
                 client_id,
                 cloud_id,
                 ..
@@ -91,7 +91,7 @@ mod tests {
                 assert_eq!(client_id, "test-client-id");
                 assert_eq!(cloud_id, &Some("test-cloud-id".to_string()));
             }
-            _ => panic!("Expected OAuth auth"),
+            _ => panic!("Expected Service account auth"),
         }
     }
 

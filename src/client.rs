@@ -1,6 +1,6 @@
 use crate::auth::AuthConfig;
 use crate::config::Config;
-use crate::token::TokenManager;
+use crate::token::ServiceAccountTokenManager;
 use anyhow::{Context, Result};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::sync::Arc;
@@ -43,9 +43,9 @@ enum AuthState {
         domain: String,
         encoded: String, // pre-computed base64(email:token)
     },
-    OAuth {
+    ServiceAccount {
         cloud_id: String,
-        token_manager: Arc<TokenManager>,
+        token_manager: Arc<ServiceAccountTokenManager>,
     },
 }
 
@@ -57,7 +57,7 @@ pub struct ApiClient {
 
 impl ApiClient {
     /// Creates an ApiClient from a validated Config.
-    /// For OAuth, this fetches an initial token and discovers cloud_id if not provided.
+    /// For service accounts, this fetches an initial token and discovers cloud_id if not provided.
     pub async fn new(config: Config) -> Result<Self> {
         let auth_config = config
             .auth
@@ -92,13 +92,15 @@ impl ApiClient {
                     encoded,
                 }
             }
-            AuthConfig::OAuth {
+            AuthConfig::ServiceAccount {
                 client_id,
                 client_secret,
                 cloud_id,
             } => {
-                let token_manager =
-                    Arc::new(TokenManager::new(client_id.clone(), client_secret.clone()));
+                let token_manager = Arc::new(ServiceAccountTokenManager::new(
+                    client_id.clone(),
+                    client_secret.clone(),
+                ));
 
                 // Always fetch a token on construction to verify credentials.
                 // The token is cached in the manager for subsequent API calls,
@@ -109,10 +111,12 @@ impl ApiClient {
 
                 let resolved_cloud_id = match cloud_id {
                     Some(cid) => cid.clone(),
-                    None => TokenManager::discover_cloud_id(&http, &access_token).await?,
+                    None => {
+                        ServiceAccountTokenManager::discover_cloud_id(&http, &access_token).await?
+                    }
                 };
 
-                AuthState::OAuth {
+                AuthState::ServiceAccount {
                     cloud_id: resolved_cloud_id,
                     token_manager,
                 }
@@ -127,15 +131,15 @@ impl ApiClient {
         &self.config
     }
 
-    /// Returns `true` if this client uses OAuth 2.0 authentication.
-    pub fn is_oauth(&self) -> bool {
-        matches!(self.auth, AuthState::OAuth { .. })
+    /// Returns `true` if this client uses OAuth 2.0 service account authentication.
+    pub fn is_service_account(&self) -> bool {
+        matches!(self.auth, AuthState::ServiceAccount { .. })
     }
 
-    /// Returns the resolved cloud_id for OAuth clients, `None` for Basic auth.
+    /// Returns the resolved cloud_id for Service account clients, `None` for Basic auth.
     pub fn cloud_id(&self) -> Option<&str> {
         match &self.auth {
-            AuthState::OAuth { cloud_id, .. } => Some(cloud_id.as_str()),
+            AuthState::ServiceAccount { cloud_id, .. } => Some(cloud_id.as_str()),
             AuthState::Basic { .. } => None,
         }
     }
@@ -173,7 +177,7 @@ impl ApiClient {
     /// Rewrite an external absolute URL to route through the correct auth path.
     ///
     /// For Basic auth: returns the URL unchanged (already correct form).
-    /// For OAuth: replaces scheme+host with Atlassian proxy, preserving path+query.
+    /// For Service account: replaces scheme+host with Atlassian proxy, preserving path+query.
     ///   e.g. "https://domain.atlassian.net/wiki/rest/api/search?cursor=abc" →
     ///        "https://api.atlassian.com/ex/confluence/{cloud_id}/wiki/rest/api/search?cursor=abc"
     ///
@@ -182,7 +186,7 @@ impl ApiClient {
     pub fn rewrite_url(&self, service: Service, external_url: &str) -> String {
         match &self.auth {
             AuthState::Basic { .. } => external_url.to_string(),
-            AuthState::OAuth { cloud_id, .. } => {
+            AuthState::ServiceAccount { cloud_id, .. } => {
                 let Some(path_with_query) = extract_path_and_query(external_url) else {
                     return external_url.to_string();
                 };
@@ -202,7 +206,7 @@ impl ApiClient {
             AuthState::Basic { domain, .. } => {
                 format!("https://{}{}", domain, path)
             }
-            AuthState::OAuth { cloud_id, .. } => {
+            AuthState::ServiceAccount { cloud_id, .. } => {
                 format!(
                     "{}/ex/{}/{}{}",
                     ATLASSIAN_PROXY_BASE,
@@ -217,7 +221,7 @@ impl ApiClient {
     async fn auth_header_value(&self) -> Result<String> {
         match &self.auth {
             AuthState::Basic { encoded, .. } => Ok(format!("Basic {}", encoded)),
-            AuthState::OAuth { token_manager, .. } => {
+            AuthState::ServiceAccount { token_manager, .. } => {
                 let token = token_manager.access_token(&self.http).await?;
                 Ok(format!("Bearer {}", token))
             }
@@ -246,10 +250,10 @@ mod tests {
         }
     }
 
-    fn oauth_config() -> Config {
+    fn service_account_config() -> Config {
         Config {
             domain: None,
-            auth: Some(AuthConfig::OAuth {
+            auth: Some(AuthConfig::ServiceAccount {
                 client_id: "test-cid".to_string(),
                 client_secret: "test-secret".to_string(),
                 cloud_id: Some("cloud-abc-123".to_string()),
@@ -297,16 +301,19 @@ mod tests {
     }
 
     #[test]
-    fn test_build_url_oauth_jira() {
-        let token_manager = Arc::new(TokenManager::new("cid".to_string(), "secret".to_string()));
-        let auth = AuthState::OAuth {
+    fn test_build_url_service_account_jira() {
+        let token_manager = Arc::new(ServiceAccountTokenManager::new(
+            "cid".to_string(),
+            "secret".to_string(),
+        ));
+        let auth = AuthState::ServiceAccount {
             cloud_id: "cloud-abc-123".to_string(),
             token_manager,
         };
         let client = ApiClient {
             http: reqwest::Client::new(),
             auth,
-            config: oauth_config(),
+            config: service_account_config(),
         };
         assert_eq!(
             client.build_url(Service::Jira, "/rest/api/3/issue/KEY-1"),
@@ -315,16 +322,19 @@ mod tests {
     }
 
     #[test]
-    fn test_build_url_oauth_confluence() {
-        let token_manager = Arc::new(TokenManager::new("cid".to_string(), "secret".to_string()));
-        let auth = AuthState::OAuth {
+    fn test_build_url_service_account_confluence() {
+        let token_manager = Arc::new(ServiceAccountTokenManager::new(
+            "cid".to_string(),
+            "secret".to_string(),
+        ));
+        let auth = AuthState::ServiceAccount {
             cloud_id: "cloud-abc-123".to_string(),
             token_manager,
         };
         let client = ApiClient {
             http: reqwest::Client::new(),
             auth,
-            config: oauth_config(),
+            config: service_account_config(),
         };
         assert_eq!(
             client.build_url(Service::Confluence, "/wiki/rest/api/search"),
@@ -348,16 +358,19 @@ mod tests {
     }
 
     #[test]
-    fn test_rewrite_url_oauth_confluence() {
-        let token_manager = Arc::new(TokenManager::new("cid".to_string(), "secret".to_string()));
-        let auth = AuthState::OAuth {
+    fn test_rewrite_url_service_account_confluence() {
+        let token_manager = Arc::new(ServiceAccountTokenManager::new(
+            "cid".to_string(),
+            "secret".to_string(),
+        ));
+        let auth = AuthState::ServiceAccount {
             cloud_id: "cloud-abc-123".to_string(),
             token_manager,
         };
         let client = ApiClient {
             http: reqwest::Client::new(),
             auth,
-            config: oauth_config(),
+            config: service_account_config(),
         };
         let url = "https://oyitsm.atlassian.net/wiki/rest/api/search?cursor=abc";
         assert_eq!(
@@ -367,16 +380,19 @@ mod tests {
     }
 
     #[test]
-    fn test_rewrite_url_oauth_rest_path() {
-        let token_manager = Arc::new(TokenManager::new("cid".to_string(), "secret".to_string()));
-        let auth = AuthState::OAuth {
+    fn test_rewrite_url_service_account_rest_path() {
+        let token_manager = Arc::new(ServiceAccountTokenManager::new(
+            "cid".to_string(),
+            "secret".to_string(),
+        ));
+        let auth = AuthState::ServiceAccount {
             cloud_id: "cloud-abc-123".to_string(),
             token_manager,
         };
         let client = ApiClient {
             http: reqwest::Client::new(),
             auth,
-            config: oauth_config(),
+            config: service_account_config(),
         };
         let url = "https://oyitsm.atlassian.net/rest/api/3/search?next=xyz";
         assert_eq!(
@@ -388,15 +404,18 @@ mod tests {
     #[test]
     fn test_rewrite_url_any_path_rewritten() {
         // rewrite_url now preserves any path after the host
-        let token_manager = Arc::new(TokenManager::new("cid".to_string(), "secret".to_string()));
-        let auth = AuthState::OAuth {
+        let token_manager = Arc::new(ServiceAccountTokenManager::new(
+            "cid".to_string(),
+            "secret".to_string(),
+        ));
+        let auth = AuthState::ServiceAccount {
             cloud_id: "cloud-abc-123".to_string(),
             token_manager,
         };
         let client = ApiClient {
             http: reqwest::Client::new(),
             auth,
-            config: oauth_config(),
+            config: service_account_config(),
         };
         let url = "https://example.com/unknown/path";
         assert_eq!(
@@ -408,17 +427,19 @@ mod tests {
     #[test]
     fn test_rewrite_url_query_with_path_like_text_safe() {
         // Query string contains /wiki/ but it's in the query, not path.
-        // Old substring-based impl would incorrectly use /wiki/ from query.
-        // New impl correctly extracts path by host boundary.
-        let token_manager = Arc::new(TokenManager::new("cid".to_string(), "secret".to_string()));
-        let auth = AuthState::OAuth {
+        // Path extraction must use the host boundary.
+        let token_manager = Arc::new(ServiceAccountTokenManager::new(
+            "cid".to_string(),
+            "secret".to_string(),
+        ));
+        let auth = AuthState::ServiceAccount {
             cloud_id: "cloud-abc-123".to_string(),
             token_manager,
         };
         let client = ApiClient {
             http: reqwest::Client::new(),
             auth,
-            config: oauth_config(),
+            config: service_account_config(),
         };
         let url = "https://oyitsm.atlassian.net/rest/api/3/issue/KEY-1?redirect=/wiki/foo";
         assert_eq!(
