@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/junyeong-ai/atlassian-cli/workflows/CI/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions)
 [![Lint](https://github.com/junyeong-ai/atlassian-cli/workflows/Lint/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions)
-[![Rust](https://img.shields.io/badge/rust-1.91.1%2B%20(2024%20edition)-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.95.0%2B%20(2024%20edition)-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
 [![Version](https://img.shields.io/badge/version-0.1.0-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
 [![DeepWiki](https://img.shields.io/badge/DeepWiki-junyeong--ai%2Fatlassian--cli-blue.svg?logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACwAAAAyCAYAAAAnWDnqAAAAAXNSR0IArs4c6QAAA05JREFUaEPtmUtyEzEQhtWTQyQLHNak2AB7ZnyXZMEjXMGeK/AIi+QuHrMnbChYY7MIh8g01fJoopFb0uhhEqqcbWTp06/uv1saEDv4O3n3dV60RfP947Mm9/SQc0ICFQgzfc4CYZoTPAswgSJCCUJUnAAoRHOAUOcATwbmVLWdGoH//PB8mnKqScAhsD0kYP3j/Yt5LPQe2KvcXmGvRHcDnpxfL2zOYJ1mFwrryWTz0advv1Ut4CJgf5uhDuDj5eUcAUoahrdY/56ebRWeraTjMt/00Sh3UDtjgHtQNHwcRGOC98BJEAEymycmYcWwOprTgcB6VZ5JK5TAJ+fXGLBm3FDAmn6oPPjR4rKCAoJCal2eAiQp2x0vxTPB3ALO2CRkwmDy5WohzBDwSEFKRwPbknEggCPB/imwrycgxX2NzoMCHhPkDwqYMr9tRcP5qNrMZHkVnOjRMWwLCcr8ohBVb1OMjxLwGCvjTikrsBOiA6fNyCrm8V1rP93iVPpwaE+gO0SsWmPiXB+jikdf6SizrT5qKasx5j8ABbHpFTx+vFXp9EnYQmLx02h1QTTrl6eDqxLnGjporxl3NL3agEvXdT0WmEost648sQOYAeJS9Q7bfUVoMGnjo4AZdUMQku50McDcMWcBPvr0SzbTAFDfvJqwLzgxwATnCgnp4wDl6Aa+Ax283gghmj+vj7feE2KBBRMW3FzOpLOADl0Isb5587h/U4gGvkt5v60Z1VLG8BhYjbzRwyQZemwAd6cCR5/XFWLYZRIMpX39AR0tjaGGiGzLVyhse5C9RKC6ai42ppWPKiBagOvaYk8lO7DajerabOZP46Lby5wKjw1HCRx7p9sVMOWGzb/vA1hwiWc6jm3MvQDTogQkiqIhJV0nBQBTU+3okKCFDy9WwferkHjtxib7t3xIUQtHxnIwtx4mpg26/HfwVNVDb4oI9RHmx5WGelRVlrtiw43zboCLaxv46AZeB3IlTkwouebTr1y2NjSpHz68WNFjHvupy3q8TFn3Hos2IAk4Ju5dCo8B3wP7VPr/FGaKiG+T+v+TQqIrOqMTL1VdWV1DdmcbO8KXBz6esmYWYKPwDL5b5FA1a0hwapHiom0r/cKaoqr+27/XcrS5UwSMbQAAAABJRU5ErkJggg==)](https://deepwiki.com/junyeong-ai/atlassian-cli)
 
@@ -16,7 +16,7 @@
 > - 🎯 **60-70% response optimization** (field filtering)
 > - 📄 **Full pagination** (fetch all results with `--all`)
 > - 📝 **Markdown conversion** (`--format markdown` for HTML→Markdown)
-> - 🔧 **4-tier config** (CLI → ENV → Project → Global)
+> - 🔧 **Layered config** (CLI → ENV → `--config` → Project → Global)
 
 ---
 
@@ -29,15 +29,18 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scri
 # 2. Initialize config
 atlassian-cli config init --global
 
-# 3. Edit config (enter domain, email, token)
+# 3. Edit config (choose Basic API token or service account credentials)
 atlassian-cli config edit --global
 
-# 4. Start using! 🎉
+# 4. Validate credentials
+atlassian-cli config validate
+
+# 5. Start using
 atlassian-cli jira search "status = Open" --limit 5
 atlassian-cli confluence search "type=page" --limit 10
 ```
 
-**Tip**: [Generate API Token](https://id.atlassian.com/manage-profile/security/api-tokens) required
+**Tip**: Basic auth uses an Atlassian API token. Service account auth uses OAuth 2.0 client credentials.
 
 ---
 
@@ -60,6 +63,7 @@ atlassian-cli jira update PROJ-123 '{"summary":"New title"}'
 
 # Comment/Transition
 atlassian-cli jira comment add PROJ-123 "Work completed"
+atlassian-cli jira comment update PROJ-123 10042 "Edited comment"
 atlassian-cli jira transitions PROJ-123
 atlassian-cli jira transition PROJ-123 31
 ```
@@ -112,6 +116,18 @@ atlassian-cli jira get PROJ-123 | jq -r '.fields.summary'
 ```bash
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | bash
 ```
+Installs the latest prebuilt binary and can install the `jira-confluence` Claude Code skill at user level (`~/.claude/skills`). When run through `curl | bash`, the installer fetches the skill directly from GitHub.
+
+```bash
+# Install a specific release
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.1.0 bash
+
+# Uninstall (non-interactive defaults keep skill/config)
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/uninstall.sh | bash
+
+# Remove skill and global config too
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/uninstall.sh | bash -s -- --yes
+```
 
 **Manual install**:
 1. Download binary from [Releases](https://github.com/junyeong-ai/atlassian-cli/releases)
@@ -123,28 +139,31 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scri
 - macOS: Intel (x86_64), Apple Silicon (aarch64)
 - Windows: x86_64
 
+`install.sh` supports Linux/macOS automation. Windows builds are published as release binaries for manual installation.
+
 ### Method 2: Build from Source
 
 ```bash
 git clone https://github.com/junyeong-ai/atlassian-cli
 cd atlassian-cli
-cargo build --release
+cargo +1.95.0 build --release
 cp target/release/atlassian-cli ~/.local/bin/
 ```
 
-**Requirements**: Rust 1.91.1+
+**Requirements**: Rust 1.95.0+
 
 ### 🤖 Claude Code Skill (Optional)
 
-When running `./scripts/install.sh`, you can choose to install the Claude Code skill:
+When running `scripts/install.sh`, you can choose to install the Claude Code skill:
 
-- **User-level** (recommended): Available in all projects
-- **Project-level**: Auto-distributed to team via git
+- **User-level** (recommended): Available in all projects via `~/.claude/skills/jira-confluence`
 - **Skip**: Manual installation later
+
+The installer uses the local skill definition when run inside a checkout. With `curl | bash`, it fetches the skill from GitHub.
 
 ---
 
-## 🔑 Generate API Token
+## 🔑 Basic Auth API Token
 
 1. Visit [Atlassian API Tokens](https://id.atlassian.com/manage-profile/security/api-tokens)
 2. Click "Create API token"
@@ -160,28 +179,45 @@ When running `./scripts/install.sh`, you can choose to install the Claude Code s
 ### Environment Variables
 
 ```bash
+export ATLASSIAN_AUTH_METHOD=basic
 export ATLASSIAN_DOMAIN="company.atlassian.net"
 export ATLASSIAN_EMAIL="user@example.com"
 export ATLASSIAN_API_TOKEN="your-token"
 
+# Or use an OAuth 2.0 service account
+export ATLASSIAN_AUTH_METHOD=service_account
+export ATLASSIAN_CLIENT_ID="your-client-id"
+export ATLASSIAN_CLIENT_SECRET="your-client-secret"
+# ATLASSIAN_CLOUD_ID is optional when the credential can access exactly one site
+
 # Field optimization
 export JIRA_SEARCH_DEFAULT_FIELDS="key,summary,status"
 export JIRA_SEARCH_CUSTOM_FIELDS="customfield_10015"
+export RESPONSE_EXCLUDE_FIELDS="self,avatarUrls,iconUrl"
 ```
 
 ### Config File
 
 **Location**:
-- macOS/Linux: `~/.config/atlassian-cli/config.toml`
-- Windows: `%APPDATA%\atlassian-cli\config.toml`
-- Project: `./.atlassian.toml`
+- Global: `~/.config/atlassian-cli/config.toml`
+- Project: `./.atlassian.toml` or `./.atlassian/config.toml`
 
 **Default config** (generated by `atlassian-cli config init`):
 ```toml
 [default]
 domain = "company.atlassian.net"
+
+[default.auth]
+method = "basic"
 email = "user@example.com"
 token = "your-api-token"
+
+# Or:
+# [default.auth]
+# method = "service_account"
+# client_id = "your-client-id"
+# client_secret = "your-client-secret"
+# cloud_id = "optional-cloud-id"
 
 [default.jira]
 projects_filter = ["PROJ1", "PROJ2"]
@@ -192,19 +228,22 @@ spaces_filter = ["TEAM", "DOCS"]
 [default.performance]
 request_timeout_ms = 30000
 rate_limit_delay_ms = 200
+
+[default.optimization]
+response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 ```
 
 ### Config Priority
 
 ```
-CLI flags > Environment variables > Project config > Global config
+CLI flags > Environment variables > `--config` file > Project config > Global config
 ```
 
 ---
 
 ## 🏗️ Core Architecture
 
-4-tier config priority, ADF auto-conversion, field optimization (17 default fields), cursor-based pagination.
+Layered config priority, ADF auto-conversion, field optimization (17 default fields), cursor-based pagination.
 For detailed architecture, see [CLAUDE.md](CLAUDE.md).
 
 ---
@@ -266,6 +305,8 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 | `create <PROJECT> <SUMMARY> <TYPE>` | Create issue | `jira create PROJ "Title" Bug` |
 | `update <KEY> <JSON>` | Update issue | `jira update PROJ-123 '{"summary":"New"}'` |
 | `comment add <KEY> <TEXT>` | Add comment | `jira comment add PROJ-123 "Done"` |
+| `comment update <KEY> <COMMENT_ID> <TEXT>` | Update comment | `jira comment update PROJ-123 10042 "Done"` |
+| `comments <KEY>` | List comments | `jira comments PROJ-123` |
 | `transitions <KEY>` | List transitions | `jira transitions PROJ-123` |
 | `transition <KEY> <ID>` | Transition issue | `jira transition PROJ-123 31` |
 
@@ -292,7 +333,7 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 | `edit [--global]` | Edit with editor | `config edit` |
 | `path [--global]` | File path | `config path` |
 | `list` | List locations | `config list` |
-| `validate` | Validate API connection | `config validate` |
+| `validate` | Validate auth and Cloud access; individual APIs still require scopes/permissions | `config validate` |
 
 ### Common Options
 
@@ -301,6 +342,10 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 | `--domain` | Override domain | All commands |
 | `--email` | Override email | All commands |
 | `--token` | Override token | All commands |
+| `--profile <NAME>` | Select config profile | Global |
+| `--config <PATH>` | Override config path | Global |
+| `--pretty` | Pretty-print JSON | Global |
+| `-v` / `-vv` / `-vvv` | stderr logging level | Global |
 | `--limit <N>` | Limit results | search |
 | `--all` | All results (pagination) | jira search, confluence search |
 | `--stream` | JSONL streaming | jira search, confluence search (requires --all) |

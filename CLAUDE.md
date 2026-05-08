@@ -5,7 +5,7 @@ Rust 2024 edition, single binary. CLI for Atlassian Cloud (Jira + Confluence).
 ## Build / test / lint
 
 ```bash
-cargo build --release           # production binary at target/release/atlassian-cli
+cargo +1.95.0 build --release   # production binary at target/release/atlassian-cli
 cargo test                      # unit tests (env-var tests serialize via an internal Mutex)
 cargo clippy                    # lint; CI requires zero warnings
 cargo fmt                       # format; CI enforces rustfmt
@@ -14,28 +14,28 @@ cargo audit                     # transitive-CVE check; CI runs this (rustls-web
 
 ## Auth model (non-obvious)
 
-Two auth methods, selected **explicitly** via `ATLASSIAN_AUTH_METHOD=basic|oauth` or the `method` field inside `[default.auth]`. No heuristic detection.
+Two auth methods, selected **explicitly** via `ATLASSIAN_AUTH_METHOD=basic|service_account` or the `method` field inside `[default.auth]`. No heuristic detection.
 
 | Method | Base URL | Required fields |
 |--------|----------|-----------------|
 | Basic  | `https://{domain}/rest/...`                       | `domain`, `email`, `token` |
-| OAuth  | `https://api.atlassian.com/ex/{jira,confluence}/{cloud_id}/rest/...` | `client_id`, `client_secret`; `cloud_id` auto-discovered if omitted |
+| Service account | `https://api.atlassian.com/ex/{jira,confluence}/{cloud_id}/rest/...` | `client_id`, `client_secret`; `cloud_id` auto-discovered if omitted |
 
 - The base URL divergence is the reason `ApiClient` exists — API functions take `&ApiClient` and service-relative paths, never absolute URLs.
-- OAuth tokens are refreshed automatically (5-minute buffer before expiry) inside `token::TokenManager`.
-- Confluence pagination returns absolute URLs from the API; `ApiClient::rewrite_url` rewrites them to the proxy host under OAuth.
+- Service account tokens are refreshed automatically (5-minute buffer before expiry) inside `token::ServiceAccountTokenManager`.
+- Confluence pagination returns absolute URLs from the API; `ApiClient::rewrite_url` rewrites them to the proxy host under service account auth.
 
 ## Config resolution
 
 `config::AuthResolver` is the single source of truth for auth fields. Precedence is strict and per-field: **CLI flag > env var > config file**. Method precedence: `ATLASSIAN_AUTH_METHOD` env beats the method in the config file; when the env method differs, file fields for the other method are dropped (not leaked into the new variant).
 
-Config files use `#[serde(deny_unknown_fields)]`. Legacy flat-top `email`/`token` fields will fail to parse — they belong under `[default.auth]`.
+Config files use `#[serde(deny_unknown_fields)]`. Auth fields belong under `[default.auth]`.
 
-Profile search walks: global (`~/.config/atlassian-cli/config.toml`) → project (`.atlassian.toml` upward from cwd) → `--config` path. A profile must exist in at least one file; absence in any single file is not an error.
+Profile search walks: global (`~/.config/atlassian-cli/config.toml`) → project (`.atlassian.toml` or `.atlassian/config.toml` upward from cwd) → `--config` path. A profile must exist in at least one file; absence in any single file is not an error.
 
 ## API-version mix (intentional)
 
-- **Jira**: all endpoints use `/rest/api/3/`. Search goes through `POST /rest/api/3/search/jql` (the old GET `/search` is deprecated).
+- **Jira**: all endpoints use `/rest/api/3/`. Search goes through `POST /rest/api/3/search/jql`.
 - **Confluence search**: `GET /wiki/rest/api/search` (v1) — v2 has no CQL equivalent yet.
 - **Confluence pages/spaces/comments**: `/wiki/api/v2/*`.
 
@@ -61,8 +61,8 @@ When `config.jira.projects_filter` is non-empty, bare JQL is wrapped: `status = 
 ## Debugging
 
 - `-v` (info), `-vv` (debug), `-vvv` (trace) — logs go to stderr.
-- `config validate` runs the full auth path end-to-end; for OAuth this means token fetch + accessible-resources lookup, so a successful run means credentials are truly valid (not just well-formed).
-- `--profile <name>` switches between config profiles (e.g. an OAuth `default` and a Basic `fallback`).
+- `config validate` checks the configured credentials against Atlassian auth/API endpoints. For service account auth this means token fetch + accessible-resources lookup; individual Jira/Confluence calls still depend on OAuth scopes and product permissions.
+- `--profile <name>` switches between config profiles (e.g. a service account `default` and a Basic `fallback`).
 
 ## Security invariants
 

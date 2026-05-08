@@ -12,9 +12,9 @@ Reads with `--format markdown` convert `body.storage.value` via `markdown::confl
 
 ## Pagination — two-stage URL
 
-`search_all` fetches the first page via `client.get(Service::Confluence, "/wiki/rest/api/search")`, then follows `_links.next` (a relative path) combined with `_links.base` (an absolute URL that, under OAuth, points at the original atlassian.net host).
+`search_all` fetches the first page via `client.get(Service::Confluence, "/wiki/rest/api/search")`, then follows `_links.next` (a relative path) combined with `_links.base` (a URL that may point at the original atlassian.net host under service account auth).
 
-The combined URL must go through `client.rewrite_url(Service::Confluence, &url)` before `client.get_absolute(...)` — without rewriting, OAuth requests hit the wrong host and fail auth. Basic auth leaves the URL unchanged.
+The combined URL must go through `client.rewrite_url(Service::Confluence, &url)` before `client.get_absolute(...)` — without rewriting, service account requests hit the wrong host and fail auth. Basic auth leaves the URL unchanged.
 
 ## `children` has no markdown format
 
