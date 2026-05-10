@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or Discussion
+    url: https://github.com/junyeong-ai/atlassian-cli/discussions
+    about: Ask usage questions or share tips here.
+  - name: Security Vulnerability
+    url: https://github.com/junyeong-ai/atlassian-cli/security/advisories/new
+    about: Report a security issue privately. Do not file a public issue.

@@ -178,8 +178,8 @@ impl ApiClient {
     ///
     /// For Basic auth: returns the URL unchanged (already correct form).
     /// For Service account: replaces scheme+host with Atlassian proxy, preserving path+query.
-    ///   e.g. "https://domain.atlassian.net/wiki/rest/api/search?cursor=abc" →
-    ///        "https://api.atlassian.com/ex/confluence/{cloud_id}/wiki/rest/api/search?cursor=abc"
+    ///   e.g. `https://domain.atlassian.net/wiki/rest/api/search?cursor=abc` →
+    ///        `https://api.atlassian.com/ex/confluence/{cloud_id}/wiki/rest/api/search?cursor=abc`
     ///
     /// Uses proper URL parsing (not substring matching) to avoid false positives
     /// when path-like strings appear in query parameters.

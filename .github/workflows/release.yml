@@ -3,16 +3,32 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUSTUP_MAX_RETRIES: 10
   RUST_TOOLCHAIN: 1.95.0
+  BIN_NAME: atlassian-cli
 
 jobs:
   build:
-    name: Build ${{ matrix.target }}
+    name: Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -20,116 +36,114 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-          - target: aarch64-apple-darwin
-            os: macos-latest
+            os: ubuntu-24.04-arm
           - target: x86_64-apple-darwin
+            os: macos-26-intel
+          - target: aarch64-apple-darwin
             os: macos-latest
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable @ 2026-03-27
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
 
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
         with:
-          key: ${{ matrix.target }}
+          key: release-${{ matrix.target }}
+          save-if: 'false'
 
-      - name: Install cross
-        if: matrix.os == 'ubuntu-latest'
-        uses: taiki-e/install-action@cross
+      - name: Build release binary
+        shell: bash
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
-      - name: Build binary
+      - name: Package artifact
+        id: pkg
         shell: bash
         run: |
-          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            cross build --release --target ${{ matrix.target }}
-          else
-            cargo build --release --target ${{ matrix.target }}
-          fi
-
-      - name: Package binary
-        shell: bash
-        run: |
-          version="${GITHUB_REF#refs/tags/v}"
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"           # e.g. v0.2.0
           target="${{ matrix.target }}"
-
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            binary="target/$target/release/atlassian-cli.exe"
-            archive="atlassian-cli-v${version}-${target}.zip"
-            latest_archive="atlassian-cli-${target}.zip"
-            cp "$binary" atlassian-cli.exe
-            7z a "$archive" atlassian-cli.exe
+          stem="${BIN_NAME}-${tag}-${target}" # e.g. atlassian-cli-v0.2.0-x86_64-unknown-linux-gnu
+          mkdir -p dist staging
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            bin="${BIN_NAME}.exe"
+            cp "target/${target}/release/${bin}" "staging/${bin}"
+            (cd staging && 7z a -bd "../dist/${stem}.zip" "${bin}" >/dev/null)
+            asset="dist/${stem}.zip"
           else
-            binary="target/$target/release/atlassian-cli"
-            archive="atlassian-cli-v${version}-${target}.tar.gz"
-            latest_archive="atlassian-cli-${target}.tar.gz"
-            cp "$binary" atlassian-cli
-            tar -czf "$archive" atlassian-cli
+            bin="${BIN_NAME}"
+            cp "target/${target}/release/${bin}" "staging/${bin}"
+            tar -C staging -czf "dist/${stem}.tar.gz" "${bin}"
+            asset="dist/${stem}.tar.gz"
           fi
+          echo "asset=${asset}" >> "$GITHUB_OUTPUT"
+          echo "stem=${stem}"   >> "$GITHUB_OUTPUT"
 
-          cp "$archive" "$latest_archive"
-
-      - name: Generate checksum
+      - name: SHA-256 checksum
         shell: bash
         run: |
-          for asset in atlassian-cli-v*-${{ matrix.target }}.* atlassian-cli-${{ matrix.target }}.*; do
-            case "$asset" in
-              *.sha256) continue ;;
-            esac
+          set -euo pipefail
+          asset="${{ steps.pkg.outputs.asset }}"
+          if command -v sha256sum >/dev/null; then
+            sha256sum "$asset" > "${asset}.sha256"
+          else
+            shasum -a 256 "$asset" > "${asset}.sha256"
+          fi
 
-            if command -v sha256sum >/dev/null; then
-              sha256sum "$asset" > "$asset.sha256"
-            elif command -v shasum >/dev/null; then
-              shasum -a 256 "$asset" > "$asset.sha256"
-            else
-              echo "No checksum tool found" >&2
-              exit 1
-            fi
-          done
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: ${{ steps.pkg.outputs.asset }}
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ${{ matrix.target }}
-          path: |
-            atlassian-cli-v*-${{ matrix.target }}.*
-            atlassian-cli-${{ matrix.target }}.*
+          name: dist-${{ matrix.target }}
+          path: dist/*
+          retention-days: 1
+          if-no-files-found: error
 
-  release:
-    name: Create Release
+  publish:
+    name: Publish GitHub Release
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
 
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: artifacts
+          pattern: dist-*
+          merge-multiple: true
 
-      - name: Prepare release assets
-        run: |
-          mkdir release
-          find artifacts -type f -exec cp {} release/ \;
-          ls -lh release/
-
-      - name: Create release
-        uses: softprops/action-gh-release@v2
+      - name: Generate source SBOM
+        uses: anchore/sbom-action@d8a2c0130026bf585de5c176ab8f7ce62d75bf04 # v0.20.7
         with:
-          files: release/*
+          path: ./
+          format: spdx-json
+          artifact-name: ${{ env.BIN_NAME }}-${{ github.ref_name }}.spdx.json
+          output-file: artifacts/${{ env.BIN_NAME }}-${{ github.ref_name }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Inventory
+        run: ls -lh artifacts/
+
+      - name: Publish release
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        with:
+          files: artifacts/*
           generate_release_notes: true
+          fail_on_unmatched_files: true
           draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          prerelease: ${{ contains(github.ref_name, '-') }}

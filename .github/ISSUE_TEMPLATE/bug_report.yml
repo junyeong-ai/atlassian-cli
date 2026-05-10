@@ -1,0 +1,90 @@
+name: Bug Report
+description: Report a defect, regression, or unexpected behaviour.
+title: "bug: "
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a report. Please complete every section so we can
+        reproduce the problem quickly. **Redact any tokens** before pasting
+        logs or commands.
+
+  - type: input
+    id: version
+    attributes:
+      label: atlassian-cli version
+      description: "Output of `atlassian-cli --version`."
+      placeholder: "0.2.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: auth-method
+    attributes:
+      label: Auth method
+      description: Pick "n/a" if the bug is unrelated to authentication.
+      options:
+        - basic
+        - service_account
+        - n/a
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux (x86_64)
+        - Linux (aarch64)
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Command that triggered the bug
+      render: shell
+      placeholder: |
+        atlassian-cli jira search --jql 'project = ABC'
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: |
+        Include `-vv` (debug) output if relevant. **Strip tokens, emails,
+        domain names, and any project-internal identifiers** first.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant config (with secrets redacted)
+      description: Paste the relevant `[default.auth]` shape — never the token itself.
+      render: toml
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I have searched existing issues for duplicates.
+          required: true
+        - label: I have redacted tokens, emails, and internal identifiers from logs.
+          required: true

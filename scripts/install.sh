@@ -125,34 +125,25 @@ get_latest_version() {
 download_binary() {
     local version="$1"
     local target="$2"
-    local archive
-    local url
-    local checksum_url
+    local archive="${BINARY_NAME}-v${version}-${target}.tar.gz"
+    local url="https://github.com/$REPO/releases/download/v${version}/${archive}"
+    local checksum_url="${url}.sha256"
     local binary_path
-
-    if [ -n "$version" ]; then
-        archive="${BINARY_NAME}-v${version}-${target}.tar.gz"
-        url="https://github.com/$REPO/releases/download/v${version}/${archive}"
-    else
-        archive="${BINARY_NAME}-${target}.tar.gz"
-        url="https://github.com/$REPO/releases/latest/download/${archive}"
-    fi
-    checksum_url="${url}.sha256"
 
     [ -n "$BINARY_TMP_DIR" ] && rm -rf "$BINARY_TMP_DIR"
     BINARY_TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/atlassian-cli-install.XXXXXX")
 
     echo "Downloading $archive..." >&2
     if ! (cd "$BINARY_TMP_DIR" && curl -fsSLO "$url"); then
-        echo "Download failed" >&2
+        echo "Download failed: $url" >&2
         rm -rf "$BINARY_TMP_DIR"
         BINARY_TMP_DIR=""
-        return 2
+        return 1
     fi
 
     echo "Verifying checksum..." >&2
     if ! (cd "$BINARY_TMP_DIR" && curl -fsSLO "$checksum_url"); then
-        echo "Checksum download failed" >&2
+        echo "Checksum download failed: $checksum_url" >&2
         rm -rf "$BINARY_TMP_DIR"
         BINARY_TMP_DIR=""
         return 1
@@ -163,7 +154,7 @@ download_binary() {
     elif command -v shasum >/dev/null; then
         (cd "$BINARY_TMP_DIR" && shasum -a 256 -c "${archive}.sha256") >&2 || return 1
     else
-        echo "No checksum tool found" >&2
+        echo "No checksum tool found (need sha256sum or shasum)" >&2
         return 1
     fi
 
@@ -177,36 +168,6 @@ download_binary() {
     fi
 
     echo "$binary_path"
-}
-
-resolve_prebuilt_binary() {
-    local version="$1"
-    local target="$2"
-    local allow_latest_fallback="$3"
-    local binary_path
-    local status
-
-    if [ -n "$version" ]; then
-        set +e
-        binary_path=$(download_binary "$version" "$target")
-        status=$?
-        set -e
-
-        if [ "$status" -eq 0 ]; then
-            echo "$binary_path"
-            return 0
-        fi
-
-        if [ "$status" -eq 2 ] && [ "$allow_latest_fallback" = true ]; then
-            echo "Versioned asset unavailable; trying latest asset name" >&2
-            download_binary "" "$target"
-            return $?
-        fi
-
-        return "$status"
-    fi
-
-    download_binary "" "$target"
 }
 
 cargo_build_release() {
@@ -428,7 +389,6 @@ main() {
     local target
     local version="$VERSION"
     local explicit_version=false
-    local allow_latest_fallback=true
     local ref
     local method
     local display_install_dir
@@ -441,7 +401,6 @@ main() {
         version=""
     elif [ -n "$version" ]; then
         explicit_version=true
-        allow_latest_fallback=false
     fi
 
     if ! command -v curl >/dev/null; then
@@ -489,7 +448,13 @@ main() {
 
     case "$method" in
         2) binary_path=$(build_from_source) ;;
-        1|"") binary_path=$(resolve_prebuilt_binary "$version" "$target" "$allow_latest_fallback") ;;
+        1|"")
+            if [ -z "$version" ]; then
+                echo "Could not resolve a release version. Set ATLASSIAN_CLI_VERSION=x.y.z to install a specific release." >&2
+                exit 1
+            fi
+            binary_path=$(download_binary "$version" "$target")
+            ;;
         *) echo "Invalid choice" >&2; exit 1 ;;
     esac
 
