@@ -20,7 +20,7 @@ name = "atlassian-cli"
 path = "src/main.rs"
 
 [dependencies]
-tokio = { version = "1.52", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1.52", features = ["macros", "rt-multi-thread", "sync", "time", "net", "io-util"] }
 reqwest = { version = "0.13", features = ["form", "json", "query", "rustls"], default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -33,6 +33,17 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 base64 = "0.22"
 htmd = "0.5"
 regex = "1.12"
+
+# OAuth 3LO stack
+oauth2 = { version = "5.0", default-features = false, features = ["reqwest", "rustls-tls"] }
+webbrowser = "1.2"
+secrecy = { version = "0.10", features = ["serde"] }
+tempfile = "3.27"
+keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service"] }
+async-trait = "0.1"
+
+[dev-dependencies]
+wiremock = "0.6"
 
 [profile.release]
 opt-level = 3
