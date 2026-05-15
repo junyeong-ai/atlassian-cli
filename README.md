@@ -107,9 +107,47 @@ cp target/release/atlassian-cli ~/.local/bin/
 
 ## 인증
 
-두 가지 방식을 **명시적**으로 선택해야 합니다. 자동 판별 없음.
+세 가지 방식을 **명시적**으로 선택해야 합니다 (자동 판별 없음):
 
-### OAuth 2.0 service account (서비스 계정 — API token이 차단된 환경에 권장)
+| 방식 | 행위자 | 특징 |
+|---|---|---|
+| `basic` | 본인 (API token 발급자) | 가장 단순. 모든 행위가 본인 이름으로 기록 |
+| `service_account` | 비인간 service account | 자동화·CI 용. 별도 principal |
+| `oauth` | 본인 (대화형 로그인) | 사용자 권한 그대로 + refresh token 자동 관리 |
+
+### OAuth 2.0 (3LO — 본인 계정으로 로그인) ⭐ 권장
+
+브라우저로 한 번 로그인하면 access/refresh 토큰이 OS keychain (또는 0600 파일) 에 저장되고 만료 5분 전에 자동 refresh 됩니다.
+
+```toml
+# ~/.config/atlassian-cli/config.toml
+[default]
+
+[default.auth]
+method = "oauth"
+client_id = "..."          # developer.atlassian.com 에서 발급
+client_secret = "..."      # 권장: ATLASSIAN_CLIENT_SECRET env var
+redirect_port = 8976       # OAuth app 에 등록한 redirect URI 와 일치 (127.0.0.1:8976/callback)
+scopes = ["read:jira-user", "read:jira-work", "write:jira-work",
+          "read:confluence-content.all", "read:confluence-space.summary",
+          "write:confluence-content", "offline_access"]
+# cloud_id = "..."   # 여러 site 접근 가능할 때 1개로 고정
+```
+
+```bash
+atlassian-cli auth login         # 브라우저 열림 → Atlassian 로그인 → 자동 토큰 저장
+atlassian-cli auth status        # 만료 시간, scope, 저장 위치 확인
+atlassian-cli auth refresh       # 수동 갱신 (디버깅용)
+atlassian-cli auth logout        # 토큰 폐기
+```
+
+준비물 — Atlassian developer console (<https://developer.atlassian.com/console/myapps/>) 에서:
+1. OAuth 2.0 (3LO) app 생성
+2. Callback URL 에 `http://127.0.0.1:8976/callback` 등록 (port 는 위 config 와 일치)
+3. Permissions 에서 위 scope 목록 부여
+4. Settings 에서 client_id / client_secret 복사
+
+### Service account (자동화·CI 용)
 
 ```bash
 export ATLASSIAN_AUTH_METHOD=service_account
@@ -120,9 +158,6 @@ export ATLASSIAN_CLIENT_SECRET="..."
 
 또는 `~/.config/atlassian-cli/config.toml` (chmod 600 권장):
 ```toml
-[default]
-# domain은 service account에선 선택 사항 (cloud_id로 라우팅)
-
 [default.auth]
 method = "service_account"
 client_id = "..."
