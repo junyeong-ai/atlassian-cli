@@ -121,7 +121,7 @@ Installs the latest prebuilt binary and can install the `jira-confluence` Claude
 
 ```bash
 # Install a specific release
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.2.0 bash
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.3.0 bash
 
 # Uninstall (non-interactive defaults keep skill/config)
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/uninstall.sh | bash
@@ -383,7 +383,7 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 
 **🌐 [한국어](README.md)** | **English**
 
-**Version 0.2.0** • Rust 2024 Edition
+**Version 0.3.0** • Rust 2024 Edition
 
 Made with ❤️ for productivity
 

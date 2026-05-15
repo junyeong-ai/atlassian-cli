@@ -86,7 +86,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scri
 
 ```bash
 # 특정 릴리스 설치
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.2.0 bash
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.3.0 bash
 
 # 제거 (비대화형 기본값은 바이너리만 제거하고 skill/config는 보존)
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/uninstall.sh | bash

@@ -61,7 +61,9 @@ This mix is deliberate — do not "modernize" the Confluence search path.
 
 ## Auto-injected filters
 
-When `config.jira.projects_filter` is non-empty, bare JQL is wrapped: `status = Open` → `project IN ("P1","P2") AND (status = Open)`. Injection is skipped when the JQL already contains a `project` clause — detection uses a word-boundary regex (not substring) so `projectId = 10` does not count. Confluence's `space` filter follows the same shape.
+When `config.jira.projects_filter` is non-empty, bare JQL is wrapped: `status = Open` → `project IN ("P1","P2") AND (status = Open)`. Injection is skipped when the JQL already contains a `project` clause — Jira detection uses a word-boundary regex (`PROJECT_CLAUSE_RE`) so `projectId = 10` does not count.
+
+`config.confluence.spaces_filter` wraps the same way (`space IN (...) AND (...)`), but skip detection is a lowercased substring check for `space `, `space=`, or `space in` — accept the looser detection since CQL has fewer identifier collisions than JQL.
 
 ## Adding a new command
 
