@@ -17,4 +17,8 @@ When adding a new write endpoint that takes user text, route through these helpe
 
 ## Response envelope
 
-`search`/`search_all` return `{"items": [...], "count": N}` (and `"total"` from `search_all`). `get_*` return the raw Jira object under filtering. Keep this shape stable — downstream tooling (skill, scripts) depends on it.
+- `search` returns `{"items": [...], "count": N}` — `count` is the size of this page.
+- `search_all` returns `{"items": [...], "total": N}` — `total` is the cumulative size (`/search/jql` doesn't expose a server-side total).
+- `get_*` (issue / comments / transitions) return the raw Jira object after `filter::apply`.
+
+Keep these shapes stable — downstream tooling (skill, scripts) depends on them.
