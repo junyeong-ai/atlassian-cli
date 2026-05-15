@@ -1,138 +1,119 @@
 ---
 name: jira-confluence
-version: 0.1.2
-description: Execute Jira/Confluence queries via atlassian-cli. Search issues with JQL, manage pages with CQL, create/update tickets, handle comments and transitions, work with ADF format. Use when working with Jira tickets, Confluence pages, sprint planning, issue tracking, or Atlassian workspace queries.
+version: 0.3.0
+description: Run Jira/Confluence operations through atlassian-cli — JQL/CQL search, issue CRUD, comments, transitions, page CRUD, ADF/HTML body editing. Also handles OAuth sign-in flows (`auth login/status/refresh`) when the user reports an auth problem or asks to switch accounts. Trigger on Jira tickets, Confluence pages, sprint planning, "내 이슈", "위키 검색", or any Atlassian workspace request.
 allowed-tools: Bash
 ---
 
 # atlassian-cli
 
-Atlassian Cloud CLI for Jira and Confluence. Use `--format markdown` for human-readable content; JSON remains the canonical machine-readable output.
-
-Global options must come before the service subcommand:
+Always pass **global flags before the subcommand**:
 
 ```bash
-atlassian-cli --profile work --pretty jira get PROJ-123
-atlassian-cli --config ./.atlassian.toml confluence search "space = TEAM"
-atlassian-cli -vv jira search "project = PROJ"
+atlassian-cli --profile work jira get PROJ-123 --format markdown
+atlassian-cli --pretty confluence search "space = TEAM" --limit 5
 ```
+
+`--format markdown` is the default for human-readable output (ADF→Markdown for Jira, HTML→Markdown for Confluence). JSON is the canonical machine output — pick markdown when you'll summarise, JSON when piping.
 
 ## Jira
 
-**Reading**: `--format markdown` converts ADF to Markdown (recommended)
-**Writing**: Plain text auto-converts to ADF. For rich text, use ADF JSON.
-
-### Commands
 ```bash
-# Get issue
+# Read
 atlassian-cli jira get PROJ-123 --format markdown
-
-# Search (JQL)
-atlassian-cli jira search "assignee = currentUser()" --format markdown --limit 20
+atlassian-cli jira search "assignee = currentUser() AND status != Done" --format markdown --limit 20
 atlassian-cli jira search "project = PROJ" --fields key,summary,status --limit 50
+atlassian-cli jira comments PROJ-123 --format markdown
+atlassian-cli jira transitions PROJ-123          # discover IDs before transition
 
-# Pagination (large datasets)
+# Large reads — token pagination
 atlassian-cli jira search "project = PROJ" --all --format markdown
 atlassian-cli jira search "project = PROJ" --all --stream > issues.jsonl
 
-# Create/Update
+# Write — plain text auto-converts to ADF
 atlassian-cli jira create PROJ "Summary" Bug --description "Plain text"
 atlassian-cli jira update PROJ-123 '{"summary": "New title", "description": "Plain text"}'
-
-# Comments & Transitions
 atlassian-cli jira comment add PROJ-123 "Comment text"
 atlassian-cli jira comment update PROJ-123 10042 "Edited comment"
-atlassian-cli jira comments PROJ-123 --format markdown
-atlassian-cli jira transitions PROJ-123
 atlassian-cli jira transition PROJ-123 31
 ```
 
-### ADF Format (for rich text)
+### ADF (rich text — only when plain text isn't enough)
 
 Root: `{"version": 1, "type": "doc", "content": [...]}`
 
-| Node | Example |
-|------|---------|
-| paragraph | `{"type": "paragraph", "content": [{"type": "text", "text": "..."}]}` |
-| heading | `{"type": "heading", "attrs": {"level": 2}, "content": [...]}` |
-| bulletList | `{"type": "bulletList", "content": [{"type": "listItem", "content": [...]}]}` |
-| codeBlock | `{"type": "codeBlock", "attrs": {"language": "python"}, "content": [...]}` |
+| Node | Shape |
+|---|---|
+| paragraph | `{"type":"paragraph","content":[{"type":"text","text":"..."}]}` |
+| heading | `{"type":"heading","attrs":{"level":2},"content":[...]}` |
+| bulletList | `{"type":"bulletList","content":[{"type":"listItem","content":[<paragraph>]}]}` |
+| codeBlock | `{"type":"codeBlock","attrs":{"language":"python"},"content":[<text>]}` |
 
-Marks: `{"type": "text", "text": "bold", "marks": [{"type": "strong"}]}`
-- `strong`, `em`, `code`, `strike`, `link` (with `attrs.href`)
+Marks on text: `{"type":"text","text":"bold","marks":[{"type":"strong"}]}` — supports `strong`, `em`, `code`, `strike`, and `link` (`attrs.href`).
 
-List hierarchy: `bulletList` → `listItem` → `paragraph` → `text`
+List nesting is strict: `bulletList → listItem → paragraph → text`.
 
 ## Confluence
 
-**Reading**: `--format markdown` converts HTML to Markdown (recommended)
-**Writing**: HTML storage format required (e.g., `<p>text</p>`)
-
-### Commands
 ```bash
-# Get page
+# Read
 atlassian-cli confluence get 12345 --format markdown
-
-# Search (CQL) - metadata only (fast)
 atlassian-cli confluence search "space = TEAM" --limit 20
-
-# Search with content (body included by default)
 atlassian-cli confluence search "title ~ 'API'" --format markdown --limit 10
+atlassian-cli confluence comments 12345 --format markdown
+atlassian-cli confluence children 12345          # children is JSON only (no --format)
 
-# Pagination
+# Large reads — cursor pagination
 atlassian-cli confluence search "space = TEAM" --all --format markdown
 atlassian-cli confluence search "space = TEAM" --all --stream > pages.jsonl
 
-# Create/Update (HTML format)
+# Write — HTML storage format required
 atlassian-cli confluence create SPACE "Title" "<p>Content</p>"
 atlassian-cli confluence update 12345 "Title" "<p>Updated</p>"
-
-# Children & Comments
-atlassian-cli confluence children 12345
-atlassian-cli confluence comments 12345 --format markdown
 ```
 
-### Options
-| Option | Description | Applies To |
-|--------|-------------|------------|
-| `--format markdown` | Convert to Markdown | search, get, comments |
-| `--limit N` | Max results (default: 10, max: 50 with body) | search |
-| `--all` | Fetch all pages via cursor pagination | search |
-| `--stream` | Output JSONL (requires --all) | search |
-| `--expand <fields>` | Additional fields: `ancestors`, `space` (body.storage included by default) | search |
+CQL: searching by user requires account IDs or public names — username fields are restricted in Atlassian Cloud.
 
-Note: `children` does not support `--format` (v2 API limitation).
+## Pagination & output cheatsheet
 
-## Common Options (Both Jira & Confluence)
+| Need | Flag |
+|---|---|
+| One page | (default `--limit N`) |
+| Every result | `--all` |
+| Stream to disk / pipe | `--all --stream` (outputs JSONL) |
+| Pick fields (Jira) | `--fields key,summary,status` |
+| Expand fields (Confluence) | `--expand ancestors,space` |
 
-| Option | Jira | Confluence |
-|--------|------|------------|
-| `--all` | Token pagination | Cursor pagination |
-| `--stream` | JSONL output (requires --all) | JSONL output (requires --all) |
-| `--format markdown` | ADF → Markdown | HTML → Markdown |
-| `--limit N` | Results per page (default: 100) | Results per page (default: 10) |
+`--stream` writes JSONL to stdout and progress to stderr — never mix it with `--pretty`.
 
 ## Authentication
 
-Assume credentials are already configured. Do not print, request, or infer secrets.
+Credentials are pre-configured. **Do not print, request, infer, or modify secrets.**
 
-Before destructive writes or large `--all` reads, validate the active profile:
+The active profile dictates what identity the call runs as:
+
+| profile method | who calls Atlassian |
+|---|---|
+| `oauth` | the signed-in human (token in OS keychain, auto-refreshed) |
+| `basic` | the API-token owner |
+| `service_account` | a non-human service principal |
+
+Run `atlassian-cli config validate` first when a request will write or fetch many pages — it prints the resolved identity and fails fast on bad credentials.
+
+When the user reports auth trouble or asks to switch accounts:
 
 ```bash
-atlassian-cli config validate
+atlassian-cli auth status                # expiry, scopes, storage backend
+atlassian-cli auth login                 # OAuth 3LO; opens browser
+atlassian-cli auth login --no-browser    # SSH session — prints the URL
+atlassian-cli auth refresh               # force token refresh (debugging)
+atlassian-cli auth logout                # clears OAuth tokens; no-op on non-oauth profiles
 ```
 
-If auth fails, tell the user to check `atlassian-cli config validate` output. Only use `--profile` or `--config` when the user specifies which Atlassian workspace/profile to target.
+Switch profiles with `--profile <name>`; never invent profile names — list them via `atlassian-cli config list`.
 
-## Query Behavior
+## Behaviour worth knowing
 
-- Jira/Confluence project or space filters may be preconfigured and auto-injected.
-- If a user explicitly names a project or space in the query, the CLI does not add a duplicate filter.
-- Use `--fields` for Jira searches when the user only needs a few fields; use `--all --stream` for large machine-readable exports.
-
-## API Version Notes
-
-- Jira issue search uses `POST /rest/api/3/search/jql`.
-- Confluence page, space, and comment APIs use `/wiki/api/v2/*`.
-- Confluence CQL search intentionally uses `/wiki/rest/api/search`; v2 does not provide a CQL-equivalent search endpoint.
-- Confluence CQL user-specific fields are restricted by Atlassian Cloud. Prefer account IDs/public names where applicable.
+- A `projects_filter` or `spaces_filter` on the active profile is auto-injected into bare JQL/CQL. If the user already names a project/space in their query, no second filter is added — write the query the user said.
+- `jira search` uses `POST /rest/api/3/search/jql` under the hood — token-paginated, not offset.
+- `--format markdown` on reads keeps the JSON envelope and converts the content fields in place; it isn't pure markdown output.
