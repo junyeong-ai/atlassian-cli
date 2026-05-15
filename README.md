@@ -3,11 +3,11 @@
 [![CI](https://github.com/junyeong-ai/atlassian-cli/workflows/CI/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions)
 [![Lint](https://github.com/junyeong-ai/atlassian-cli/workflows/Lint/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions)
 [![Rust](https://img.shields.io/badge/rust-1.95.0%2B%20(2024%20edition)-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.2.0-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
 
 > **🌐 한국어** | **[English](README.en.md)**
 
-Atlassian Cloud CLI — Jira + Confluence. 단일 Rust 바이너리, OAuth 2.0 service account와 Basic (API token) 둘 다 지원.
+Atlassian Cloud CLI — Jira + Confluence. 단일 Rust 바이너리. OAuth 2.0 (3LO, ⭐ 권장), Service Account, Basic (API token) 세 가지 인증 방식 지원.
 
 ---
 
@@ -20,13 +20,16 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scri
 # 2. 설정 초기화
 atlassian-cli config init --global
 
-# 3. 설정 편집 (아래 "설정" 섹션 참고)
+# 3. 설정 편집 — 아래 "인증" 섹션에서 oauth / service_account / basic 중 선택
 atlassian-cli config edit --global
 
-# 4. 검증
+# 4. (oauth 인 경우만) 브라우저로 로그인
+atlassian-cli auth login
+
+# 5. 검증
 atlassian-cli config validate
 
-# 5. 사용
+# 6. 사용
 atlassian-cli jira search "project = PROJ" --limit 5
 ```
 
@@ -128,9 +131,11 @@ method = "oauth"
 client_id = "..."          # developer.atlassian.com 에서 발급
 client_secret = "..."      # 권장: ATLASSIAN_CLIENT_SECRET env var
 redirect_port = 8976       # OAuth app 에 등록한 redirect URI 와 일치 (127.0.0.1:8976/callback)
-scopes = ["read:jira-user", "read:jira-work", "write:jira-work",
-          "read:confluence-content.all", "read:confluence-space.summary",
-          "write:confluence-content", "offline_access"]
+# scopes 미지정 시 기본값 = ["read:jira-user", "read:jira-work", "write:jira-work", "offline_access"]
+# Confluence 도 함께 쓰려면 OAuth app 에 해당 scope 를 부여한 뒤 명시:
+#   scopes = ["read:jira-user", "read:jira-work", "write:jira-work",
+#             "read:confluence-content.all", "read:confluence-space.summary",
+#             "write:confluence-content", "offline_access"]
 # cloud_id = "..."   # 여러 site 접근 가능할 때 1개로 고정
 ```
 
@@ -144,7 +149,7 @@ atlassian-cli auth logout        # 토큰 폐기
 준비물 — Atlassian developer console (<https://developer.atlassian.com/console/myapps/>) 에서:
 1. OAuth 2.0 (3LO) app 생성
 2. Callback URL 에 `http://127.0.0.1:8976/callback` 등록 (port 는 위 config 와 일치)
-3. Permissions 에서 위 scope 목록 부여
+3. Permissions 에서 사용할 scope 부여 (Jira API + 필요 시 Confluence API). 부여하지 않은 scope 를 config 에 적으면 사용자 동의 단계에서 거부됨.
 4. Settings 에서 client_id / client_secret 복사
 
 ### Service account (자동화·CI 용)

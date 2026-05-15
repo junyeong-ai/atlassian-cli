@@ -3,7 +3,7 @@
 [![CI](https://github.com/junyeong-ai/atlassian-cli/workflows/CI/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions)
 [![Lint](https://github.com/junyeong-ai/atlassian-cli/workflows/Lint/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions)
 [![Rust](https://img.shields.io/badge/rust-1.95.0%2B%20(2024%20edition)-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.2.0-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
 [![DeepWiki](https://img.shields.io/badge/DeepWiki-junyeong--ai%2Fatlassian--cli-blue.svg?logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACwAAAAyCAYAAAAnWDnqAAAAAXNSR0IArs4c6QAAA05JREFUaEPtmUtyEzEQhtWTQyQLHNak2AB7ZnyXZMEjXMGeK/AIi+QuHrMnbChYY7MIh8g01fJoopFb0uhhEqqcbWTp06/uv1saEDv4O3n3dV60RfP947Mm9/SQc0ICFQgzfc4CYZoTPAswgSJCCUJUnAAoRHOAUOcATwbmVLWdGoH//PB8mnKqScAhsD0kYP3j/Yt5LPQe2KvcXmGvRHcDnpxfL2zOYJ1mFwrryWTz0advv1Ut4CJgf5uhDuDj5eUcAUoahrdY/56ebRWeraTjMt/00Sh3UDtjgHtQNHwcRGOC98BJEAEymycmYcWwOprTgcB6VZ5JK5TAJ+fXGLBm3FDAmn6oPPjR4rKCAoJCal2eAiQp2x0vxTPB3ALO2CRkwmDy5WohzBDwSEFKRwPbknEggCPB/imwrycgxX2NzoMCHhPkDwqYMr9tRcP5qNrMZHkVnOjRMWwLCcr8ohBVb1OMjxLwGCvjTikrsBOiA6fNyCrm8V1rP93iVPpwaE+gO0SsWmPiXB+jikdf6SizrT5qKasx5j8ABbHpFTx+vFXp9EnYQmLx02h1QTTrl6eDqxLnGjporxl3NL3agEvXdT0WmEost648sQOYAeJS9Q7bfUVoMGnjo4AZdUMQku50McDcMWcBPvr0SzbTAFDfvJqwLzgxwATnCgnp4wDl6Aa+Ax283gghmj+vj7feE2KBBRMW3FzOpLOADl0Isb5587h/U4gGvkt5v60Z1VLG8BhYjbzRwyQZemwAd6cCR5/XFWLYZRIMpX39AR0tjaGGiGzLVyhse5C9RKC6ai42ppWPKiBagOvaYk8lO7DajerabOZP46Lby5wKjw1HCRx7p9sVMOWGzb/vA1hwiWc6jm3MvQDTogQkiqIhJV0nBQBTU+3okKCFDy9WwferkHjtxib7t3xIUQtHxnIwtx4mpg26/HfwVNVDb4oI9RHmx5WGelRVlrtiw43zboCLaxv46AZeB3IlTkwouebTr1y2NjSpHz68WNFjHvupy3q8TFn3Hos2IAk4Ju5dCo8B3wP7VPr/FGaKiG+T+v+TQqIrOqMTL1VdWV1DdmcbO8KXBz6esmYWYKPwDL5b5FA1a0hwapHiom0r/cKaoqr+27/XcrS5UwSMbQAAAABJRU5ErkJggg==)](https://deepwiki.com/junyeong-ai/atlassian-cli)
 
 > **🌐 [한국어](README.md)** | **English**
@@ -29,18 +29,19 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scri
 # 2. Initialize config
 atlassian-cli config init --global
 
-# 3. Edit config (choose Basic API token or service account credentials)
+# 3. Edit config (pick oauth / service_account / basic — see Authentication)
 atlassian-cli config edit --global
 
-# 4. Validate credentials
+# 4. (oauth only) Sign in once via the browser
+atlassian-cli auth login
+
+# 5. Validate credentials
 atlassian-cli config validate
 
-# 5. Start using
+# 6. Start using
 atlassian-cli jira search "status = Open" --limit 5
 atlassian-cli confluence search "type=page" --limit 10
 ```
-
-**Tip**: Basic auth uses an Atlassian API token. Service account auth uses OAuth 2.0 client credentials.
 
 ---
 
@@ -163,74 +164,84 @@ The installer uses the local skill definition when run inside a checkout. With `
 
 ---
 
-## 🔑 Basic Auth API Token
+## 🔑 Authentication
 
-1. Visit [Atlassian API Tokens](https://id.atlassian.com/manage-profile/security/api-tokens)
-2. Click "Create API token"
-3. Enter label (e.g., "atlassian-cli")
-4. Copy token and add to config
+Pick one explicitly (no auto-detection):
 
-**Security**: Treat token like password. Regenerate immediately if exposed.
+| Method | Principal | Notes |
+|---|---|---|
+| `oauth` ⭐ | the signed-in user | 3LO + PKCE; tokens stored in OS keychain, auto-refreshed |
+| `service_account` | non-human SA | OAuth 2.0 client_credentials; for CI / automation |
+| `basic` | API-token owner | personal token from <https://id.atlassian.com/manage-profile/security/api-tokens> |
 
----
+### OAuth 2.0 (3LO) — recommended
 
-## ⚙️ Configuration
+Sign in once via the browser; tokens persist in the OS keychain (with a 0600
+file fallback) and refresh ~5 minutes before expiry.
 
-### Environment Variables
+```toml
+# ~/.config/atlassian-cli/config.toml
+[default.auth]
+method = "oauth"
+client_id = "..."          # issued at developer.atlassian.com
+client_secret = "..."      # prefer ATLASSIAN_CLIENT_SECRET env var
+redirect_port = 8976       # must match the Callback URL on the OAuth app
+# scopes defaults to ["read:jira-user", "read:jira-work", "write:jira-work", "offline_access"]
+# Add Confluence scopes only after granting them on the OAuth app:
+#   scopes = ["read:jira-user", "read:jira-work", "write:jira-work",
+#             "read:confluence-content.all", "read:confluence-space.summary",
+#             "write:confluence-content", "offline_access"]
+# cloud_id = "..."          # pin one site when the user has access to many
+```
 
 ```bash
+atlassian-cli auth login       # browser → Atlassian → tokens persisted
+atlassian-cli auth status      # expiry, scopes, storage backend
+atlassian-cli auth refresh     # force refresh (debugging)
+atlassian-cli auth logout      # clears stored tokens
+```
+
+Prereqs at <https://developer.atlassian.com/console/myapps/>:
+1. Create an OAuth 2.0 (3LO) app.
+2. Add `http://127.0.0.1:8976/callback` as the Callback URL (port must match `redirect_port`).
+3. Grant the scopes you list in config — unscoped scopes are rejected at consent.
+4. Copy `client_id` / `client_secret` from Settings.
+
+### Service Account / Basic — environment variables
+
+```bash
+# Service account (CI / automation)
+export ATLASSIAN_AUTH_METHOD=service_account
+export ATLASSIAN_CLIENT_ID="..."
+export ATLASSIAN_CLIENT_SECRET="..."
+# ATLASSIAN_CLOUD_ID is optional when the credential accesses exactly one site
+
+# Basic (personal API token)
 export ATLASSIAN_AUTH_METHOD=basic
 export ATLASSIAN_DOMAIN="company.atlassian.net"
 export ATLASSIAN_EMAIL="user@example.com"
-export ATLASSIAN_API_TOKEN="your-token"
+export ATLASSIAN_API_TOKEN="..."
+```
 
-# Or use an OAuth 2.0 service account
-export ATLASSIAN_AUTH_METHOD=service_account
-export ATLASSIAN_CLIENT_ID="your-client-id"
-export ATLASSIAN_CLIENT_SECRET="your-client-secret"
-# ATLASSIAN_CLOUD_ID is optional when the credential can access exactly one site
+Blank env vars are treated as **absent** — `export VAR=""` no longer shadows
+the config-file value.
 
-# Field optimization
+### Config file
+
+**Locations** (highest priority first within each scope):
+- Custom path: `--config <file>`
+- Project: `./.atlassian.toml` or `./.atlassian/config.toml` (walked upward from cwd)
+- Global: `~/.config/atlassian-cli/config.toml`
+
+Generate a starter with `atlassian-cli config init --global`. The template
+ships all three auth methods as commented examples.
+
+### Field optimization (optional env)
+
+```bash
 export JIRA_SEARCH_DEFAULT_FIELDS="key,summary,status"
 export JIRA_SEARCH_CUSTOM_FIELDS="customfield_10015"
 export RESPONSE_EXCLUDE_FIELDS="self,avatarUrls,iconUrl"
-```
-
-### Config File
-
-**Location**:
-- Global: `~/.config/atlassian-cli/config.toml`
-- Project: `./.atlassian.toml` or `./.atlassian/config.toml`
-
-**Default config** (generated by `atlassian-cli config init`):
-```toml
-[default]
-domain = "company.atlassian.net"
-
-[default.auth]
-method = "basic"
-email = "user@example.com"
-token = "your-api-token"
-
-# Or:
-# [default.auth]
-# method = "service_account"
-# client_id = "your-client-id"
-# client_secret = "your-client-secret"
-# cloud_id = "optional-cloud-id"
-
-[default.jira]
-projects_filter = ["PROJ1", "PROJ2"]
-
-[default.confluence]
-spaces_filter = ["TEAM", "DOCS"]
-
-[default.performance]
-request_timeout_ms = 30000
-rate_limit_delay_ms = 200
-
-[default.optimization]
-response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 ```
 
 ### Config Priority

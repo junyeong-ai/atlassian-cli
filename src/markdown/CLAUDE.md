@@ -3,7 +3,7 @@
 ## Two converters, different pipelines
 
 - `adf::adf_to_markdown` — walks Atlassian Document Format JSON (Jira). Handles `paragraph`, `heading`, `bulletList`, `orderedList`, `codeBlock`, `panel`, `table`, `mention`, `inlineCard`, marks, etc. Unknown node types are skipped, not errored, so schema additions upstream don't break reads.
-- `confluence::convert_to_markdown` — runs `htmd` on HTML storage format. Confluence HTML includes `ac:*` / `ri:*` namespaced tags and macro blocks; `confluence::cleanup` strips residue (schema-version, mxgraph base64, etc.) before conversion.
+- `confluence::confluence_to_markdown` — runs `htmd` on HTML storage format. Confluence HTML includes `ac:*` / `ri:*` namespaced tags and macro blocks; `confluence::cleanup` strips residue (schema-version, mxgraph base64, etc.) before conversion.
 
 ## Do not add formatting features here unless they are in the Atlassian schema
 
