@@ -64,6 +64,28 @@ enum Command {
     Jira(JiraCommand),
     Confluence(ConfluenceCommand),
     Config(ConfigCommand),
+    Auth(AuthCommand),
+}
+
+#[derive(Parser)]
+struct AuthCommand {
+    #[command(subcommand)]
+    subcommand: AuthSubcommand,
+}
+
+#[derive(Subcommand)]
+enum AuthSubcommand {
+    /// Start the OAuth 3LO flow and persist tokens for the active profile.
+    Login {
+        #[arg(long, help = "Print the authorize URL instead of opening a browser")]
+        no_browser: bool,
+    },
+    /// Discard stored OAuth tokens for the active profile.
+    Logout,
+    /// Show the active profile's stored token status (identity, expiry, scopes).
+    Status,
+    /// Force-refresh the access_token using the stored refresh_token.
+    Refresh,
 }
 
 #[derive(Parser)]
@@ -252,6 +274,7 @@ async fn main() -> Result<()> {
         Command::Config(cmd) => {
             handle_config(cmd, config_path.as_ref(), profile.as_ref(), overrides).await
         }
+        Command::Auth(cmd) => handle_auth(cmd, config_path, profile, overrides).await,
         Command::Jira(cmd) => {
             let config =
                 atlassian_cli::Config::load(config_path.as_ref(), profile.as_ref(), overrides)?;
@@ -385,54 +408,36 @@ async fn handle_config(
         ConfigSubcommand::Validate => {
             let config = atlassian_cli::Config::load(config_path, profile, overrides)?;
 
-            // ApiClient::new() performs:
-            //   - Basic: credential encoding (offline)
-            //   - Service account: token fetch + cloud_id discovery (online)
-            // Any failure here means credentials are invalid.
+            // ApiClient::new() performs each strategy's credential check
+            // (token fetch, cloud_id discovery, stored-token load). Any
+            // failure here means credentials are invalid.
             let client = atlassian_cli::ApiClient::new(config).await?;
+            let method = client.strategy().method();
+            let identity = client.strategy().probe_identity(&client).await?;
 
-            if client.is_service_account() {
-                // service account credentials already verified via token fetch and
-                // accessible-resources call. Additional /myself may fail due
-                // to scope mismatch (e.g. read:jira-work but not read:jira-user),
-                // which doesn't indicate a credential problem.
-                println!("✓ service account credentials and cloud access valid");
-                if let Some(cid) = client.cloud_id() {
-                    println!("  Cloud ID: {}", cid);
-                }
-                println!(
-                    "  Note: individual Jira/Confluence operations still require matching OAuth scopes and product permissions."
-                );
-            } else {
-                // Basic auth: call /myself to show user info and verify token.
-                let response = client
-                    .get(atlassian_cli::Service::Jira, "/rest/api/3/myself")
-                    .await?
-                    .header("Accept", "application/json")
-                    .send()
-                    .await?;
-
-                if !response.status().is_success() {
-                    let status = response.status();
-                    let body = response.text().await.unwrap_or_default();
-                    anyhow::bail!("Authentication failed ({}): {}", status, body);
-                }
-
-                let data: serde_json::Value = response.json().await?;
-                println!("✓ Basic auth credentials valid");
-                if let Some(domain) = client.config().domain.as_ref() {
-                    println!("  Domain: {}", domain);
-                }
-                println!(
-                    "  User: {}",
-                    data["displayName"].as_str().unwrap_or("Unknown")
-                );
-                println!(
-                    "  Email: {}",
-                    data["emailAddress"].as_str().unwrap_or("Unknown")
-                );
+            println!("✓ {} credentials valid", method);
+            if let Some(domain) = client.config().domain.as_ref() {
+                println!("  Domain: {}", domain);
             }
-
+            if let Some(cid) = client.cloud_id() {
+                println!("  Cloud ID: {}", cid);
+            }
+            match identity {
+                Some(id) => {
+                    println!("  User: {}", id.display_name);
+                    if let Some(email) = id.email {
+                        println!("  Email: {}", email);
+                    }
+                }
+                None => {
+                    // Non-probing principal (e.g. service_account) — credentials
+                    // are already verified via the strategy's own check.
+                    println!("  Identity: {}", client.strategy().identity_label());
+                    println!(
+                        "  Note: individual operations still require matching OAuth scopes and product permissions."
+                    );
+                }
+            }
             Ok(())
         }
     }
@@ -581,23 +586,12 @@ fn output_json(value: &serde_json::Value, pretty: bool) {
     }
 }
 
-/// Mask a secret by showing only the first 4 characters.
-/// Handles short secrets safely (returns "***" if length < 4).
-fn mask_secret(secret: &str) -> String {
-    if secret.len() < 4 {
-        "***".to_string()
-    } else {
-        format!("{}***", &secret[..4])
-    }
-}
-
-/// Print the resolved config in valid TOML profile format.
-/// Secrets are masked; empty/unspecified sections are omitted.
-/// The output is copy-pasteable into a config file (after unmasking secrets).
+/// Print the resolved config as TOML for the active profile. Secrets are
+/// masked via each `AuthConfig` variant's `display_lines`. Output is
+/// copy-pasteable after replacing redactions with real secrets.
 fn print_resolved_config(config: &atlassian_cli::Config) {
-    use atlassian_cli::AuthConfig;
-
-    println!("[default]");
+    let profile = &config.profile;
+    println!("[{profile}]");
     match &config.domain {
         Some(d) => println!("domain = {:?}", d),
         None => println!("# domain = (not set)"),
@@ -605,42 +599,19 @@ fn print_resolved_config(config: &atlassian_cli::Config) {
 
     println!();
     match &config.auth {
-        Some(AuthConfig::Basic { email, token }) => {
-            println!("[default.auth]");
-            println!("method = \"basic\"");
-            println!("email = {:?}", email);
-            if token.is_empty() {
-                println!("# token = (not set — provide via ATLASSIAN_API_TOKEN)");
-            } else {
-                println!("token = \"{}\"", mask_secret(token));
-            }
-        }
-        Some(AuthConfig::ServiceAccount {
-            client_id,
-            client_secret,
-            cloud_id,
-        }) => {
-            println!("[default.auth]");
-            println!("method = \"service_account\"");
-            println!("client_id = {:?}", client_id);
-            if client_secret.is_empty() {
-                println!("# client_secret = (not set — provide via ATLASSIAN_CLIENT_SECRET)");
-            } else {
-                println!("client_secret = \"{}\"", mask_secret(client_secret));
-            }
-            if let Some(cid) = cloud_id {
-                println!("cloud_id = {:?}", cid);
-            } else {
-                println!("# cloud_id = (will be auto-discovered)");
+        Some(auth) => {
+            println!("[{profile}.auth]");
+            for line in auth.display_lines() {
+                println!("{}", line);
             }
         }
         None => {
-            println!("# [default.auth] (not configured — set ATLASSIAN_AUTH_METHOD)");
+            println!("# [{profile}.auth] (not configured — set ATLASSIAN_AUTH_METHOD)");
         }
     }
 
     println!();
-    println!("[default.jira]");
+    println!("[{profile}.jira]");
     println!("projects_filter = {:?}", config.jira.projects_filter);
     if let Some(ref fields) = config.jira.search_default_fields {
         println!("search_default_fields = {:?}", fields);
@@ -653,11 +624,11 @@ fn print_resolved_config(config: &atlassian_cli::Config) {
     }
 
     println!();
-    println!("[default.confluence]");
+    println!("[{profile}.confluence]");
     println!("spaces_filter = {:?}", config.confluence.spaces_filter);
 
     println!();
-    println!("[default.performance]");
+    println!("[{profile}.performance]");
     println!(
         "request_timeout_ms = {}",
         config.performance.request_timeout_ms
@@ -669,7 +640,123 @@ fn print_resolved_config(config: &atlassian_cli::Config) {
 
     if let Some(ref excludes) = config.optimization.response_exclude_fields {
         println!();
-        println!("[default.optimization]");
+        println!("[{profile}.optimization]");
         println!("response_exclude_fields = {:?}", excludes);
+    }
+}
+
+async fn handle_auth(
+    cmd: AuthCommand,
+    config_path: Option<PathBuf>,
+    profile: Option<String>,
+    overrides: atlassian_cli::CliOverrides,
+) -> Result<()> {
+    use atlassian_cli::auth::{AuthMethod, OAuthStrategy, TokenStore};
+
+    match cmd.subcommand {
+        AuthSubcommand::Login { no_browser } => {
+            // Validation-light load: the user is about to log in, so OAuth
+            // tokens are absent and domain may be unset.
+            let config = atlassian_cli::Config::load_without_validation(
+                config_path.as_ref(),
+                profile.as_ref(),
+                overrides,
+            )?;
+            let params = config.oauth_params()?;
+            let http = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(60))
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .build()?;
+
+            let outcome = OAuthStrategy::login(params, &config.profile, &http, !no_browser).await?;
+
+            println!("✓ Logged in (profile: {})", config.profile);
+            if let Some(cid) = outcome.tokens.cloud_id.as_deref() {
+                println!("  Cloud ID: {}", cid);
+            }
+            if !outcome.authorized_sites.is_empty() {
+                println!("  Accessible sites:");
+                for site in &outcome.authorized_sites {
+                    let name = site.name.as_deref().unwrap_or("");
+                    println!("    - {} ({}) {}", site.url, site.id, name);
+                }
+            }
+            println!("  Scopes: {}", outcome.tokens.scopes.join(", "));
+            Ok(())
+        }
+        AuthSubcommand::Logout => {
+            // Only proceed if the profile is OAuth — basic / service_account
+            // have no stored session, and silently succeeding would mislead.
+            let config = atlassian_cli::Config::load_without_validation(
+                config_path.as_ref(),
+                profile.as_ref(),
+                overrides,
+            )?;
+            match config.auth.as_ref().map(|a| a.method()) {
+                Some(AuthMethod::OAuth) => {
+                    TokenStore::new(&config.profile)?.delete()?;
+                    println!("✓ OAuth tokens cleared for profile '{}'", config.profile);
+                }
+                Some(method) => println!(
+                    "Profile '{}' uses '{}' auth — nothing to log out (no stored session).",
+                    config.profile, method
+                ),
+                None => println!(
+                    "Profile '{}' has no auth configured — nothing to log out.",
+                    config.profile
+                ),
+            }
+            Ok(())
+        }
+        AuthSubcommand::Status => {
+            let profile_name = profile.as_deref().unwrap_or("default");
+            let store = TokenStore::new(profile_name)?;
+            match store.load()? {
+                Some(t) => {
+                    let backend = store
+                        .detect_backend()
+                        .map(|b| b.to_string())
+                        .unwrap_or_else(|| "unknown".into());
+                    println!("✓ Logged in (profile: {})", profile_name);
+                    println!("  Storage: {}", backend);
+                    if let Some(cid) = &t.cloud_id {
+                        println!("  Cloud ID: {}", cid);
+                    }
+                    println!("  Scopes: {}", t.scopes.join(", "));
+                    let delta = t.seconds_until_expiry();
+                    if delta > 0 {
+                        println!("  Access token expires in: {}s ({}m)", delta, delta / 60);
+                    } else {
+                        println!("  Access token: EXPIRED ({}s ago)", -delta);
+                    }
+                    println!(
+                        "  Refresh token: {}",
+                        if t.refresh_token.is_some() {
+                            "present"
+                        } else {
+                            "(none — re-login on expiry)"
+                        }
+                    );
+                }
+                None => println!(
+                    "Not logged in (profile: {}). Run `atlassian-cli auth login`.",
+                    profile_name
+                ),
+            }
+            Ok(())
+        }
+        AuthSubcommand::Refresh => {
+            let config =
+                atlassian_cli::Config::load(config_path.as_ref(), profile.as_ref(), overrides)?;
+            let params = config.oauth_params()?;
+            let strategy = OAuthStrategy::resume(params, &config.profile).await?;
+            let refreshed = strategy.force_refresh().await?;
+            println!("✓ Token refreshed (profile: {})", config.profile);
+            println!(
+                "  Access token now expires in: {}s",
+                refreshed.seconds_until_expiry()
+            );
+            Ok(())
+        }
     }
 }
