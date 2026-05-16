@@ -75,7 +75,7 @@ impl OAuthStrategy {
     ) -> Result<flow::LoginOutcome> {
         let outcome = flow::login(&params.flow_inputs(), api_http, open_browser).await?;
         let store = TokenStore::new(profile)?;
-        let backend = store.save(&outcome.tokens)?;
+        let backend = store.save(&outcome.tokens).await?;
         tracing::debug!(
             "Saved OAuth tokens for profile '{}' via {}",
             profile,
@@ -88,11 +88,15 @@ impl OAuthStrategy {
     /// hint when no tokens are stored.
     pub async fn resume(params: OAuthParams, profile: &str) -> Result<Self> {
         let store = TokenStore::new(profile)?;
-        let tokens = store.load()?.with_context(|| {
-            format!(
-                "No OAuth tokens stored for profile '{profile}'. Run `atlassian-cli auth login` first."
-            )
-        })?;
+        let tokens = store
+            .load()
+            .await?
+            .with_context(|| {
+                format!(
+                    "No OAuth tokens stored for profile '{profile}'. Run `atlassian-cli auth login` first."
+                )
+            })?
+            .tokens;
         let cloud_id = params
             .cloud_id
             .clone()
@@ -146,7 +150,7 @@ impl OAuthStrategy {
             },
             cloud_id: Some(self.cloud_id.clone()),
         };
-        self.store.save(&merged)?;
+        self.store.save(&merged).await?;
         *current = merged;
         Ok(())
     }

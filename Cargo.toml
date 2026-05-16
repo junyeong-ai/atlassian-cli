@@ -39,8 +39,17 @@ oauth2 = { version = "5.0", default-features = false, features = ["reqwest", "ru
 webbrowser = "1.2"
 secrecy = { version = "0.10", features = ["serde"] }
 tempfile = "3.27"
-keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service"] }
+keyring-core = "1"
 async-trait = "0.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1", default-features = false, features = ["keychain"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = "1"
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+zbus-secret-service-keyring-store = { version = "1", default-features = false, features = ["rt-tokio-crypto-rust"] }
 
 [dev-dependencies]
 wiremock = "0.6"

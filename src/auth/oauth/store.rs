@@ -1,20 +1,22 @@
 //! Persistent storage for OAuth 3LO tokens.
 //!
 //! Strategy: prefer OS keychain (macOS Keychain / Linux Secret Service /
-//! Windows Credential Manager) via the `keyring` crate. Fall back to a
-//! 0600-mode JSON file at `~/.config/atlassian-cli/credentials.json` for
-//! environments without a working keychain (CI, headless servers).
+//! Windows Credential Manager) via `keyring-core`. Fall back to a 0600-mode
+//! JSON file at `~/.config/atlassian-cli/credentials.json` for environments
+//! without a working keychain (CI, headless servers).
 //!
 //! On every `save` we clear the same key from the other backend so reads
 //! are unambiguous.
 
 use anyhow::{Context, Result};
+use keyring_core::{Entry, Error as KeyringError, get_default_store, set_default_store};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const KEYRING_SERVICE: &str = "atlassian-cli";
@@ -33,6 +35,15 @@ impl std::fmt::Display for TokenStorageBackend {
             TokenStorageBackend::File => f.write_str("file"),
         }
     }
+}
+
+/// Result of a successful `TokenStore::load`. Carries both the credential
+/// material and the backend it was read from so callers don't have to
+/// re-query storage to display provenance.
+#[derive(Debug, Clone)]
+pub struct LoadedTokens {
+    pub tokens: TokenSet,
+    pub backend: TokenStorageBackend,
 }
 
 /// Tokens held in memory. Secrets wrapped in `SecretString` to prevent
@@ -146,11 +157,15 @@ impl TokenStore {
 
     /// Save tokens. Tries keyring first; on any error falls back to the
     /// 0600 file. Always clears the unused backend so reads are unambiguous.
-    pub fn save(&self, tokens: &TokenSet) -> Result<TokenStorageBackend> {
+    pub async fn save(&self, tokens: &TokenSet) -> Result<TokenStorageBackend> {
         let on_disk = OnDisk::from(tokens);
         let json = serde_json::to_string(&on_disk).context("Failed to serialize tokens")?;
 
-        match self.keyring_entry().and_then(|e| e.set_password(&json)) {
+        let keyring_json = json.clone();
+        match self
+            .keyring_op(move |e| e.set_password(&keyring_json))
+            .await
+        {
             Ok(()) => {
                 let _ = self.file_delete();
                 Ok(TokenStorageBackend::Keyring)
@@ -158,76 +173,65 @@ impl TokenStore {
             Err(e) => {
                 tracing::debug!("Keyring save failed, falling back to file: {}", e);
                 self.file_save(&json)?;
-                let _ = self.keyring_entry().and_then(|e| e.delete_credential());
+                let _ = self.keyring_op(|e| e.delete_credential()).await;
                 Ok(TokenStorageBackend::File)
             }
         }
     }
 
-    /// Load tokens. Checks keyring first, then file. `Ok(None)` if not present
-    /// in either backend.
-    pub fn load(&self) -> Result<Option<TokenSet>> {
-        if let Ok(entry) = self.keyring_entry() {
-            match entry.get_password() {
-                Ok(json) => {
-                    let on_disk: OnDisk = serde_json::from_str(&json)
-                        .context("Corrupted token entry in keyring (re-run `auth login`)")?;
-                    return Ok(Some(on_disk.into()));
+    /// Load tokens. Checks keyring first, then file. Returns the loaded
+    /// tokens tagged with the backend they came from, or `Ok(None)` if not
+    /// present in either backend.
+    pub async fn load(&self) -> Result<Option<LoadedTokens>> {
+        match self.keyring_op(|e| e.get_password()).await {
+            Ok(json) => {
+                let on_disk: OnDisk = serde_json::from_str(&json)
+                    .context("Corrupted token entry in keyring (re-run `auth login`)")?;
+                Ok(Some(LoadedTokens {
+                    tokens: on_disk.into(),
+                    backend: TokenStorageBackend::Keyring,
+                }))
+            }
+            Err(e) => {
+                if !matches!(e, KeyringError::NoEntry) {
+                    tracing::debug!("Keyring read failed, trying file: {}", e);
                 }
-                Err(keyring::Error::NoEntry) => {}
-                Err(e) => tracing::debug!("Keyring read failed, trying file: {}", e),
+                Ok(self.file_load()?.map(|tokens| LoadedTokens {
+                    tokens,
+                    backend: TokenStorageBackend::File,
+                }))
             }
         }
-        self.file_load()
     }
 
     /// Delete tokens from both backends. Best-effort cleanup; never errors
     /// on missing entries.
-    pub fn delete(&self) -> Result<()> {
-        if let Ok(entry) = self.keyring_entry() {
-            match entry.delete_credential() {
-                Ok(()) | Err(keyring::Error::NoEntry) => {}
-                Err(e) => tracing::debug!("Keyring delete returned: {}", e),
-            }
+    pub async fn delete(&self) -> Result<()> {
+        match self.keyring_op(|e| e.delete_credential()).await {
+            Ok(()) | Err(KeyringError::NoEntry) => {}
+            Err(e) => tracing::debug!("Keyring delete returned: {}", e),
         }
         let _ = self.file_delete();
         Ok(())
     }
 
-    /// Which backend currently holds tokens for this profile. Used by
-    /// `auth status` for diagnostics.
-    pub fn detect_backend(&self) -> Option<TokenStorageBackend> {
-        match self.keyring_entry().and_then(|e| e.get_password()) {
-            Ok(_) => Some(TokenStorageBackend::Keyring),
-            Err(keyring::Error::NoEntry) => {
-                if self.file_path.exists()
-                    && self
-                        .file_read_all()
-                        .ok()
-                        .is_some_and(|all| all.contains_key(&self.profile))
-                {
-                    Some(TokenStorageBackend::File)
-                } else {
-                    None
-                }
-            }
-            Err(_) => {
-                if self.file_path.exists()
-                    && self
-                        .file_read_all()
-                        .ok()
-                        .is_some_and(|all| all.contains_key(&self.profile))
-                {
-                    Some(TokenStorageBackend::File)
-                } else {
-                    None
-                }
-            }
-        }
-    }
-
-    fn keyring_entry(&self) -> std::result::Result<keyring::Entry, keyring::Error> {
-        keyring::Entry::new(KEYRING_SERVICE, &self.profile)
+    /// Run a keyring operation off the async runtime. Native stores expose
+    /// a sync API; the Linux backend internally blocks on async I/O.
+    /// Isolating each call on a blocking thread keeps the tokio reactor
+    /// free to service the spawned futures.
+    async fn keyring_op<T, F>(&self, op: F) -> std::result::Result<T, KeyringError>
+    where
+        F: FnOnce(&Entry) -> std::result::Result<T, KeyringError> + Send + 'static,
+        T: Send + 'static,
+    {
+        let profile = self.profile.clone();
+        tokio::task::spawn_blocking(move || {
+            ensure_store_installed()?;
+            let entry = Entry::new(KEYRING_SERVICE, &profile)?;
+            op(&entry)
+        })
+        .await
+        .unwrap_or_else(|join_err| Err(KeyringError::PlatformFailure(Box::new(join_err))))
     }
 
     fn file_save(&self, json_for_profile: &str) -> Result<()> {
@@ -331,6 +335,64 @@ impl TokenStore {
             .with_context(|| format!("Failed to parse credentials file {:?}", self.file_path))?;
         Ok(parsed)
     }
+}
+
+/// Install the platform-native credential store as the keyring-core default,
+/// unless an embedder or test has already configured one. Idempotent: the
+/// first successful call wins; on failure, the same error surfaces on every
+/// subsequent call so the file fallback engages deterministically.
+fn ensure_store_installed() -> std::result::Result<(), KeyringError> {
+    static INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
+    INIT.get_or_init(|| {
+        if get_default_store().is_some() {
+            return Ok(());
+        }
+        install_store().map_err(|e| e.to_string())
+    })
+    .as_ref()
+    .map(|_| ())
+    .map_err(|msg| KeyringError::PlatformFailure(Box::new(CachedInstallError(msg.clone()))))
+}
+
+#[derive(Debug)]
+struct CachedInstallError(String);
+
+impl std::fmt::Display for CachedInstallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for CachedInstallError {}
+
+#[cfg(target_os = "macos")]
+fn install_store() -> std::result::Result<(), KeyringError> {
+    set_default_store(apple_native_keyring_store::keychain::Store::new()?);
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn install_store() -> std::result::Result<(), KeyringError> {
+    set_default_store(windows_native_keyring_store::Store::new()?);
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn install_store() -> std::result::Result<(), KeyringError> {
+    set_default_store(zbus_secret_service_keyring_store::Store::new()?);
+    Ok(())
+}
+
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "linux",
+    target_os = "freebsd"
+)))]
+fn install_store() -> std::result::Result<(), KeyringError> {
+    Err(KeyringError::NotSupportedByStore(
+        "no native keyring store on this platform".into(),
+    ))
 }
 
 fn default_file_path() -> Result<PathBuf> {
@@ -438,6 +500,33 @@ mod tests {
         store.file_delete().unwrap();
         assert!(store.file_load().unwrap().is_none());
         assert!(!path.exists());
+    }
+
+    /// End-to-end exercise of the keyring path via `keyring_core::mock`.
+    /// Pre-installing the mock also verifies that `ensure_store_installed`
+    /// honors a store already configured by an embedder/test.
+    #[tokio::test]
+    async fn keyring_path_roundtrip_via_mock() {
+        set_default_store(keyring_core::mock::Store::new().unwrap());
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        let store = TokenStore::with_paths("keyring-roundtrip", path);
+
+        let backend = store.save(&fixture_tokens()).await.unwrap();
+        assert_eq!(backend, TokenStorageBackend::Keyring);
+
+        let loaded = store
+            .load()
+            .await
+            .unwrap()
+            .expect("tokens must be present after save");
+        assert_eq!(loaded.backend, TokenStorageBackend::Keyring);
+        assert_eq!(loaded.tokens.access_token.expose_secret(), "access-abc");
+        assert_eq!(loaded.tokens.cloud_id.as_deref(), Some("cloud-1"));
+
+        store.delete().await.unwrap();
+        assert!(store.load().await.unwrap().is_none());
     }
 
     #[test]

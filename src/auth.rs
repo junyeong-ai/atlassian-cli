@@ -24,7 +24,8 @@ mod strategy;
 
 pub use basic::BasicStrategy;
 pub use oauth::{
-    LoginOutcome, OAuthParams, OAuthStrategy, SiteInfo, TokenStorageBackend, TokenStore,
+    LoadedTokens, LoginOutcome, OAuthParams, OAuthStrategy, SiteInfo, TokenStorageBackend,
+    TokenStore,
 };
 pub use service_account::ServiceAccountStrategy;
 pub use strategy::{AuthStrategy, Identity};

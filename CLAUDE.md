@@ -9,8 +9,9 @@ cargo +1.95.0 build --release   # production binary at target/release/atlassian-
 cargo test                      # unit tests
 cargo clippy                    # lint; CI requires zero warnings
 cargo fmt                       # format; CI enforces rustfmt
-cargo audit                     # transitive-CVE check; CI runs this
 ```
+
+CI also runs `cargo-deny` (advisories/bans/licenses/sources) on `Cargo.toml`/`Cargo.lock` changes via the `Security` workflow — touch a dep and assume those gates apply.
 
 ## Auth model (non-obvious)
 
@@ -76,7 +77,7 @@ When `config.jira.projects_filter` is non-empty, bare JQL is wrapped: `status = 
 
 - `-v` (info), `-vv` (debug), `-vvv` (trace) — logs go to stderr.
 - `config validate` constructs the strategy (which performs each method's own credential check) and then calls `AuthStrategy::probe_identity`. For service account auth `probe_identity` returns `None` — credentials are still verified, but the `/myself` endpoint typically lacks scope.
-- `--profile <name>` switches between config profiles. Profiles are independent; the default profile in this repo is `oauth`, with `service` and `basic` available as fallbacks.
+- `--profile <name>` switches between config profiles. Profiles are independent. When `--profile` is omitted, the profile name resolves to the literal string `default`.
 
 ## Security invariants
 

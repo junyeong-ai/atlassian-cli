@@ -69,9 +69,12 @@ Both strategy impls delegate; neither inlines the format string.
 - `callback.rs` is a one-shot loopback HTTP receiver on
   `127.0.0.1:{redirect_port}/callback` (RFC 8252). Pure tokio TCP — no
   HTTP framework dependency.
-- `store.rs` persists tokens. Tries OS keychain first; falls back to
+- `store.rs` persists tokens. `TokenStore::{save,load,delete}` are async.
+  Tries OS keychain first (Keychain / Credential Manager / Secret Service —
+  Linux uses pure-Rust zbus, no system `libdbus`); falls back to
   `~/.config/atlassian-cli/credentials.json` (0600, atomic via tempfile).
-  Per-profile keyed. `TokenStorageBackend` is surfaced by `auth status`.
+  `load` returns `LoadedTokens { tokens, backend }` so callers report
+  provenance without a second store query. Per-profile keyed.
 - `strategy.rs` holds the `OAuthStrategy`. `tokens: Mutex<TokenSet>` so
   concurrent callers serialize on refresh — at most one token-endpoint
   round trip when the cache is stale. Refresh tokens **rotate** on every

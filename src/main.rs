@@ -694,7 +694,7 @@ async fn handle_auth(
             )?;
             match config.auth.as_ref().map(|a| a.method()) {
                 Some(AuthMethod::OAuth) => {
-                    TokenStore::new(&config.profile)?.delete()?;
+                    TokenStore::new(&config.profile)?.delete().await?;
                     println!("✓ OAuth tokens cleared for profile '{}'", config.profile);
                 }
                 Some(method) => println!(
@@ -711,14 +711,11 @@ async fn handle_auth(
         AuthSubcommand::Status => {
             let profile_name = profile.as_deref().unwrap_or("default");
             let store = TokenStore::new(profile_name)?;
-            match store.load()? {
-                Some(t) => {
-                    let backend = store
-                        .detect_backend()
-                        .map(|b| b.to_string())
-                        .unwrap_or_else(|| "unknown".into());
+            match store.load().await? {
+                Some(loaded) => {
+                    let t = &loaded.tokens;
                     println!("✓ Logged in (profile: {})", profile_name);
-                    println!("  Storage: {}", backend);
+                    println!("  Storage: {}", loaded.backend);
                     if let Some(cid) = &t.cloud_id {
                         println!("  Cloud ID: {}", cid);
                     }

@@ -18,5 +18,5 @@ mod store;
 mod strategy;
 
 pub use flow::{LoginOutcome, SiteInfo};
-pub use store::{TokenSet, TokenStorageBackend, TokenStore};
+pub use store::{LoadedTokens, TokenSet, TokenStorageBackend, TokenStore};
 pub use strategy::{OAuthParams, OAuthStrategy};
