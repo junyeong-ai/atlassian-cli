@@ -27,11 +27,11 @@ impl std::fmt::Debug for BasicStrategy {
 impl BasicStrategy {
     pub fn new(domain: Option<&str>, email: String, token: String) -> Result<Self> {
         let domain = domain.context("ATLASSIAN_DOMAIN required for basic auth")?;
-        let clean = domain
-            .trim_start_matches("https://")
-            .trim_start_matches("http://")
-            .trim_end_matches('/')
-            .to_string();
+        // Single source of truth for host cleaning + spoof rejection, shared
+        // with `Config::validate`. Guarantees `build_url` only ever targets a
+        // real `*.atlassian.net` host even if construction is reached without
+        // going through `Config::validate` first.
+        let clean = crate::config::validate_atlassian_domain(domain)?;
         let encoded = SecretString::new(STANDARD.encode(format!("{}:{}", email, token)).into());
         Ok(Self {
             domain: clean,

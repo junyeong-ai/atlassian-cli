@@ -21,6 +21,27 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const KEYRING_SERVICE: &str = "atlassian-cli";
 
+/// `ATLASSIAN_NO_KEYCHAIN` bypasses the OS keychain entirely so token storage
+/// uses the 0600 file. On a desktop OS the keychain prompts with a GUI dialog
+/// that blocks indefinitely in a headless or AI-agent session; this explicit
+/// opt-out (no heuristic auto-detection) lets those callers skip it. Blank /
+/// `0` / `false` count as unset, consistent with the project's blank-value
+/// policy for the rest of the env surface.
+fn keychain_disabled() -> bool {
+    keychain_disabled_from(std::env::var("ATLASSIAN_NO_KEYCHAIN").ok().as_deref())
+}
+
+/// Pure parsing of the opt-out value, split out so it is testable without
+/// mutating process-global env (which would race the parallel test runner).
+fn keychain_disabled_from(value: Option<&str>) -> bool {
+    value
+        .map(|v| {
+            let v = v.trim();
+            !v.is_empty() && v != "0" && !v.eq_ignore_ascii_case("false")
+        })
+        .unwrap_or(false)
+}
+
 /// Where the persisted tokens for the active profile currently live.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenStorageBackend {
@@ -224,6 +245,13 @@ impl TokenStore {
         F: FnOnce(&Entry) -> std::result::Result<T, KeyringError> + Send + 'static,
         T: Send + 'static,
     {
+        // Explicit opt-out: skip the keychain so save/load/delete fall through
+        // to the file store via their existing `NoEntry` handling — no GUI
+        // prompt, no blocking, in headless / AI-agent sessions.
+        if keychain_disabled() {
+            return Err(KeyringError::NoEntry);
+        }
+
         let profile = self.profile.clone();
         tokio::task::spawn_blocking(move || {
             ensure_store_installed()?;
@@ -463,6 +491,22 @@ mod tests {
     fn backend_display_is_human() {
         assert_eq!(format!("{}", TokenStorageBackend::Keyring), "OS keychain");
         assert_eq!(format!("{}", TokenStorageBackend::File), "file");
+    }
+
+    #[test]
+    fn keychain_opt_out_parsing() {
+        // Truthy → disabled
+        assert!(keychain_disabled_from(Some("1")));
+        assert!(keychain_disabled_from(Some("true")));
+        assert!(keychain_disabled_from(Some("TRUE")));
+        assert!(keychain_disabled_from(Some("yes")));
+        // Falsy / unset → keychain stays on (blank-value policy)
+        assert!(!keychain_disabled_from(None));
+        assert!(!keychain_disabled_from(Some("")));
+        assert!(!keychain_disabled_from(Some("   ")));
+        assert!(!keychain_disabled_from(Some("0")));
+        assert!(!keychain_disabled_from(Some("false")));
+        assert!(!keychain_disabled_from(Some("False")));
     }
 
     #[test]

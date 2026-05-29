@@ -19,6 +19,10 @@ When adding a new write endpoint that takes user text, route through these helpe
 
 - `search` returns `{"items": [...], "count": N}` — `count` is the size of this page.
 - `search_all` returns `{"items": [...], "total": N}` — `total` is the cumulative size (`/search/jql` doesn't expose a server-side total).
-- `get_*` (issue / comments / transitions) return the raw Jira object after `filter::apply`.
+- `get_issue` returns the raw Jira issue object after `filter::apply`.
+- All list endpoints (`get_comments`, `get_transitions`, `get_links`, `get_link_types`, `get_worklogs`, `get_watchers`, `get_issue_types`, `get_priorities`, `get_statuses`, `get_labels`, `get_boards`, `get_sprints`) return `{"items": [...]}`.
+- `create_issue` returns `{"key": ..., "id": ...}` — both fields are stable contract; `key` is the human-readable identifier needed for follow-up commands.
+- Writes that target an identifiable issue sub-resource (`add_comment`, `update_comment`, `add_worklog`, `update_worklog`) return `{"id": ...}` so callers can chain follow-up updates without re-querying.
+- Side-effect-only writes return `{}` (`update_issue`, `delete_issue`, `delete_comment`, `transition_issue`, `add_link`, `remove_link`, `remove_worklog`, `add_watcher`, `remove_watcher`, `move_issues_to_sprint`, `move_issues_to_backlog`, `assign_issues_to_epic`, `unassign_issues_from_epic`).
 
 Keep these shapes stable — downstream tooling (skill, scripts) depends on them.

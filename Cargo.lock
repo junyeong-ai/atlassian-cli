@@ -241,7 +241,7 @@ dependencies = [
 
 [[package]]
 name = "atlassian-cli"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "apple-native-keyring-store",
@@ -252,6 +252,7 @@ dependencies = [
  "htmd",
  "keyring-core",
  "oauth2",
+ "percent-encoding",
  "regex",
  "reqwest 0.13.3",
  "secrecy",

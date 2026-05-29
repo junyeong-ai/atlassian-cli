@@ -3,7 +3,7 @@
 [![CI](https://github.com/junyeong-ai/atlassian-cli/workflows/CI/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/ci.yml)
 [![Security](https://github.com/junyeong-ai/atlassian-cli/workflows/Security/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/security.yml)
 [![Rust](https://img.shields.io/badge/rust-1.95.0%2B%20(2024%20edition)-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.4.0-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
+[![Version](https://img.shields.io/badge/version-0.5.0-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
 [![DeepWiki](https://img.shields.io/badge/DeepWiki-junyeong--ai%2Fatlassian--cli-blue.svg?logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACwAAAAyCAYAAAAnWDnqAAAAAXNSR0IArs4c6QAAA05JREFUaEPtmUtyEzEQhtWTQyQLHNak2AB7ZnyXZMEjXMGeK/AIi+QuHrMnbChYY7MIh8g01fJoopFb0uhhEqqcbWTp06/uv1saEDv4O3n3dV60RfP947Mm9/SQc0ICFQgzfc4CYZoTPAswgSJCCUJUnAAoRHOAUOcATwbmVLWdGoH//PB8mnKqScAhsD0kYP3j/Yt5LPQe2KvcXmGvRHcDnpxfL2zOYJ1mFwrryWTz0advv1Ut4CJgf5uhDuDj5eUcAUoahrdY/56ebRWeraTjMt/00Sh3UDtjgHtQNHwcRGOC98BJEAEymycmYcWwOprTgcB6VZ5JK5TAJ+fXGLBm3FDAmn6oPPjR4rKCAoJCal2eAiQp2x0vxTPB3ALO2CRkwmDy5WohzBDwSEFKRwPbknEggCPB/imwrycgxX2NzoMCHhPkDwqYMr9tRcP5qNrMZHkVnOjRMWwLCcr8ohBVb1OMjxLwGCvjTikrsBOiA6fNyCrm8V1rP93iVPpwaE+gO0SsWmPiXB+jikdf6SizrT5qKasx5j8ABbHpFTx+vFXp9EnYQmLx02h1QTTrl6eDqxLnGjporxl3NL3agEvXdT0WmEost648sQOYAeJS9Q7bfUVoMGnjo4AZdUMQku50McDcMWcBPvr0SzbTAFDfvJqwLzgxwATnCgnp4wDl6Aa+Ax283gghmj+vj7feE2KBBRMW3FzOpLOADl0Isb5587h/U4gGvkt5v60Z1VLG8BhYjbzRwyQZemwAd6cCR5/XFWLYZRIMpX39AR0tjaGGiGzLVyhse5C9RKC6ai42ppWPKiBagOvaYk8lO7DajerabOZP46Lby5wKjw1HCRx7p9sVMOWGzb/vA1hwiWc6jm3MvQDTogQkiqIhJV0nBQBTU+3okKCFDy9WwferkHjtxib7t3xIUQtHxnIwtx4mpg26/HfwVNVDb4oI9RHmx5WGelRVlrtiw43zboCLaxv46AZeB3IlTkwouebTr1y2NjSpHz68WNFjHvupy3q8TFn3Hos2IAk4Ju5dCo8B3wP7VPr/FGaKiG+T+v+TQqIrOqMTL1VdWV1DdmcbO8KXBz6esmYWYKPwDL5b5FA1a0hwapHiom0r/cKaoqr+27/XcrS5UwSMbQAAAABJRU5ErkJggg==)](https://deepwiki.com/junyeong-ai/atlassian-cli)
 
 > **🌐 [한국어](README.md)** | **English**
@@ -65,8 +65,19 @@ atlassian-cli jira update PROJ-123 '{"summary":"New title"}'
 # Comment/Transition
 atlassian-cli jira comment add PROJ-123 "Work completed"
 atlassian-cli jira comment update PROJ-123 10042 "Edited comment"
-atlassian-cli jira transitions PROJ-123
-atlassian-cli jira transition PROJ-123 31
+atlassian-cli jira transition list PROJ-123
+atlassian-cli jira transition apply PROJ-123 31
+atlassian-cli jira delete PROJ-123 --yes        # permanent delete (--yes required)
+
+# Links, worklogs, watchers
+atlassian-cli jira link add PROJ-1 PROJ-2 --type Blocks
+atlassian-cli jira worklog add PROJ-123 "2h 30m" --comment "Investigation"
+atlassian-cli jira watcher add PROJ-123
+
+# Agile — boards, sprints, epics
+atlassian-cli jira sprint list --project PROJ
+atlassian-cli jira sprint move 55 PROJ-1 PROJ-2
+atlassian-cli jira epic assign EPIC-1 PROJ-1
 ```
 
 ### Confluence Operations
@@ -121,7 +132,7 @@ Installs the latest prebuilt binary and can install the `jira-confluence` Claude
 
 ```bash
 # Install a specific release
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.4.0 bash
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.5.0 bash
 
 # Uninstall (non-interactive defaults keep skill/config)
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/uninstall.sh | bash
@@ -191,8 +202,13 @@ redirect_port = 8976       # must match the Callback URL on the OAuth app
 #   scopes = ["read:jira-user", "read:jira-work", "write:jira-work",
 #             "read:confluence-content.all", "read:confluence-space.summary",
 #             "write:confluence-content", "offline_access"]
+# board/sprint/epic (agile) commands need extra Jira Software scopes beyond the defaults:
+#   "read:board-scope:jira-software", "read:sprint:jira-software",
+#   "write:sprint:jira-software", "read:epic:jira-software"
 # cloud_id = "..."          # pin one site when the user has access to many
 ```
+
+> **Headless / AI agent**: on a desktop OS the keychain may block with a GUI prompt. Set `ATLASSIAN_NO_KEYCHAIN=1` to skip the keychain and use the 0600 file store. Treat it as a per-environment setting (don't toggle it on/off) — while set, `auth logout` clears only the file store. If you previously logged in with the keychain, run `auth logout` once without the flag to clear it.
 
 ```bash
 atlassian-cli auth login       # browser → Atlassian → tokens persisted
@@ -315,11 +331,20 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 | `search <JQL> --format markdown` | JQL search (Markdown) | `jira search "status = Open" --format markdown` |
 | `create <PROJECT> <SUMMARY> <TYPE>` | Create issue | `jira create PROJ "Title" Bug` |
 | `update <KEY> <JSON>` | Update issue | `jira update PROJ-123 '{"summary":"New"}'` |
+| `delete <KEY> --yes [--delete-subtasks]` | Delete issue (irreversible) | `jira delete PROJ-123 --yes` |
 | `comment add <KEY> <TEXT>` | Add comment | `jira comment add PROJ-123 "Done"` |
 | `comment update <KEY> <COMMENT_ID> <TEXT>` | Update comment | `jira comment update PROJ-123 10042 "Done"` |
-| `comments <KEY>` | List comments | `jira comments PROJ-123` |
-| `transitions <KEY>` | List transitions | `jira transitions PROJ-123` |
-| `transition <KEY> <ID>` | Transition issue | `jira transition PROJ-123 31` |
+| `comment list <KEY>` | List comments | `jira comment list PROJ-123` |
+| `comment delete <KEY> <COMMENT_ID>` | Delete comment | `jira comment delete PROJ-123 10042` |
+| `transition list <KEY>` | List transitions | `jira transition list PROJ-123` |
+| `transition apply <KEY> <ID>` | Transition issue | `jira transition apply PROJ-123 31` |
+| `link add/remove/list`, `link types` | Issue links | `jira link add PROJ-1 PROJ-2 --type Blocks` |
+| `worklog add/list/update/remove` | Time tracking | `jira worklog add PROJ-123 "2h 30m"` |
+| `watcher add/remove/list <KEY>` | Watchers | `jira watcher add PROJ-123` |
+| `list types/priorities/statuses/labels` | Global metadata | `jira list types` |
+| `board list --project <KEY>` | Agile boards | `jira board list --project PROJ` |
+| `sprint list/move/backlog` | Sprints / backlog | `jira sprint move 55 PROJ-1 PROJ-2` |
+| `epic assign/unassign <EPIC> <KEY...>` | Epic membership | `jira epic assign EPIC-1 PROJ-1` |
 
 ### Confluence Commands
 
@@ -331,6 +356,7 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 | `get <ID> --format markdown` | Get page (Markdown) | `confluence get 123456 --format markdown` |
 | `create <SPACE> <TITLE> <CONTENT>` | Create page | `confluence create TEAM "Title" "<p>HTML</p>"` |
 | `update <ID> <TITLE> <CONTENT>` | Update page | `confluence update 123456 "Title" "<p>HTML</p>"` |
+| `delete <ID> --yes` | Delete page (to trash) | `confluence delete 123456 --yes` |
 | `children <ID>` | List children | `confluence children 123456` |
 | `comments <ID>` | Get comments | `confluence comments 123456` |
 | `comments <ID> --format markdown` | Get comments (Markdown) | `confluence comments 123456 --format markdown` |
@@ -383,7 +409,7 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 
 **🌐 [한국어](README.md)** | **English**
 
-**Version 0.4.0** • Rust 2024 Edition
+**Version 0.5.0** • Rust 2024 Edition
 
 Made with ❤️ for productivity
 

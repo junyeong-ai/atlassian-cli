@@ -350,6 +350,74 @@ struct ConfigProfile {
     optimization: OptimizationConfig,
 }
 
+/// Strip the scheme and trailing slash from a configured Atlassian domain and
+/// validate it as a bare host under `.atlassian.net`.
+///
+/// Returns the cleaned host on success. Rejecting any character outside
+/// `[A-Za-z0-9.-]` blocks every URL-structure injection vector — path
+/// (`/`), query (`?`), fragment (`#`), userinfo (`@`), and port (`:`) — so a
+/// value like `https://evil.com/foo.atlassian.net` cannot pass the suffix
+/// check and then send Basic credentials to `evil.com` via
+/// `BasicStrategy::build_url`. Single source of truth shared by
+/// `Config::validate` and `BasicStrategy::new`.
+pub(crate) fn validate_atlassian_domain(raw: &str) -> Result<String> {
+    // Schemes and hostnames are case-insensitive (RFC 3986 §3.1, §3.2.2).
+    // Normalise to lowercase so `HTTPS://Foo.ATLASSIAN.NET/` is accepted and
+    // the returned host is canonical for use in request URLs.
+    let lower = raw.to_lowercase();
+    let host = lower
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_end_matches('/');
+
+    if host.is_empty() {
+        bail!("Atlassian domain is empty");
+    }
+
+    // A real host is only ASCII alphanumerics, dots, and hyphens. Anything
+    // else means the value carries URL structure (path/query/userinfo/port)
+    // and must be rejected before it reaches a request URL.
+    if !host
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+    {
+        bail!(
+            "Invalid Atlassian domain: {} (must be a bare host like your-site.atlassian.net)",
+            raw
+        );
+    }
+
+    // Require a non-empty site label in front of `.atlassian.net` — the
+    // suffix alone (`.atlassian.net`) or a bare match is not a real site.
+    if !host.ends_with(".atlassian.net") || host.len() <= ".atlassian.net".len() {
+        bail!(
+            "Invalid Atlassian domain: {} (must end with .atlassian.net)",
+            raw
+        );
+    }
+
+    Ok(host.to_string())
+}
+
+/// Validate a user-pinned `cloud_id` before it is interpolated into a proxy
+/// path (`/ex/{service}/{cloud_id}{path}`). Rejecting anything outside
+/// `[A-Za-z0-9-]` prevents a configured value containing `/`, `?`, or `#`
+/// from rewriting the proxy path or query on `api.atlassian.com`.
+/// Auto-discovered cloud IDs come from the API and are trusted; only values
+/// the user supplies via CLI/env/config flow through here.
+pub(crate) fn validate_cloud_id(raw: &str) -> Result<()> {
+    if raw.is_empty() {
+        bail!("cloud_id is empty");
+    }
+    if !raw.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+        bail!(
+            "Invalid cloud_id: {} (expected an Atlassian site identifier — letters, digits, hyphens)",
+            raw
+        );
+    }
+    Ok(())
+}
+
 impl Config {
     /// Extract OAuth flow parameters for this profile.
     /// Errors with an actionable message when the profile is not OAuth-configured.
@@ -579,19 +647,9 @@ impl Config {
                      3. Config file: atlassian-cli config init",
                 )?;
 
-                let clean_domain = domain
-                    .trim_start_matches("https://")
-                    .trim_start_matches("http://")
-                    .trim_end_matches('/');
-
-                // Domain must end with `.atlassian.net` (not just contain it).
-                // Prevents spoofing like "attacker.atlassian.net.evil.com"
-                if !clean_domain.ends_with(".atlassian.net") {
-                    bail!(
-                        "Invalid Atlassian domain format: {} (must end with .atlassian.net)",
-                        domain
-                    );
-                }
+                // Strict host-grammar validation — rejects path/userinfo/port
+                // spoofs like `https://evil.com/foo.atlassian.net`.
+                validate_atlassian_domain(domain)?;
 
                 if !email.contains('@') {
                     bail!("Invalid email format: {}", email);
@@ -604,7 +662,7 @@ impl Config {
             AuthConfig::ServiceAccount {
                 client_id,
                 client_secret,
-                ..
+                cloud_id,
             } => {
                 if client_id.is_empty() {
                     bail!("Service account client_id is empty");
@@ -612,19 +670,28 @@ impl Config {
                 if client_secret.is_empty() {
                     bail!("Service account client_secret is empty");
                 }
+                // A user-pinned cloud_id is interpolated into the proxy path,
+                // so it must not carry URL structure. Auto-discovered IDs are
+                // fetched from the API after this check and never flow here.
+                if let Some(cloud_id) = cloud_id.as_deref() {
+                    validate_cloud_id(cloud_id)?;
+                }
             }
             AuthConfig::OAuth {
                 client_id,
                 client_secret,
                 redirect_port,
                 scopes,
-                ..
+                cloud_id,
             } => {
                 if client_id.is_empty() {
                     bail!("OAuth client_id is empty");
                 }
                 if client_secret.is_empty() {
                     bail!("OAuth client_secret is empty");
+                }
+                if let Some(cloud_id) = cloud_id.as_deref() {
+                    validate_cloud_id(cloud_id)?;
                 }
                 if *redirect_port == 0 {
                     bail!("OAuth redirect_port must be a non-zero TCP port (commonly 8976)");
@@ -742,6 +809,23 @@ rate_limit_delay_ms = 200
 # method = "basic"
 # email = "me@work.com"
 # token = "..."
+
+# Classic and granular OAuth scopes CANNOT mix in one token (Atlassian rule),
+# so use a separate profile per scope model and select it with --profile.
+# `scopes` is a free list — put whatever your OAuth app grants. Classic
+# `read:jira-work`/`write:jira-work` covers core Jira; Jira Software (agile:
+# board/sprint/epic) and granular setups need their own scope strings, which
+# you copy from your app's Permissions page at developer.atlassian.com.
+# [agile]
+# [agile.auth]
+# method = "oauth"
+# client_id = "..."
+# scopes = [  # granular example — must be a COMPLETE set; a missing scope 401s that command
+#   "read:issue:jira", "write:issue:jira", "read:jql:jira",
+#   "read:board-scope:jira-software", "read:sprint:jira-software",
+#   "write:sprint:jira-software", "read:epic:jira-software", "offline_access",
+# ]
+# Then: atlassian-cli --profile agile auth login   (each profile stores its own token)
 "#;
 
         fs::write(&path, template)?;
@@ -1330,6 +1414,78 @@ mod tests {
             config.validate().is_err(),
             "Spoofed domain should be rejected"
         );
+    }
+
+    #[test]
+    fn validate_atlassian_domain_rejects_path_prefixed_spoof() {
+        // The critical case: a value carrying a path whose tail looks like a
+        // valid host. Suffix-only matching would accept this and then send
+        // Basic credentials to evil.com.
+        assert!(validate_atlassian_domain("https://evil.com/foo.atlassian.net").is_err());
+        assert!(validate_atlassian_domain("evil.com/foo.atlassian.net").is_err());
+        assert!(validate_atlassian_domain("foo.atlassian.net@evil.com").is_err());
+        assert!(validate_atlassian_domain("foo.atlassian.net:8080").is_err());
+        assert!(validate_atlassian_domain(".atlassian.net").is_err());
+        assert!(validate_atlassian_domain("").is_err());
+    }
+
+    #[test]
+    fn validate_atlassian_domain_accepts_clean_host() {
+        assert_eq!(
+            validate_atlassian_domain("https://my-site.atlassian.net/").unwrap(),
+            "my-site.atlassian.net"
+        );
+        assert_eq!(
+            validate_atlassian_domain("my-site.atlassian.net").unwrap(),
+            "my-site.atlassian.net"
+        );
+    }
+
+    #[test]
+    fn validate_atlassian_domain_is_case_insensitive() {
+        // Schemes and hostnames are case-insensitive; the validator must
+        // accept mixed case and normalize the returned host to lowercase.
+        assert_eq!(
+            validate_atlassian_domain("HTTPS://Foo.ATLASSIAN.NET/").unwrap(),
+            "foo.atlassian.net"
+        );
+        assert_eq!(
+            validate_atlassian_domain("Foo.Atlassian.Net").unwrap(),
+            "foo.atlassian.net"
+        );
+        assert_eq!(
+            validate_atlassian_domain("HTTP://bar.atlassian.net").unwrap(),
+            "bar.atlassian.net"
+        );
+    }
+
+    #[test]
+    fn validate_cloud_id_rejects_path_injection() {
+        assert!(validate_cloud_id("abc/../../evil").is_err());
+        assert!(validate_cloud_id("abc?x=1").is_err());
+        assert!(validate_cloud_id("abc#frag").is_err());
+        assert!(validate_cloud_id("").is_err());
+        assert!(validate_cloud_id("has space").is_err());
+    }
+
+    #[test]
+    fn validate_cloud_id_accepts_uuid_like() {
+        assert!(validate_cloud_id("11111111-2222-3333-4444-555555555555").is_ok());
+        assert!(validate_cloud_id("abc123DEF").is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_spoofed_cloud_id_for_service_account() {
+        let config = Config {
+            domain: None,
+            auth: Some(AuthConfig::ServiceAccount {
+                client_id: "id".to_string(),
+                client_secret: "secret".to_string(),
+                cloud_id: Some("abc/evil?x=1".to_string()),
+            }),
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
     }
 
     #[test]

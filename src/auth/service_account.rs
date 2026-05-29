@@ -173,6 +173,10 @@ impl ServiceAccountStrategy {
             Some(c) => c,
             None => ServiceAccountTokenManager::discover_cloud_id(http, &access_token).await?,
         };
+        // Defense in depth: the cloud_id is interpolated into the proxy path,
+        // so a strategy must never hold an unvalidated one even when reached
+        // without going through `Config::validate` (e.g. `auth` subcommands).
+        crate::config::validate_cloud_id(&resolved_cloud_id)?;
         Ok(Self {
             cloud_id: resolved_cloud_id,
             client_id,

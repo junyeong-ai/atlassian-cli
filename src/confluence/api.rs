@@ -2,44 +2,63 @@ use crate::client::{ApiClient, Service};
 use crate::config::Config;
 use crate::confluence::fields::{apply_v2_filtering, build_search_expand};
 use crate::filter;
+use crate::http_utils::encode_path_segment;
 use crate::markdown::confluence_to_markdown;
+use crate::query_utils::inject_filter;
 use anyhow::Result;
+use regex::Regex;
 use serde_json::{Value, json};
 use std::io::{self, Write};
+use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::time::sleep;
 
-const MAX_LIMIT: u32 = 250;
-const SEARCH_BODY_LIMIT: u32 = 50;
+/// Operative page-size cap for the CQL search endpoint. The v1 search with
+/// body expansion (which we always request) is throttled well below the
+/// non-body ceiling, so 50 is the real maximum a single page returns.
+const MAX_SEARCH_LIMIT: u32 = 50;
+
+/// Matches `space` as a whole word followed by a CQL comparison operator
+/// (`=`, `!=`, `in (...)`, `not in (...)`). The word boundary prevents
+/// false positives on identifiers ending in "space" (e.g. `mySpace = X`),
+/// matching the same defensive posture used for `PROJECT_CLAUSE_RE` in
+/// the Jira layer.
+static SPACE_CLAUSE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\bspace\s*(?:=|!=|not\s+in\s*\(|in\s*\()").unwrap());
 
 fn apply_space_filter(cql: &str, config: &Config) -> String {
     if config.confluence.spaces_filter.is_empty() {
         return cql.to_string();
     }
 
-    let cql_lower = cql.to_lowercase();
-    if cql_lower.contains("space ")
-        || cql_lower.contains("space=")
-        || cql_lower.contains("space in")
-    {
-        cql.to_string()
-    } else {
-        let spaces = config
-            .confluence
-            .spaces_filter
-            .iter()
-            .map(|s| format!("\"{}\"", s))
-            .collect::<Vec<_>>()
-            .join(",");
-        format!("space IN ({}) AND ({})", spaces, cql)
-    }
+    let spaces = config
+        .confluence
+        .spaces_filter
+        .iter()
+        .map(|s| format!("\"{}\"", s))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    inject_filter(cql, &SPACE_CLAUSE_RE, &format!("space IN ({})", spaces))
 }
 
+/// Clamp a user-requested page size to `MAX_SEARCH_LIMIT`. Shared by
+/// single-page `search` and the first page of `search_all` so both interpret
+/// `--limit` identically.
+fn effective_search_limit(limit: u32) -> u32 {
+    limit.clamp(1, MAX_SEARCH_LIMIT)
+}
+
+/// Combine a Confluence pagination envelope's `_links.base` and `_links.next`
+/// into the URL of the next page. Both inputs are server-supplied and never
+/// contain user-controlled segments — they bypass `encode_path_segment` for
+/// that reason. The result is later normalized via `client.rewrite_url` so
+/// service-account auth still routes through the proxy host.
 fn build_next_url(links_base: &str, next_path: &str) -> String {
     if next_path.starts_with("http") {
         next_path.to_string()
     } else {
-        // links_base from API response already includes /wiki
+        // `links_base` from the API response already includes `/wiki`.
         format!("{}{}", links_base, next_path)
     }
 }
@@ -56,7 +75,7 @@ pub async fn search(
     let url = "/wiki/rest/api/search";
     let expand = build_search_expand(include_all_fields, additional_expand);
 
-    let effective_limit = limit.min(MAX_LIMIT).min(SEARCH_BODY_LIMIT);
+    let effective_limit = effective_search_limit(limit);
 
     let response = client
         .get(Service::Confluence, url)
@@ -93,6 +112,7 @@ pub async fn search(
 
 pub async fn search_all(
     query: &str,
+    limit: u32,
     include_all_fields: Option<bool>,
     additional_expand: Option<Vec<String>>,
     stream: bool,
@@ -111,14 +131,20 @@ pub async fn search_all(
         let mut data = if let Some(ref url) = next_url {
             fetch_page(client, url).await?
         } else {
-            fetch_initial_page(client, &final_cql, &expand).await?
+            fetch_initial_page(client, &final_cql, &expand, limit).await?
         };
 
         if page_num == 1 {
             total_size = data["totalSize"].as_u64().unwrap_or(0);
         }
 
-        let items = extract_content_from_results(&mut data, as_markdown);
+        let mut items = extract_content_from_results(&mut data, as_markdown);
+        // Apply response filtering per item so `--all` output matches the
+        // single-page `search` envelope. Done before streaming so streamed
+        // and accumulated items are filtered identically.
+        for item in &mut items {
+            filter::apply(item, client.config());
+        }
         let count = items.len();
 
         if stream {
@@ -176,15 +202,24 @@ pub async fn search_all(
     }
 }
 
-async fn fetch_initial_page(client: &ApiClient, cql: &str, expand: &str) -> Result<Value> {
+async fn fetch_initial_page(
+    client: &ApiClient,
+    cql: &str,
+    expand: &str,
+    limit: u32,
+) -> Result<Value> {
     let url = "/wiki/rest/api/search";
-    let limit = SEARCH_BODY_LIMIT.to_string();
+    let effective_limit = effective_search_limit(limit).to_string();
 
     let response = client
         .get(Service::Confluence, url)
         .await?
         .header("Accept", "application/json")
-        .query(&[("cql", cql), ("limit", &limit), ("expand", expand)])
+        .query(&[
+            ("cql", cql),
+            ("limit", &effective_limit),
+            ("expand", expand),
+        ])
         .send()
         .await?;
 
@@ -221,7 +256,7 @@ pub async fn get_page(
     as_markdown: bool,
     client: &ApiClient,
 ) -> Result<Value> {
-    let url = format!("/wiki/api/v2/pages/{}", page_id);
+    let url = format!("/wiki/api/v2/pages/{}", encode_path_segment(page_id));
 
     let query_params = apply_v2_filtering(include_all_fields, additional_includes);
 
@@ -250,7 +285,10 @@ pub async fn get_page(
 }
 
 pub async fn get_page_children(page_id: &str, client: &ApiClient) -> Result<Value> {
-    let url = format!("/wiki/api/v2/pages/{}/children", page_id);
+    let url = format!(
+        "/wiki/api/v2/pages/{}/children",
+        encode_path_segment(page_id)
+    );
 
     let response = client
         .get(Service::Confluence, &url)
@@ -272,7 +310,10 @@ pub async fn get_page_children(page_id: &str, client: &ApiClient) -> Result<Valu
 }
 
 pub async fn get_comments(page_id: &str, as_markdown: bool, client: &ApiClient) -> Result<Value> {
-    let url = format!("/wiki/api/v2/pages/{}/footer-comments", page_id);
+    let url = format!(
+        "/wiki/api/v2/pages/{}/footer-comments",
+        encode_path_segment(page_id)
+    );
 
     let response = client
         .get(Service::Confluence, &url)
@@ -375,7 +416,8 @@ pub async fn update_page(
     client: &ApiClient,
 ) -> Result<Value> {
     // First, get the current page to get the version number using v2 API
-    let get_url = format!("/wiki/api/v2/pages/{}", page_id);
+    let encoded_page_id = encode_path_segment(page_id);
+    let get_url = format!("/wiki/api/v2/pages/{}", encoded_page_id);
 
     let get_response = client
         .get(Service::Confluence, &get_url)
@@ -397,7 +439,7 @@ pub async fn update_page(
         .ok_or_else(|| anyhow::anyhow!("Failed to get current version"))?;
 
     // Now update the page with v2 API
-    let update_url = format!("/wiki/api/v2/pages/{}", page_id);
+    let update_url = format!("/wiki/api/v2/pages/{}", encoded_page_id);
 
     let query_params = apply_v2_filtering(include_all_fields, additional_includes);
 
@@ -433,6 +475,27 @@ pub async fn update_page(
         "id": data["id"],
         "version": data["version"]["number"]
     }))
+}
+
+/// Move a page to the Confluence trash (v2 `DELETE` is recoverable, unlike
+/// Jira issue deletion). Still a whole-resource destruction, so the CLI layer
+/// requires an explicit `--yes`.
+pub async fn delete_page(page_id: &str, client: &ApiClient) -> Result<Value> {
+    let url = format!("/wiki/api/v2/pages/{}", encode_path_segment(page_id));
+
+    let response = client
+        .delete(Service::Confluence, &url)
+        .await?
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("Failed to delete page ({}): {}", status, body);
+    }
+
+    Ok(json!({}))
 }
 
 fn extract_content_from_results(data: &mut Value, as_markdown: bool) -> Vec<Value> {
@@ -495,15 +558,75 @@ fn convert_comments_to_markdown(data: &mut Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::create_test_config_with_filters;
+    use crate::test_utils::{create_test_config_with_filters, mock_client};
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn create_test_config(confluence_spaces_filter: Vec<String>) -> Config {
         create_test_config_with_filters(vec![], confluence_spaces_filter)
     }
 
     #[test]
-    fn test_max_limit_constant() {
-        assert_eq!(MAX_LIMIT, 250);
+    fn effective_search_limit_clamps_to_cap() {
+        assert_eq!(effective_search_limit(10), 10);
+        assert_eq!(effective_search_limit(1000), MAX_SEARCH_LIMIT);
+        assert_eq!(effective_search_limit(MAX_SEARCH_LIMIT), MAX_SEARCH_LIMIT);
+        assert_eq!(effective_search_limit(0), 1);
+    }
+
+    #[tokio::test]
+    async fn integ_search_all_honors_limit_on_first_page() {
+        let server = MockServer::start().await;
+        // The `--all` first page must carry the user's clamped limit, not the
+        // hardcoded body cap. limit=10 → query param "10".
+        Mock::given(method("GET"))
+            .and(path("/wiki/rest/api/search"))
+            .and(query_param("limit", "10"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [],
+                "totalSize": 0
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let result = search_all("type = page", 10, None, None, false, false, &client)
+            .await
+            .unwrap();
+        assert_eq!(result["total"], 0);
+    }
+
+    #[tokio::test]
+    async fn integ_get_page_encodes_page_id() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/api/v2/pages/12%20345"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "12 345" })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let result = get_page("12 345", None, None, false, &client)
+            .await
+            .unwrap();
+        assert_eq!(result["id"], "12 345");
+    }
+
+    #[tokio::test]
+    async fn integ_delete_page_encodes_id() {
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/wiki/api/v2/pages/9%2F9"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let result = delete_page("9/9", &client).await.unwrap();
+        assert_eq!(result, json!({}));
     }
 
     #[test]
@@ -531,6 +654,36 @@ mod tests {
         let config = create_test_config(vec![]);
         let result = apply_space_filter("type = page", &config);
         assert_eq!(result, "type = page");
+    }
+
+    #[test]
+    fn test_apply_space_filter_ignores_quoted_keyword() {
+        let config = create_test_config(vec!["SPACE1".to_string()]);
+        // The substring `space =` inside a quoted title must NOT suppress
+        // the filter injection — the regex runs against a masked CQL string.
+        let result = apply_space_filter("title ~ \"space = anywhere\"", &config);
+        assert!(
+            result.starts_with("space IN (\"SPACE1\")"),
+            "filter should be injected, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_apply_space_filter_skips_word_boundary_non_match() {
+        let config = create_test_config(vec!["SPACE1".to_string()]);
+        // `mySpace = X` is not a `space` clause — the word boundary regex
+        // must not treat it as one.
+        let result = apply_space_filter("mySpace = X", &config);
+        assert_eq!(result, "space IN (\"SPACE1\") AND (mySpace = X)");
+    }
+
+    #[test]
+    fn test_apply_space_filter_whitespace_only_cql_collapses_to_bare_filter() {
+        let config = create_test_config(vec!["SPACE1".to_string()]);
+        // Whitespace-only CQL collapses to a bare filter — no dangling
+        // `AND (   )`. Matches the Jira-side behavior in apply_project_filter.
+        let result = apply_space_filter("   ", &config);
+        assert_eq!(result, "space IN (\"SPACE1\")");
     }
 
     #[test]

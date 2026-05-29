@@ -104,6 +104,11 @@ impl OAuthStrategy {
             .context(
                 "OAuth tokens are missing cloud_id. Run `atlassian-cli auth login` to re-discover.",
             )?;
+        // Defense in depth: the cloud_id is interpolated into the proxy path.
+        // Validate here so neither a pinned config value (reached via
+        // `load_without_validation`) nor a tampered `credentials.json` can
+        // smuggle URL structure into the request path.
+        crate::config::validate_cloud_id(&cloud_id)?;
         if tokens.refresh_token.is_none() && tokens.is_expired_with_buffer(0) {
             bail!(
                 "Stored OAuth access_token has expired and no refresh_token is available. Run `atlassian-cli auth login`."

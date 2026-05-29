@@ -3,8 +3,10 @@ pub mod client;
 pub mod config;
 pub mod confluence;
 pub mod filter;
+pub(crate) mod http_utils;
 pub mod jira;
 pub mod markdown;
+pub(crate) mod query_utils;
 
 #[cfg(test)]
 pub mod test_utils;

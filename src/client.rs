@@ -88,6 +88,20 @@ impl ApiClient {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn new_with_strategy(strategy: Arc<dyn AuthStrategy>, config: Config) -> Self {
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_millis(config.performance.request_timeout_ms))
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+            .expect("test http client builds");
+        Self {
+            http,
+            strategy,
+            config,
+        }
+    }
+
     pub fn config(&self) -> &Config {
         &self.config
     }
@@ -117,6 +131,12 @@ impl ApiClient {
         let url = self.strategy.build_url(service, path);
         let header = self.strategy.authorization(&self.http).await?;
         Ok(self.http.put(&url).header("Authorization", header))
+    }
+
+    pub async fn delete(&self, service: Service, path: &str) -> Result<reqwest::RequestBuilder> {
+        let url = self.strategy.build_url(service, path);
+        let header = self.strategy.authorization(&self.http).await?;
+        Ok(self.http.delete(&url).header("Authorization", header))
     }
 
     /// GET for an already-absolute URL (e.g. Confluence pagination `next`).

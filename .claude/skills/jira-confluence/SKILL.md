@@ -1,7 +1,7 @@
 ---
 name: jira-confluence
-version: 0.4.0
-description: Run Jira/Confluence operations through atlassian-cli — JQL/CQL search, issue CRUD, comments, transitions, page CRUD, ADF/HTML body editing. Also handles OAuth sign-in flows (`auth login/status/refresh`) when the user reports an auth problem or asks to switch accounts. Trigger on Jira tickets, Confluence pages, sprint planning, "내 이슈", "위키 검색", or any Atlassian workspace request.
+version: 0.5.0
+description: Run Jira/Confluence operations through atlassian-cli — JQL/CQL search, issue CRUD, comments, transitions, issue links, worklogs, watchers, sprint/board/epic moves, and Confluence page CRUD with ADF/HTML body editing. Also handles OAuth sign-in flows (`auth login/status/refresh`) when the user reports an auth problem or asks to switch accounts. Trigger on Jira tickets, Confluence pages, sprint planning, time logging, "내 이슈", "위키 검색", or any Atlassian workspace request.
 allowed-tools: Bash
 ---
 
@@ -23,8 +23,8 @@ atlassian-cli --pretty confluence search "space = TEAM" --limit 5
 atlassian-cli jira get PROJ-123 --format markdown
 atlassian-cli jira search "assignee = currentUser() AND status != Done" --format markdown --limit 20
 atlassian-cli jira search "project = PROJ" --fields key,summary,status --limit 50
-atlassian-cli jira comments PROJ-123 --format markdown
-atlassian-cli jira transitions PROJ-123          # discover IDs before transition
+atlassian-cli jira comment list PROJ-123 --format markdown
+atlassian-cli jira transition list PROJ-123      # discover IDs before applying
 
 # Large reads — token pagination
 atlassian-cli jira search "project = PROJ" --all --format markdown
@@ -35,8 +35,55 @@ atlassian-cli jira create PROJ "Summary" Bug --description "Plain text"
 atlassian-cli jira update PROJ-123 '{"summary": "New title", "description": "Plain text"}'
 atlassian-cli jira comment add PROJ-123 "Comment text"
 atlassian-cli jira comment update PROJ-123 10042 "Edited comment"
-atlassian-cli jira transition PROJ-123 31
+atlassian-cli jira comment delete PROJ-123 10042
+atlassian-cli jira transition apply PROJ-123 31
+
+# Delete — irreversible (no recycle bin); --yes is mandatory
+atlassian-cli jira delete PROJ-123 --yes
+atlassian-cli jira delete PROJ-123 --yes --delete-subtasks
 ```
+
+### Links, worklogs, watchers
+
+```bash
+# Issue links — `add` takes source then target; source is the OUTWARD side
+# ("A blocks B" → source=A). Discover type names with `link types`.
+atlassian-cli jira link types
+atlassian-cli jira link add PROJ-1 PROJ-2 --type Blocks
+atlassian-cli jira link list PROJ-1
+atlassian-cli jira link remove PROJ-1 PROJ-2 --type Blocks   # by issue pair, not link ID
+
+# Worklogs — time format is "2h 30m" / "1d" / "45m"
+atlassian-cli jira worklog add PROJ-123 "2h 30m" --comment "Investigation"
+atlassian-cli jira worklog list PROJ-123
+
+# Watchers — operate on the signed-in user
+atlassian-cli jira watcher add PROJ-123
+atlassian-cli jira watcher list PROJ-123
+```
+
+### Discovery (global metadata)
+
+```bash
+atlassian-cli jira list types        # issue types — names for `create`
+atlassian-cli jira list priorities   # priority names for `update`
+atlassian-cli jira list statuses     # status names for JQL / transitions
+atlassian-cli jira list labels       # existing labels
+```
+
+### Agile — boards, sprints, epics
+
+```bash
+atlassian-cli jira board list --project PROJ        # find the board id
+atlassian-cli jira sprint list --project PROJ       # auto-resolves the board
+atlassian-cli jira sprint list --board 42 --state active
+atlassian-cli jira sprint move 55 PROJ-1 PROJ-2     # move issues into sprint 55
+atlassian-cli jira sprint backlog PROJ-1            # move back to backlog
+atlassian-cli jira epic assign EPIC-1 PROJ-1 PROJ-2 # attach issues to an epic
+atlassian-cli jira epic unassign PROJ-1             # detach from its epic
+```
+
+Board/sprint commands use the agile API. Pass `--project` to let the CLI resolve the board; if the project has several boards it lists them and asks for `--board`.
 
 ### ADF (rich text — only when plain text isn't enough)
 
@@ -70,6 +117,7 @@ atlassian-cli confluence search "space = TEAM" --all --stream > pages.jsonl
 # Write — HTML storage format required
 atlassian-cli confluence create SPACE "Title" "<p>Content</p>"
 atlassian-cli confluence update 12345 "Title" "<p>Updated</p>"
+atlassian-cli confluence delete 12345 --yes      # moves to trash (recoverable)
 ```
 
 CQL: searching by user requires account IDs or public names — username fields are restricted in Atlassian Cloud.

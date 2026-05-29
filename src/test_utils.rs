@@ -1,9 +1,17 @@
 //! Shared test utilities for all modules
 
 #[cfg(test)]
-use crate::auth::AuthConfig;
+use crate::auth::{AuthConfig, AuthMethod, AuthStrategy};
+#[cfg(test)]
+use crate::client::{ApiClient, Service};
 #[cfg(test)]
 use crate::config::{Config, PerformanceConfig};
+#[cfg(test)]
+use anyhow::Result;
+#[cfg(test)]
+use async_trait::async_trait;
+#[cfg(test)]
+use std::sync::Arc;
 
 /// Creates a test configuration with basic auth defaults
 #[cfg(test)]
@@ -59,6 +67,51 @@ pub fn create_test_config_with_filters(projects: Vec<String>, spaces: Vec<String
     config.jira.projects_filter = projects;
     config.confluence.spaces_filter = spaces;
     config
+}
+
+/// Auth strategy used in tests — routes every request at a fixed base URL.
+/// Pair with `wiremock::MockServer` to drive real HTTP traffic through the
+/// production `ApiClient` and verify request shape end-to-end.
+#[cfg(test)]
+#[derive(Debug)]
+pub struct MockAuthStrategy {
+    base_url: String,
+}
+
+#[cfg(test)]
+impl MockAuthStrategy {
+    pub fn new(base_url: impl Into<String>) -> Self {
+        Self {
+            base_url: base_url.into(),
+        }
+    }
+}
+
+#[cfg(test)]
+#[async_trait]
+impl AuthStrategy for MockAuthStrategy {
+    fn method(&self) -> AuthMethod {
+        AuthMethod::Basic
+    }
+
+    async fn authorization(&self, _http: &reqwest::Client) -> Result<String> {
+        Ok("Bearer test-token".to_string())
+    }
+
+    fn build_url(&self, _service: Service, path: &str) -> String {
+        format!("{}{}", self.base_url, path)
+    }
+
+    fn identity_label(&self) -> String {
+        "mock".to_string()
+    }
+}
+
+/// Build an `ApiClient` that talks to the given mock-server base URL.
+#[cfg(test)]
+pub fn mock_client(base_url: impl Into<String>) -> ApiClient {
+    let strategy: Arc<dyn AuthStrategy> = Arc::new(MockAuthStrategy::new(base_url));
+    ApiClient::new_with_strategy(strategy, create_test_config())
 }
 
 #[cfg(test)]

@@ -75,6 +75,18 @@ Both strategy impls delegate; neither inlines the format string.
   `~/.config/atlassian-cli/credentials.json` (0600, atomic via tempfile).
   `load` returns `LoadedTokens { tokens, backend }` so callers report
   provenance without a second store query. Per-profile keyed.
+  `ATLASSIAN_NO_KEYCHAIN` (truthy) bypasses the keychain entirely — `keyring_op`
+  short-circuits to `NoEntry` so all three ops fall through to the file store.
+  This is for headless / AI-agent sessions on a desktop OS where the keychain
+  prompts with a blocking GUI dialog. Explicit opt-out only; no auto-detection.
+  **It is a per-environment setting, not a per-call toggle.** Because the flag
+  forbids touching the keychain, `save`/`delete` cannot clear a token that a
+  prior keychain login left behind: toggling the flag off later lets `load`
+  resurrect that stale keychain token (keychain is read first), and `auth
+  logout` while the flag is set clears only the file store. If you ever logged
+  in with the keychain, run `auth logout` **without** the flag once to clear it
+  before adopting the opt-out. This is inherent to "never touch the keychain" —
+  not a bug to patch by re-introducing the blocking keychain call.
 - `strategy.rs` holds the `OAuthStrategy`. `tokens: Mutex<TokenSet>` so
   concurrent callers serialize on refresh — at most one token-endpoint
   round trip when the cache is stale. Refresh tokens **rotate** on every

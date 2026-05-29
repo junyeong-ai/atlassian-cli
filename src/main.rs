@@ -96,11 +96,13 @@ struct JiraCommand {
 
 #[derive(Subcommand)]
 enum JiraSubcommand {
+    /// Fetch a single issue by key (fields filtered, ADF rendered)
     Get {
         issue_key: String,
         #[arg(long, value_enum, default_value = "html", help = "ADF content format")]
         format: OutputFormat,
     },
+    /// Search issues with JQL; the configured project filter is auto-injected
     Search {
         jql: String,
         #[arg(long, default_value = "100", help = "Results per page")]
@@ -114,6 +116,7 @@ enum JiraSubcommand {
         #[arg(long, value_enum, default_value = "html", help = "ADF content format")]
         format: OutputFormat,
     },
+    /// Create an issue (plain-text description auto-converts to ADF)
     Create {
         project: String,
         summary: String,
@@ -121,38 +124,260 @@ enum JiraSubcommand {
         #[arg(long)]
         description: Option<String>,
     },
-    Update {
+    /// Update an issue's fields from a JSON object (e.g. '{"summary":"..."}')
+    Update { issue_key: String, fields: String },
+    /// Permanently delete an issue (irreversible — requires --yes)
+    Delete {
         issue_key: String,
-        fields: String,
+        /// Confirm the irreversible deletion
+        #[arg(long)]
+        yes: bool,
+        /// Also delete subtasks (Jira rejects the call otherwise when present)
+        #[arg(long)]
+        delete_subtasks: bool,
     },
+    /// Add, update, or list comments on an issue
     Comment {
         #[command(subcommand)]
         action: CommentAction,
     },
+    /// Apply or list workflow transitions for an issue
     Transition {
-        issue_key: String,
-        transition_id: String,
+        #[command(subcommand)]
+        action: TransitionAction,
     },
-    Transitions {
-        issue_key: String,
+    /// Create, remove, or list issue links (and list link types)
+    Link {
+        #[command(subcommand)]
+        action: LinkAction,
     },
-    Comments {
-        issue_key: String,
-        #[arg(long, value_enum, default_value = "html", help = "ADF content format")]
-        format: OutputFormat,
+    /// Add, update, list, or remove worklog (time-tracking) entries
+    Worklog {
+        #[command(subcommand)]
+        action: WorklogAction,
+    },
+    /// Start watching, stop watching, or list watchers on an issue
+    Watcher {
+        #[command(subcommand)]
+        action: WatcherAction,
+    },
+    /// Query global metadata (issue types, priorities, statuses, labels)
+    List {
+        #[command(subcommand)]
+        action: ListAction,
+    },
+    /// List agile boards for a project
+    Board {
+        #[command(subcommand)]
+        action: BoardAction,
+    },
+    /// List sprints, or move issues between a sprint and the backlog
+    Sprint {
+        #[command(subcommand)]
+        action: SprintAction,
+    },
+    /// Assign issues to an epic, or remove them from their epics
+    Epic {
+        #[command(subcommand)]
+        action: EpicAction,
     },
 }
 
 #[derive(Subcommand)]
 enum CommentAction {
-    Add {
-        issue_key: String,
-        text: String,
-    },
+    /// Add a comment to an issue
+    Add { issue_key: String, text: String },
+    /// Update an existing comment
     Update {
         issue_key: String,
         comment_id: String,
         text: String,
+    },
+    /// List comments on an issue
+    List {
+        issue_key: String,
+        #[arg(long, value_enum, default_value = "html", help = "ADF content format")]
+        format: OutputFormat,
+    },
+    /// Delete a comment by id
+    Delete {
+        issue_key: String,
+        comment_id: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum TransitionAction {
+    /// Apply a transition to an issue
+    Apply {
+        issue_key: String,
+        transition_id: String,
+    },
+    /// List available transitions for an issue
+    List { issue_key: String },
+}
+
+#[derive(Subcommand)]
+enum LinkAction {
+    /// List available link types
+    Types,
+    /// Create a link between two issues
+    Add {
+        /// Source issue key (outward side: "A blocks B" → A)
+        source: String,
+        /// Target issue key (inward side: "A blocks B" → B)
+        target: String,
+        /// Link type name
+        #[arg(long = "type", default_value = "Relates")]
+        link_type: String,
+        /// Comment to add with the link
+        #[arg(long)]
+        comment: Option<String>,
+    },
+    /// Remove a link between two issues
+    Remove {
+        /// Source issue key
+        source: String,
+        /// Target issue key
+        target: String,
+        /// Link type (required when multiple link types exist between the pair)
+        #[arg(long = "type")]
+        link_type: Option<String>,
+    },
+    /// List links on an issue
+    List {
+        /// Issue key
+        issue_key: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum WorklogAction {
+    /// Add a worklog entry to an issue
+    Add {
+        /// Issue key
+        issue_key: String,
+        /// Time spent (e.g., "2h 30m", "1d", "45m")
+        time_spent: String,
+        /// Comment describing the work
+        #[arg(long)]
+        comment: Option<String>,
+        /// Start time in ISO 8601 format (defaults to now)
+        #[arg(long)]
+        started: Option<String>,
+    },
+    /// List worklog entries on an issue
+    List {
+        /// Issue key
+        issue_key: String,
+    },
+    /// Update a worklog entry
+    Update {
+        /// Issue key
+        issue_key: String,
+        /// Worklog ID
+        worklog_id: String,
+        /// New time spent
+        time_spent: String,
+        /// Updated comment
+        #[arg(long)]
+        comment: Option<String>,
+    },
+    /// Remove a worklog entry
+    Remove {
+        /// Issue key
+        issue_key: String,
+        /// Worklog ID
+        worklog_id: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum WatcherAction {
+    /// Start watching an issue (adds current user)
+    Add {
+        /// Issue key
+        issue_key: String,
+    },
+    /// Stop watching an issue (removes current user)
+    Remove {
+        /// Issue key
+        issue_key: String,
+    },
+    /// List watchers on an issue
+    List {
+        /// Issue key
+        issue_key: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ListAction {
+    /// List available issue types
+    Types,
+    /// List available priorities
+    Priorities,
+    /// List available statuses
+    Statuses,
+    /// List available labels
+    Labels,
+}
+
+#[derive(Subcommand)]
+enum BoardAction {
+    /// List boards for a project
+    List {
+        /// Project key or ID
+        #[arg(long)]
+        project: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum SprintAction {
+    /// List sprints on a board
+    List {
+        /// Board ID
+        #[arg(long, group = "board_source")]
+        board: Option<u64>,
+        /// Project key (auto-resolves board)
+        #[arg(long, group = "board_source")]
+        project: Option<String>,
+        /// Sprint state filter
+        #[arg(long, default_value = "active,future")]
+        state: String,
+    },
+    /// Move issues to a sprint
+    Move {
+        /// Sprint ID
+        sprint_id: u64,
+        /// Issue keys to move
+        #[arg(required = true)]
+        issues: Vec<String>,
+    },
+    /// Move issues to the backlog
+    Backlog {
+        /// Issue keys to move
+        #[arg(required = true)]
+        issues: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum EpicAction {
+    /// Assign issues to an epic
+    Assign {
+        /// Epic issue key
+        epic_key: String,
+        /// Issue keys to assign
+        #[arg(required = true)]
+        issues: Vec<String>,
+    },
+    /// Remove issues from their epics
+    Unassign {
+        /// Issue keys to unassign
+        #[arg(required = true)]
+        issues: Vec<String>,
     },
 }
 
@@ -164,12 +389,13 @@ struct ConfluenceCommand {
 
 #[derive(Subcommand)]
 enum ConfluenceSubcommand {
+    /// Search pages with CQL; the configured space filter is auto-injected
     Search {
         query: String,
         #[arg(
             long,
             default_value = "10",
-            help = "Results per page (max 250). With --all, controls batch size"
+            help = "Results per page (capped at 50 by the body-expanding search API). With --all, controls first-page batch size"
         )]
         limit: u32,
         #[arg(long, help = "Fetch all results via cursor pagination")]
@@ -185,28 +411,38 @@ enum ConfluenceSubcommand {
         #[arg(long, value_enum, default_value = "html", help = "Body content format")]
         format: OutputFormat,
     },
+    /// Fetch a single page by ID (body rendered as HTML or markdown)
     Get {
         page_id: String,
         #[arg(long, value_enum, default_value = "html", help = "Body content format")]
         format: OutputFormat,
     },
+    /// Create a page from storage-format HTML content
     Create {
         space: String,
         title: String,
         content: String,
     },
+    /// Update a page's title and storage-format HTML content
     Update {
         page_id: String,
         title: String,
         content: String,
     },
-    Children {
-        page_id: String,
-    },
+    /// List the direct child pages of a page (metadata only)
+    Children { page_id: String },
+    /// List comments on a page
     Comments {
         page_id: String,
         #[arg(long, value_enum, default_value = "html", help = "Body content format")]
         format: OutputFormat,
+    },
+    /// Move a page to the trash (recoverable — requires --yes)
+    Delete {
+        page_id: String,
+        /// Confirm the deletion
+        #[arg(long)]
+        yes: bool,
     },
 }
 
@@ -492,6 +728,19 @@ async fn handle_jira(
             })?;
             jira::update_issue(&issue_key, fields_value, client).await
         }
+        JiraSubcommand::Delete {
+            issue_key,
+            yes,
+            delete_subtasks,
+        } => {
+            if !yes {
+                anyhow::bail!(
+                    "Deleting {} is irreversible (Jira has no recycle bin for issues). Re-run with --yes to confirm.",
+                    issue_key
+                );
+            }
+            jira::delete_issue(&issue_key, delete_subtasks, client).await
+        }
         JiraSubcommand::Comment { action } => match action {
             CommentAction::Add { issue_key, text } => {
                 jira::add_comment(&issue_key, serde_json::Value::String(text), client).await
@@ -509,18 +758,123 @@ async fn handle_jira(
                 )
                 .await
             }
+            CommentAction::List { issue_key, format } => {
+                let as_markdown = matches!(format, OutputFormat::Markdown);
+                jira::get_comments(&issue_key, as_markdown, client).await
+            }
+            CommentAction::Delete {
+                issue_key,
+                comment_id,
+            } => jira::delete_comment(&issue_key, &comment_id, client).await,
         },
-        JiraSubcommand::Transition {
-            issue_key,
-            transition_id,
-        } => jira::transition_issue(&issue_key, &transition_id, client).await,
-        JiraSubcommand::Transitions { issue_key } => {
-            jira::get_transitions(&issue_key, client).await
-        }
-        JiraSubcommand::Comments { issue_key, format } => {
-            let as_markdown = matches!(format, OutputFormat::Markdown);
-            jira::get_comments(&issue_key, as_markdown, client).await
-        }
+        JiraSubcommand::Transition { action } => match action {
+            TransitionAction::Apply {
+                issue_key,
+                transition_id,
+            } => jira::transition_issue(&issue_key, &transition_id, client).await,
+            TransitionAction::List { issue_key } => jira::get_transitions(&issue_key, client).await,
+        },
+        JiraSubcommand::Link { action } => match action {
+            LinkAction::Types => jira::get_link_types(client).await,
+            LinkAction::Add {
+                source,
+                target,
+                link_type,
+                comment,
+            } => {
+                let comment_val = comment
+                    .map(serde_json::Value::String)
+                    .unwrap_or(serde_json::Value::Null);
+                jira::add_link(&source, &target, &link_type, comment_val, client).await
+            }
+            LinkAction::Remove {
+                source,
+                target,
+                link_type,
+            } => jira::remove_link(&source, &target, link_type.as_deref(), client).await,
+            LinkAction::List { issue_key } => jira::get_links(&issue_key, client).await,
+        },
+        JiraSubcommand::Worklog { action } => match action {
+            WorklogAction::Add {
+                issue_key,
+                time_spent,
+                comment,
+                started,
+            } => {
+                let comment_val = comment
+                    .map(serde_json::Value::String)
+                    .unwrap_or(serde_json::Value::Null);
+                jira::add_worklog(
+                    &issue_key,
+                    &time_spent,
+                    comment_val,
+                    started.as_deref(),
+                    client,
+                )
+                .await
+            }
+            WorklogAction::List { issue_key } => jira::get_worklogs(&issue_key, client).await,
+            WorklogAction::Update {
+                issue_key,
+                worklog_id,
+                time_spent,
+                comment,
+            } => {
+                let comment_val = comment
+                    .map(serde_json::Value::String)
+                    .unwrap_or(serde_json::Value::Null);
+                jira::update_worklog(&issue_key, &worklog_id, &time_spent, comment_val, client)
+                    .await
+            }
+            WorklogAction::Remove {
+                issue_key,
+                worklog_id,
+            } => jira::remove_worklog(&issue_key, &worklog_id, client).await,
+        },
+        JiraSubcommand::Watcher { action } => match action {
+            WatcherAction::Add { issue_key } => jira::add_watcher(&issue_key, client).await,
+            WatcherAction::Remove { issue_key } => jira::remove_watcher(&issue_key, client).await,
+            WatcherAction::List { issue_key } => jira::get_watchers(&issue_key, client).await,
+        },
+        JiraSubcommand::List { action } => match action {
+            ListAction::Types => jira::get_issue_types(client).await,
+            ListAction::Priorities => jira::get_priorities(client).await,
+            ListAction::Statuses => jira::get_statuses(client).await,
+            ListAction::Labels => jira::get_labels(client).await,
+        },
+        JiraSubcommand::Board { action } => match action {
+            BoardAction::List { project } => jira::get_boards(&project, client).await,
+        },
+        JiraSubcommand::Sprint { action } => match action {
+            SprintAction::List {
+                board,
+                project,
+                state,
+            } => {
+                let board_id = match board {
+                    Some(id) => id,
+                    None => {
+                        let project_key = project.ok_or_else(|| {
+                            anyhow::anyhow!("Either --board or --project is required")
+                        })?;
+                        jira::resolve_board_id(&project_key, client).await?
+                    }
+                };
+                jira::get_sprints(board_id, &state, client).await
+            }
+            SprintAction::Move { sprint_id, issues } => {
+                jira::move_issues_to_sprint(sprint_id, &issues, client).await
+            }
+            SprintAction::Backlog { issues } => jira::move_issues_to_backlog(&issues, client).await,
+        },
+        JiraSubcommand::Epic { action } => match action {
+            EpicAction::Assign { epic_key, issues } => {
+                jira::assign_issues_to_epic(&epic_key, &issues, client).await
+            }
+            EpicAction::Unassign { issues } => {
+                jira::unassign_issues_from_epic(&issues, client).await
+            }
+        },
     }
 }
 
@@ -544,7 +898,8 @@ async fn handle_confluence(
             }
             let as_markdown = matches!(format, OutputFormat::Markdown);
             if all {
-                confluence::search_all(&query, None, expand, stream, as_markdown, client).await
+                confluence::search_all(&query, limit, None, expand, stream, as_markdown, client)
+                    .await
             } else {
                 confluence::search(&query, limit, None, expand, as_markdown, client).await
             }
@@ -569,6 +924,15 @@ async fn handle_confluence(
         ConfluenceSubcommand::Comments { page_id, format } => {
             let as_markdown = matches!(format, OutputFormat::Markdown);
             confluence::get_comments(&page_id, as_markdown, client).await
+        }
+        ConfluenceSubcommand::Delete { page_id, yes } => {
+            if !yes {
+                anyhow::bail!(
+                    "Deleting page {} moves it to the trash. Re-run with --yes to confirm.",
+                    page_id
+                );
+            }
+            confluence::delete_page(&page_id, client).await
         }
     }
 }

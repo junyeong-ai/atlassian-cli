@@ -3,7 +3,7 @@
 [![CI](https://github.com/junyeong-ai/atlassian-cli/workflows/CI/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/ci.yml)
 [![Security](https://github.com/junyeong-ai/atlassian-cli/workflows/Security/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/security.yml)
 [![Rust](https://img.shields.io/badge/rust-1.95.0%2B%20(2024%20edition)-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.4.0-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
+[![Version](https://img.shields.io/badge/version-0.5.0-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
 
 > **🌐 한국어** | **[English](README.en.md)**
 
@@ -43,15 +43,26 @@ atlassian-cli jira search "project = PROJ" --limit 5
 atlassian-cli jira get PROJ-123 --format markdown
 atlassian-cli jira search "assignee = currentUser()" --limit 10
 atlassian-cli jira search "project = PROJ" --all --stream > issues.jsonl
-atlassian-cli jira comments PROJ-123 --format markdown
-atlassian-cli jira transitions PROJ-123
+atlassian-cli jira comment list PROJ-123 --format markdown
+atlassian-cli jira transition list PROJ-123
 
 # 쓰기 (plain text는 자동으로 ADF로 변환됨)
 atlassian-cli jira create PROJ "Summary" Bug --description "Plain text"
 atlassian-cli jira update PROJ-123 '{"summary":"New title"}'
 atlassian-cli jira comment add PROJ-123 "Comment"
 atlassian-cli jira comment update PROJ-123 10042 "Edited"
-atlassian-cli jira transition PROJ-123 31
+atlassian-cli jira transition apply PROJ-123 31
+atlassian-cli jira delete PROJ-123 --yes          # 영구 삭제 (--yes 필수)
+
+# 링크 · 작업시간 · 와처
+atlassian-cli jira link add PROJ-1 PROJ-2 --type Blocks
+atlassian-cli jira worklog add PROJ-123 "2h 30m" --comment "조사"
+atlassian-cli jira watcher add PROJ-123
+
+# 애자일 — 보드 · 스프린트 · 에픽
+atlassian-cli jira sprint list --project PROJ
+atlassian-cli jira sprint move 55 PROJ-1 PROJ-2
+atlassian-cli jira epic assign EPIC-1 PROJ-1
 ```
 
 ### Confluence
@@ -86,7 +97,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scri
 
 ```bash
 # 특정 릴리스 설치
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.4.0 bash
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.5.0 bash
 
 # 제거 (비대화형 기본값은 바이너리만 제거하고 skill/config는 보존)
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/uninstall.sh | bash
@@ -136,8 +147,13 @@ redirect_port = 8976       # OAuth app 에 등록한 redirect URI 와 일치 (12
 #   scopes = ["read:jira-user", "read:jira-work", "write:jira-work",
 #             "read:confluence-content.all", "read:confluence-space.summary",
 #             "write:confluence-content", "offline_access"]
+# board/sprint/epic (애자일) 명령은 기본 scope 로 부족함 — Jira Software scope 추가 필요:
+#   "read:board-scope:jira-software", "read:sprint:jira-software",
+#   "write:sprint:jira-software", "read:epic:jira-software"
 # cloud_id = "..."   # 여러 site 접근 가능할 때 1개로 고정
 ```
+
+> **헤드리스 / AI 에이전트**: 데스크톱 OS 에서 키체인이 GUI 프롬프트로 블로킹될 수 있습니다. `ATLASSIAN_NO_KEYCHAIN=1` 을 설정하면 키체인을 건너뛰고 0600 파일 저장소를 사용합니다. 환경 단위 설정으로 쓰세요(켰다 껐다 X) — 플래그가 켜진 동안 `auth logout`은 파일만 지웁니다. 이전에 키체인으로 로그인한 적이 있으면 플래그 없이 `auth logout`을 한 번 실행해 키체인을 비우세요.
 
 ```bash
 atlassian-cli auth login         # 브라우저 열림 → Atlassian 로그인 → 자동 토큰 저장
@@ -211,6 +227,8 @@ token = "..."
 
 사용: `atlassian-cli --profile work ...`
 
+**Classic ↔ Granular scope 분리**: 한 OAuth 토큰은 classic과 granular scope를 혼용할 수 없습니다(Atlassian 규칙). 두 모델을 모두 쓰려면 **모델별로 프로파일을 나누고** `--profile`로 선택하세요. `scopes`는 자유 목록이라 앱이 부여한 무엇이든 넣을 수 있습니다. 예: classic `default`(core Jira) + granular `agile`(board/sprint/epic). 각 프로파일은 자체 토큰을 저장하므로 프로파일마다 `auth login` 합니다. granular는 **완전한 세트**여야 하며(빠진 scope는 해당 명령이 401), 정확한 문자열은 developer.atlassian.com 앱 Permissions에서 복사하세요.
+
 ### 우선순위
 
 필드 단위 우선순위는 `CLI 플래그 > 환경 변수 > --config 파일 > 프로젝트 설정 > 글로벌 설정`입니다. `ATLASSIAN_AUTH_METHOD` 환경 변수는 설정 파일의 method를 덮어씁니다 (새 method의 자격증명이 env/CLI로 제공되어야 함).
@@ -269,11 +287,20 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 | `search <JQL>` | JQL 검색 |
 | `create <PROJECT> <SUMMARY> <TYPE>` | 이슈 생성 |
 | `update <KEY> <JSON>` | 이슈 수정 |
+| `delete <KEY> --yes [--delete-subtasks]` | 이슈 영구 삭제 (비가역) |
 | `comment add <KEY> <TEXT>` | 댓글 추가 |
 | `comment update <KEY> <COMMENT_ID> <TEXT>` | 댓글 수정 |
-| `comments <KEY>` | 댓글 목록 |
-| `transitions <KEY>` | 전환 목록 |
-| `transition <KEY> <ID>` | 상태 전환 |
+| `comment list <KEY>` | 댓글 목록 |
+| `comment delete <KEY> <COMMENT_ID>` | 댓글 삭제 |
+| `transition list <KEY>` | 전환 목록 |
+| `transition apply <KEY> <ID>` | 상태 전환 |
+| `link add/remove/list <KEY...>`, `link types` | 이슈 링크 |
+| `worklog add/list/update/remove <KEY> ...` | 작업시간 기록 |
+| `watcher add/remove/list <KEY>` | 와처 |
+| `list types/priorities/statuses/labels` | 전역 메타데이터 조회 |
+| `board list --project <KEY>` | 애자일 보드 목록 |
+| `sprint list/move/backlog ...` | 스프린트 / 백로그 이동 |
+| `epic assign/unassign <EPIC> <KEY...>` | 에픽 연결 / 해제 |
 
 ### Confluence
 | 명령어 | 설명 |
@@ -282,6 +309,7 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 | `get <ID>` | 페이지 조회 |
 | `create <SPACE> <TITLE> <CONTENT>` | 페이지 생성 (HTML) |
 | `update <ID> <TITLE> <CONTENT>` | 페이지 수정 (HTML) |
+| `delete <ID> --yes` | 페이지 삭제 (휴지통) |
 | `children <ID>` | 하위 페이지 |
 | `comments <ID>` | 댓글 조회 |
 
