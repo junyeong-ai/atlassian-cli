@@ -74,7 +74,7 @@ jobs:
         with:
           key: ${{ matrix.os }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@184183c2401be73c3bf42c2e61268aa5855379c1 # v2.78.1
+      - uses: taiki-e/install-action@e49978b799e49ff429d162b7a30601a569ab6538 # v2.81.1
         with:
           tool: cargo-nextest
       - name: Unit + integration tests
@@ -114,7 +114,7 @@ jobs:
         with:
           key: coverage
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@184183c2401be73c3bf42c2e61268aa5855379c1 # v2.78.1
+      - uses: taiki-e/install-action@e49978b799e49ff429d162b7a30601a569ab6538 # v2.81.1
         with:
           tool: cargo-llvm-cov,cargo-nextest
       - name: Generate LCOV report
@@ -124,7 +124,7 @@ jobs:
             --lcov --output-path lcov.info \
             --locked
       - name: Upload to Codecov
-        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
+        uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354 # v6.0.1
         with:
           files: lcov.info
           fail_ci_if_error: false
