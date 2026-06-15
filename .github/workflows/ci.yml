@@ -23,7 +23,7 @@ env:
   RUSTFLAGS: -D warnings
   RUSTDOCFLAGS: -D warnings
   RUSTUP_MAX_RETRIES: 10
-  RUST_TOOLCHAIN: 1.95.0
+  RUST_TOOLCHAIN: 1.96.0
 
 jobs:
   fmt:

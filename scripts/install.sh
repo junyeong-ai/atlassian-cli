@@ -187,8 +187,8 @@ cargo_build_release() {
         return 1
     fi
 
-    if cargo +1.95.0 --version >/dev/null 2>&1; then
-        cargo +1.95.0 build --release
+    if cargo +1.96.0 --version >/dev/null 2>&1; then
+        cargo +1.96.0 build --release
     else
         cargo build --release
     fi

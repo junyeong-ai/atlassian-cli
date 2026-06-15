@@ -5,7 +5,7 @@ Rust 2024 edition, single binary. CLI for Atlassian Cloud (Jira + Confluence).
 ## Build / test / lint
 
 ```bash
-cargo +1.95.0 build --release   # production binary at target/release/atlassian-cli
+cargo +1.96.0 build --release   # production binary at target/release/atlassian-cli
 cargo test                      # unit tests
 cargo clippy                    # lint; CI requires zero warnings
 cargo fmt                       # format; CI enforces rustfmt
