@@ -149,12 +149,23 @@ download_binary() {
         return 1
     fi
 
+    local expected_sum
+    local actual_sum
+    expected_sum=$(awk 'NR==1 {print $1}' "$BINARY_TMP_DIR/${archive}.sha256")
+
     if command -v sha256sum >/dev/null; then
-        (cd "$BINARY_TMP_DIR" && sha256sum -c "${archive}.sha256") >&2 || return 1
+        actual_sum=$(cd "$BINARY_TMP_DIR" && sha256sum "$archive" | awk '{print $1}')
     elif command -v shasum >/dev/null; then
-        (cd "$BINARY_TMP_DIR" && shasum -a 256 -c "${archive}.sha256") >&2 || return 1
+        actual_sum=$(cd "$BINARY_TMP_DIR" && shasum -a 256 "$archive" | awk '{print $1}')
     else
         echo "No checksum tool found (need sha256sum or shasum)" >&2
+        return 1
+    fi
+
+    if [ -z "$expected_sum" ] || [ "$expected_sum" != "$actual_sum" ]; then
+        echo "Checksum verification failed for $archive" >&2
+        echo "  expected: ${expected_sum:-<none>}" >&2
+        echo "  actual:   ${actual_sum:-<none>}" >&2
         return 1
     fi
 

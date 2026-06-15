@@ -90,10 +90,14 @@ jobs:
         run: |
           set -euo pipefail
           asset="${{ steps.pkg.outputs.asset }}"
+          dir="$(dirname "$asset")"
+          base="$(basename "$asset")"
+          # Run from the asset's directory so the checksum file records the bare
+          # filename (no "dist/" prefix); install.sh downloads to a flat temp dir.
           if command -v sha256sum >/dev/null; then
-            sha256sum "$asset" > "${asset}.sha256"
+            (cd "$dir" && sha256sum "$base" > "${base}.sha256")
           else
-            shasum -a 256 "$asset" > "${asset}.sha256"
+            (cd "$dir" && shasum -a 256 "$base" > "${base}.sha256")
           fi
 
       - name: Attest build provenance
