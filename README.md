@@ -3,7 +3,7 @@
 [![CI](https://github.com/junyeong-ai/atlassian-cli/workflows/CI/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/ci.yml)
 [![Security](https://github.com/junyeong-ai/atlassian-cli/workflows/Security/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/security.yml)
 [![Rust](https://img.shields.io/badge/rust-1.96.0%2B%20(2024%20edition)-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.5.1-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
+[![Version](https://img.shields.io/badge/version-0.6.0-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
 
 > **🌐 한국어** | **[English](README.en.md)**
 
@@ -71,11 +71,22 @@ atlassian-cli jira epic assign EPIC-1 PROJ-1
 atlassian-cli confluence search "space = TEAM" --limit 10
 atlassian-cli confluence get 123456 --format markdown
 atlassian-cli confluence children 123456
-atlassian-cli confluence comments 123456 --format markdown
+atlassian-cli confluence comment list 123456 --format markdown
 
-# 쓰기 (HTML storage format)
+# 페이지 (HTML storage format)
 atlassian-cli confluence create TEAM "Title" "<p>Content</p>"
 atlassian-cli confluence update 123456 "Title" "<p>Updated</p>"
+atlassian-cli confluence delete 123456 --yes              # 휴지통 (--yes 필수)
+
+# 댓글 · 라벨 · 콘텐츠 속성
+atlassian-cli confluence comment add 123456 "<p>리뷰 완료</p>"
+atlassian-cli confluence comment add 123456 "<p>답글</p>" --reply-to 67890
+atlassian-cli confluence label add 123456 needs-review
+atlassian-cli confluence property set 123456 review '{"status":"done"}'
+
+# 스페이스 · 첨부
+atlassian-cli confluence space list
+atlassian-cli confluence attachment upload 123456 ./diagram.png
 ```
 
 ### 공통
@@ -97,7 +108,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scri
 
 ```bash
 # 특정 릴리스 설치
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.5.1 bash
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.6.0 bash
 
 # 제거 (비대화형 기본값은 바이너리만 제거하고 skill/config는 보존)
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/uninstall.sh | bash
@@ -311,7 +322,11 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 | `update <ID> <TITLE> <CONTENT>` | 페이지 수정 (HTML) |
 | `delete <ID> --yes` | 페이지 삭제 (휴지통) |
 | `children <ID>` | 하위 페이지 |
-| `comments <ID>` | 댓글 조회 |
+| `comment list/add/update/delete ...` | footer 댓글 (`add`은 page id·`--reply-to`, `update`/`delete`는 comment id) |
+| `label list/add/remove <ID> [LABEL]` | 페이지 라벨 |
+| `property list/set/delete <ID> [KEY] [JSON]` | 콘텐츠 속성 (값은 strict JSON) |
+| `space list`, `space get <KEY>` | 스페이스 조회 |
+| `attachment list <ID>`, `attachment upload <ID> <FILE>` | 첨부 조회 / 업로드 |
 
 ### Config
 | 명령어 | 설명 |

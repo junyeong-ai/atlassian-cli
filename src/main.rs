@@ -431,11 +431,30 @@ enum ConfluenceSubcommand {
     },
     /// List the direct child pages of a page (metadata only)
     Children { page_id: String },
-    /// List comments on a page
-    Comments {
-        page_id: String,
-        #[arg(long, value_enum, default_value = "html", help = "Body content format")]
-        format: OutputFormat,
+    /// List, add, update, or delete footer comments on a page
+    Comment {
+        #[command(subcommand)]
+        action: ConfluenceCommentAction,
+    },
+    /// List, add, or remove labels on a page
+    Label {
+        #[command(subcommand)]
+        action: ConfluenceLabelAction,
+    },
+    /// List, set, or delete content properties (structured JSON metadata) on a page
+    Property {
+        #[command(subcommand)]
+        action: ConfluencePropertyAction,
+    },
+    /// List spaces, or fetch a single space by key
+    Space {
+        #[command(subcommand)]
+        action: ConfluenceSpaceAction,
+    },
+    /// List attachments on a page, or upload a file
+    Attachment {
+        #[command(subcommand)]
+        action: ConfluenceAttachmentAction,
     },
     /// Move a page to the trash (recoverable — requires --yes)
     Delete {
@@ -443,6 +462,84 @@ enum ConfluenceSubcommand {
         /// Confirm the deletion
         #[arg(long)]
         yes: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfluenceCommentAction {
+    /// List footer comments on a page
+    List {
+        page_id: String,
+        #[arg(long, value_enum, default_value = "html", help = "Body content format")]
+        format: OutputFormat,
+    },
+    /// Add a footer comment to a page (storage-format HTML body)
+    Add {
+        page_id: String,
+        /// Comment body (storage-format HTML; plain text is valid too)
+        body: String,
+        /// Reply to an existing comment instead of posting a top-level one
+        #[arg(long = "reply-to")]
+        reply_to: Option<String>,
+    },
+    /// Update a footer comment's body
+    Update {
+        comment_id: String,
+        /// New comment body (storage-format HTML)
+        body: String,
+    },
+    /// Delete a footer comment by id
+    Delete { comment_id: String },
+}
+
+#[derive(Subcommand)]
+enum ConfluenceLabelAction {
+    /// List labels on a page
+    List { page_id: String },
+    /// Add a label to a page
+    Add { page_id: String, label: String },
+    /// Remove a label from a page
+    Remove { page_id: String, label: String },
+}
+
+#[derive(Subcommand)]
+enum ConfluencePropertyAction {
+    /// List content properties on a page
+    List { page_id: String },
+    /// Create or update a content property (value is a JSON literal)
+    Set {
+        page_id: String,
+        key: String,
+        /// Property value as a JSON literal (e.g. '{"state":"done"}', '42', '"text"')
+        value: String,
+    },
+    /// Delete a content property by key
+    Delete { page_id: String, key: String },
+}
+
+#[derive(Subcommand)]
+enum ConfluenceSpaceAction {
+    /// List spaces visible to you
+    List,
+    /// Get a single space by key
+    Get { space_key: String },
+}
+
+#[derive(Subcommand)]
+enum ConfluenceAttachmentAction {
+    /// List attachments on a page
+    List { page_id: String },
+    /// Upload a local file as an attachment (creates, or versions by filename)
+    Upload {
+        page_id: String,
+        /// Path to the local file to upload
+        file: String,
+        /// Optional version comment recorded with the upload
+        #[arg(long)]
+        comment: Option<String>,
+        /// Mark as a minor edit (suppresses watcher notifications on re-upload)
+        #[arg(long)]
+        minor: bool,
     },
 }
 
@@ -921,10 +1018,75 @@ async fn handle_confluence(
         ConfluenceSubcommand::Children { page_id } => {
             confluence::get_page_children(&page_id, client).await
         }
-        ConfluenceSubcommand::Comments { page_id, format } => {
-            let as_markdown = matches!(format, OutputFormat::Markdown);
-            confluence::get_comments(&page_id, as_markdown, client).await
-        }
+        ConfluenceSubcommand::Comment { action } => match action {
+            ConfluenceCommentAction::List { page_id, format } => {
+                let as_markdown = matches!(format, OutputFormat::Markdown);
+                confluence::get_comments(&page_id, as_markdown, client).await
+            }
+            ConfluenceCommentAction::Add {
+                page_id,
+                body,
+                reply_to,
+            } => confluence::add_comment(&page_id, &body, reply_to.as_deref(), client).await,
+            ConfluenceCommentAction::Update { comment_id, body } => {
+                confluence::update_comment(&comment_id, &body, client).await
+            }
+            ConfluenceCommentAction::Delete { comment_id } => {
+                confluence::delete_comment(&comment_id, client).await
+            }
+        },
+        ConfluenceSubcommand::Label { action } => match action {
+            ConfluenceLabelAction::List { page_id } => {
+                confluence::get_labels(&page_id, client).await
+            }
+            ConfluenceLabelAction::Add { page_id, label } => {
+                confluence::add_label(&page_id, &label, client).await
+            }
+            ConfluenceLabelAction::Remove { page_id, label } => {
+                confluence::remove_label(&page_id, &label, client).await
+            }
+        },
+        ConfluenceSubcommand::Property { action } => match action {
+            ConfluencePropertyAction::List { page_id } => {
+                confluence::get_properties(&page_id, client).await
+            }
+            ConfluencePropertyAction::Set {
+                page_id,
+                key,
+                value,
+            } => {
+                let parsed: serde_json::Value = serde_json::from_str(&value).map_err(|e| {
+                    anyhow::anyhow!(
+                        "value must be valid JSON (quote strings, e.g. '\"done\"'): {}",
+                        e
+                    )
+                })?;
+                confluence::set_property(&page_id, &key, parsed, client).await
+            }
+            ConfluencePropertyAction::Delete { page_id, key } => {
+                confluence::delete_property(&page_id, &key, client).await
+            }
+        },
+        ConfluenceSubcommand::Space { action } => match action {
+            ConfluenceSpaceAction::List => confluence::get_spaces(client).await,
+            ConfluenceSpaceAction::Get { space_key } => {
+                confluence::get_space(&space_key, client).await
+            }
+        },
+        ConfluenceSubcommand::Attachment { action } => match action {
+            ConfluenceAttachmentAction::List { page_id } => {
+                confluence::get_attachments(&page_id, client).await
+            }
+            ConfluenceAttachmentAction::Upload {
+                page_id,
+                file,
+                comment,
+                minor,
+            } => {
+                confluence::upload_attachment(&page_id, &file, comment.as_deref(), minor, client)
+                    .await
+            }
+        },
         ConfluenceSubcommand::Delete { page_id, yes } => {
             if !yes {
                 anyhow::bail!(

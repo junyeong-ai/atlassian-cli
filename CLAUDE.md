@@ -51,7 +51,7 @@ Profile search walks: global (`~/.config/atlassian-cli/config.toml`) → project
 - **Jira**: all endpoints use `/rest/api/3/`. Search goes through `POST /rest/api/3/search/jql`.
 - **Jira Agile**: board, sprint, epic endpoints use `/rest/agile/1.0/`. These route through the same Jira proxy (`/ex/jira/{cloud_id}/...`), so they use `Service::Jira` — no separate Service variant needed.
 - **Confluence search**: `GET /wiki/rest/api/search` (v1) — v2 has no CQL equivalent yet.
-- **Confluence pages/spaces/comments**: `/wiki/api/v2/*`.
+- **Confluence pages, comments, labels, properties, spaces, attachments**: `/wiki/api/v2/*` for reads; label and attachment *writes* fall back to v1 (`/wiki/rest/api/content/...`) — see `src/confluence/CLAUDE.md`.
 
 This mix is deliberate — do not "modernize" the Confluence search path.
 
@@ -60,7 +60,7 @@ This mix is deliberate — do not "modernize" the Confluence search path.
 - `jira create`/`update`/`comment`/`link`/`worklog`: plain text args auto-convert to ADF via `jira::adf::process_*_input`. For rich text, pass an ADF JSON document directly.
 - `--format markdown` on reads does **not** return pure markdown — it keeps the JSON envelope and converts content fields (description, body) in place.
 - `--stream` writes JSONL to stdout; progress/totals go to stderr. The function returns `Value::Null` so `output_json` suppresses any trailing output. Do not re-introduce a trailing summary line — it breaks `| jq`.
-- **Destructive-op guard**: whole-resource deletes (`jira delete`, `confluence delete`) require an explicit `--yes` at the CLI layer (the binary is non-interactive/JSON-first, so a prompt would hang pipelines — a required flag is the guard). The API functions (`delete_issue`/`delete_page`) stay pure; the `--yes` check lives in the `main.rs` handler. Targeted sub-resource removals that already require a specific id (`comment delete`, `link remove`, `worklog remove`, `watcher remove`) do **not** require `--yes` — the id is the specificity guard. Jira issue delete is irreversible (no recycle bin); Confluence page delete goes to trash.
+- **Destructive-op guard**: whole-resource deletes (`jira delete`, `confluence delete`) require an explicit `--yes` at the CLI layer (the binary is non-interactive/JSON-first, so a prompt would hang pipelines — a required flag is the guard). The API functions (`delete_issue`/`delete_page`) stay pure; the `--yes` check lives in the `main.rs` handler. Targeted sub-resource removals that already require a specific id — Jira `comment delete`, `link remove`, `worklog remove`, `watcher remove`; Confluence `comment delete`, `label remove`, `property delete` — do **not** require `--yes`, because the id/name/key is the specificity guard. Jira issue delete is irreversible (no recycle bin); Confluence page delete goes to trash.
 
 ## Auto-injected filters
 
@@ -75,13 +75,13 @@ Do not reintroduce a second copy of this logic — the two languages diverged in
 
 ## Adding a new command
 
-Multi-operation domains (`comment`, `transition`, `link`, `worklog`, `watcher`, `board`, `sprint`, `epic`) use nested subcommands via an `Action` enum (e.g. `CommentAction`, `LinkAction`). Global discovery (`list types/priorities/statuses/labels`) uses the dedicated `ListAction` group. Single-operation commands (`get`, `create`, `update`) remain flat. `board` currently has one operation but is nested so future additions don't break the CLI surface.
+Multi-operation domains (`comment`, `transition`, `link`, `worklog`, `watcher`, `board`, `sprint`, `epic`) use nested subcommands via an `Action` enum (e.g. `CommentAction`, `LinkAction`). The Confluence side mirrors this: `comment`, `label`, `property`, `space`, `attachment` route through `Confluence*Action` enums. Global discovery (`list types/priorities/statuses/labels`) uses the dedicated `ListAction` group. Single-operation commands (`get`, `create`, `update`) remain flat. `board` currently has one operation but is nested so future additions don't break the CLI surface.
 
 1. For a new domain with multiple operations: add an `XAction` enum with variants (`Add`, `List`, `Remove`, etc.), then a `JiraSubcommand::X { action: XAction }` variant in `main.rs`.
 2. Add the match arm in `handle_jira`/`handle_confluence`/`handle_config`.
 3. Implement the async function in `jira/api.rs` or `confluence/api.rs`, taking `client: &ApiClient` and using `client.get/post/put/delete(Service::X, "/service-relative/path")`. Service-relative paths only — never construct absolute URLs.
 4. **URL safety**: percent-encode user input in path segments via `http_utils::encode_path_segment`. Use the reqwest `.query(&[(k, v)])` builder for query params containing user input — never `format!` user input into the URL string. Do not encode server-side identifiers (cloud IDs, numeric resource IDs) — the AsciiSet re-encodes `:` and would corrupt those.
-5. **Pagination**: endpoints that follow the `values`/`isLast`/`startAt` contract must use the shared `paginate_values` helper. It bails on missing `values`/`isLast` rather than silently truncating, and accumulates all pages transparently.
+5. **Pagination**: Jira/Agile endpoints that follow the `values`/`isLast`/`startAt` contract must use the shared `paginate_values` helper (bails on missing `values`/`isLast` rather than silently truncating). Confluence v2 list endpoints are cursor-paginated — route them through `fetch_all_v2_results` instead (see `src/confluence/CLAUDE.md`). Either way, never return only the first page.
 6. **Bulk writes**: Agile bulk endpoints (sprint/backlog/epic moves) cap each POST at `AGILE_BULK_LIMIT = 50` issues. Route them through `post_issue_batches`, which chunks transparently and reports `processed/total` on partial failure.
 7. **Query filters**: when matching keyword-prefixed clauses (`project`, `space`) in user-provided JQL/CQL, run the regex against `query_utils::mask_string_literals(input)` so quoted text doesn't false-positive.
 8. List endpoints must return `{"items": [...]}` envelope. Write endpoints that create return `{"id": ...}`. Side-effect-only writes return `{}`.

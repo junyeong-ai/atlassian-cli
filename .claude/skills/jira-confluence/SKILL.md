@@ -1,7 +1,7 @@
 ---
 name: jira-confluence
-version: 0.5.0
-description: Run Jira/Confluence operations through atlassian-cli — JQL/CQL search, issue CRUD, comments, transitions, issue links, worklogs, watchers, sprint/board/epic moves, and Confluence page CRUD with ADF/HTML body editing. Also handles OAuth sign-in flows (`auth login/status/refresh`) when the user reports an auth problem or asks to switch accounts. Trigger on Jira tickets, Confluence pages, sprint planning, time logging, "내 이슈", "위키 검색", or any Atlassian workspace request.
+version: 0.6.0
+description: Run Jira/Confluence operations through atlassian-cli — JQL/CQL search, issue CRUD, comments, transitions, issue links, worklogs, watchers, sprint/board/epic moves; Confluence page CRUD, footer comments, labels, content properties, spaces, and attachment upload, with ADF/HTML body editing. Also handles OAuth sign-in flows (`auth login/status/refresh`) when the user reports an auth problem or asks to switch accounts. Trigger on Jira tickets, Confluence pages, sprint planning, time logging, "내 이슈", "위키 검색", or any Atlassian workspace request.
 allowed-tools: Bash
 ---
 
@@ -106,21 +106,44 @@ List nesting is strict: `bulletList → listItem → paragraph → text`.
 # Read
 atlassian-cli confluence get 12345 --format markdown
 atlassian-cli confluence search "space = TEAM" --limit 20
-atlassian-cli confluence search "title ~ 'API'" --format markdown --limit 10
-atlassian-cli confluence comments 12345 --format markdown
 atlassian-cli confluence children 12345          # children is JSON only (no --format)
+atlassian-cli confluence comment list 12345 --format markdown
 
-# Large reads — cursor pagination
-atlassian-cli confluence search "space = TEAM" --all --format markdown
+# Large reads — cursor pagination (list endpoints auto-follow cursors to completion)
 atlassian-cli confluence search "space = TEAM" --all --stream > pages.jsonl
 
-# Write — HTML storage format required
+# Pages — HTML storage format required
 atlassian-cli confluence create SPACE "Title" "<p>Content</p>"
 atlassian-cli confluence update 12345 "Title" "<p>Updated</p>"
 atlassian-cli confluence delete 12345 --yes      # moves to trash (recoverable)
+
+# Footer comments — storage HTML body; --reply-to threads under a comment
+atlassian-cli confluence comment add 12345 "<p>Looks good</p>"
+atlassian-cli confluence comment add 12345 "<p>Reply</p>" --reply-to 67890
+atlassian-cli confluence comment update 67890 "<p>Edited</p>"   # by comment id, not page id
+atlassian-cli confluence comment delete 67890
+
+# Labels
+atlassian-cli confluence label add 12345 needs-review
+atlassian-cli confluence label list 12345
+atlassian-cli confluence label remove 12345 needs-review
+
+# Content properties — structured JSON metadata on a page (machine-read state store)
+atlassian-cli confluence property set 12345 review '{"status":"done"}'
+atlassian-cli confluence property list 12345
+atlassian-cli confluence property delete 12345 review
+
+# Spaces & attachments
+atlassian-cli confluence space list
+atlassian-cli confluence space get TEAM
+atlassian-cli confluence attachment list 12345
+atlassian-cli confluence attachment upload 12345 ./diagram.png --comment "v2"
 ```
 
-CQL: searching by user requires account IDs or public names — username fields are restricted in Atlassian Cloud.
+- `comment update`/`delete` take the **comment id** (globally addressable); `comment add` takes the **page id**.
+- `property set` values are **strict JSON** — quote bare strings as `'"text"'`, not `text`.
+- `attachment upload` upserts by filename; add `--minor` to suppress watcher notifications on re-upload. Under OAuth, **every** Confluence command needs Confluence scopes (the default token set is Jira-only); uploads specifically need `write:attachment:confluence`.
+- CQL: searching by user requires account IDs or public names — username fields are restricted in Atlassian Cloud.
 
 ## Pagination & output cheatsheet
 
