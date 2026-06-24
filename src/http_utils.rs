@@ -47,6 +47,45 @@ pub(crate) fn encode_path_segment(segment: &str) -> String {
     utf8_percent_encode(segment, PATH_SEGMENT).to_string()
 }
 
+/// Map a filename extension to a Content-Type for multipart uploads.
+///
+/// Without an explicit type Confluence stores attachments as
+/// `application/octet-stream`, which suppresses inline image/PDF previews. This
+/// is a deterministic extension→type lookup (a fixed, conventional table — the
+/// same mapping every browser and web server uses), **not** content sniffing:
+/// it never inspects the bytes. Unknown extensions fall back to
+/// `application/octet-stream`, and callers can override the result explicitly.
+pub(crate) fn content_type_for_filename(filename: &str) -> &'static str {
+    let ext = std::path::Path::new(filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        "tif" | "tiff" => "image/tiff",
+        "pdf" => "application/pdf",
+        "json" => "application/json",
+        "xml" => "application/xml",
+        "yaml" | "yml" => "application/yaml",
+        "zip" => "application/zip",
+        "gz" => "application/gzip",
+        "csv" => "text/csv",
+        "html" | "htm" => "text/html",
+        "md" => "text/markdown",
+        "txt" | "log" => "text/plain",
+        "mp4" => "video/mp4",
+        _ => "application/octet-stream",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,5 +143,27 @@ mod tests {
     #[test]
     fn empty_string() {
         assert_eq!(encode_path_segment(""), "");
+    }
+
+    #[test]
+    fn content_type_maps_common_extensions_case_insensitively() {
+        assert_eq!(content_type_for_filename("diagram.png"), "image/png");
+        assert_eq!(content_type_for_filename("PHOTO.JPG"), "image/jpeg");
+        assert_eq!(content_type_for_filename("logo.svg"), "image/svg+xml");
+        assert_eq!(content_type_for_filename("report.pdf"), "application/pdf");
+        assert_eq!(content_type_for_filename("data.tar.gz"), "application/gzip");
+    }
+
+    #[test]
+    fn content_type_falls_back_to_octet_stream() {
+        assert_eq!(
+            content_type_for_filename("archive.unknown"),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            content_type_for_filename("Makefile"),
+            "application/octet-stream"
+        );
+        assert_eq!(content_type_for_filename(""), "application/octet-stream");
     }
 }

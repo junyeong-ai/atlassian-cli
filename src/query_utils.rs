@@ -58,6 +58,23 @@ pub(crate) fn mask_string_literals(query: &str) -> String {
     String::from_utf8(out).expect("mask preserves UTF-8")
 }
 
+/// Build the regex that decides whether a query already scopes by `keyword`
+/// (`project` for JQL, `space` for CQL) — when it does, the configured filter
+/// is not injected on top. The keyword (optionally a dotted sub-field like
+/// `space.key`/`space.type`) must be followed by a field operator: comparison
+/// (`=`, `!=`, `~`, `!~`, `<`, `>`), set membership (`in`, `not in`), or
+/// existence/history (`is`, `was`, `changed` — JQL only; harmless for CQL).
+/// Requiring an operator is what keeps a bare value like `title ~ space.foo`
+/// from counting as a scope, while still catching `project WAS "X"` and
+/// `space.key = Y`. The leading/trailing word boundary stops `projectId`/
+/// `spaceKey` from matching.
+pub(crate) fn clause_detector(keyword: &str) -> Regex {
+    Regex::new(&format!(
+        r"(?i)\b{keyword}\b(?:\.\w+)?\s*(?:[=!<>~]|\b(?:in|not\s+in|is|was|changed)\b)"
+    ))
+    .expect("clause detector pattern is valid")
+}
+
 /// Inject a filter clause into a user query (JQL or CQL), preserving any
 /// trailing `ORDER BY` and skipping injection when the user already scoped by
 /// the same keyword. This is the single source of truth shared by Jira's
@@ -221,7 +238,71 @@ mod tests {
     }
 
     fn project_re() -> Regex {
-        Regex::new(r"(?i)\bproject\s*(?:=|!=|not\s+in\s*\(|in\s*\()").unwrap()
+        clause_detector("project")
+    }
+
+    #[test]
+    fn clause_detector_matches_all_field_operators() {
+        let re = project_re();
+        for q in [
+            "project = MDW",
+            "project=MDW",
+            "project != X",
+            "project ~ X",
+            "project in (A, B)",
+            "project IN(A)",
+            "project not in (A)",
+            "project is empty",
+            "project IS NOT EMPTY",
+            "project was OLD",
+            "project changed",
+        ] {
+            assert!(re.is_match(q), "should detect scope in: {q}");
+        }
+    }
+
+    #[test]
+    fn clause_detector_matches_dotted_subfields() {
+        // CQL `space.key`/`space.type` are scopes; the dotted form must count.
+        let re = clause_detector("space");
+        assert!(re.is_match("space.key = ENG"));
+        assert!(re.is_match("space.type = global"));
+        assert!(re.is_match("space = ENG"));
+    }
+
+    #[test]
+    fn clause_detector_ignores_lookalike_identifiers() {
+        // A word boundary keeps `projectId`/`spaceKey` from counting as a scope.
+        let re = project_re();
+        assert!(!re.is_match("projectId = 10500"));
+        assert!(!clause_detector("space").is_match("spaceKey = X"));
+        // The bare keyword with no operator is not a scope either.
+        assert!(!re.is_match("summary ~ project"));
+    }
+
+    #[test]
+    fn clause_detector_ignores_dotted_keyword_used_as_a_value() {
+        // `space.foo` as an unquoted RHS value is not a scope — only a dotted
+        // sub-field *followed by an operator* (`space.key =`) counts.
+        let re = clause_detector("space");
+        assert!(!re.is_match("title ~ space.shuttle"));
+        assert!(!re.is_match("label = space.station"));
+        assert!(re.is_match("space.key in (ENG, OPS)"));
+    }
+
+    #[test]
+    fn inject_filter_skips_on_history_and_existence_clauses() {
+        // Regression guard: a `WAS`/`IS EMPTY` scope must suppress injection so
+        // the configured filter can't clobber the user's explicit scoping.
+        let re = project_re();
+        assert_eq!(
+            inject_filter("project WAS \"OLD\"", &re, "project IN (\"MDW\")"),
+            "project WAS \"OLD\""
+        );
+        assert_eq!(
+            inject_filter("project IS EMPTY", &re, "project IN (\"MDW\")"),
+            "project IS EMPTY"
+        );
     }
 
     #[test]

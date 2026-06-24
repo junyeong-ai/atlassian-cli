@@ -99,6 +99,12 @@ enum JiraSubcommand {
     /// Fetch a single issue by key (fields filtered, ADF rendered)
     Get {
         issue_key: String,
+        #[arg(
+            long,
+            value_delimiter = ',',
+            help = "Fields to return (default: essential set + configured custom fields; use *all for the full issue)"
+        )]
+        fields: Option<Vec<String>>,
         #[arg(long, value_enum, default_value = "html", help = "ADF content format")]
         format: OutputFormat,
     },
@@ -394,7 +400,7 @@ enum ConfluenceSubcommand {
         query: String,
         #[arg(
             long,
-            default_value = "10",
+            default_value = "50",
             help = "Results per page (capped at 50 by the body-expanding search API). With --all, controls first-page batch size"
         )]
         limit: u32,
@@ -422,12 +428,18 @@ enum ConfluenceSubcommand {
         space: String,
         title: String,
         content: String,
+        /// Parent page id to nest under (omit to create at the space root)
+        #[arg(long)]
+        parent: Option<String>,
     },
     /// Update a page's title and storage-format HTML content
     Update {
         page_id: String,
         title: String,
         content: String,
+        /// Parent page id to re-parent under (omit to keep the current parent)
+        #[arg(long)]
+        parent: Option<String>,
     },
     /// List the direct child pages of a page (metadata only)
     Children { page_id: String },
@@ -540,6 +552,9 @@ enum ConfluenceAttachmentAction {
         /// Mark as a minor edit (suppresses watcher notifications on re-upload)
         #[arg(long)]
         minor: bool,
+        /// Override the Content-Type (default: mapped from the file extension)
+        #[arg(long = "content-type")]
+        content_type: Option<String>,
     },
 }
 
@@ -783,9 +798,13 @@ async fn handle_jira(
     use atlassian_cli::jira;
 
     match cmd.subcommand {
-        JiraSubcommand::Get { issue_key, format } => {
+        JiraSubcommand::Get {
+            issue_key,
+            fields,
+            format,
+        } => {
             let as_markdown = matches!(format, OutputFormat::Markdown);
-            jira::get_issue(&issue_key, as_markdown, client).await
+            jira::get_issue(&issue_key, fields, as_markdown, client).await
         }
         JiraSubcommand::Search {
             jql,
@@ -1009,12 +1028,36 @@ async fn handle_confluence(
             space,
             title,
             content,
-        } => confluence::create_page(&space, &title, &content, None, None, client).await,
+            parent,
+        } => {
+            confluence::create_page(
+                &space,
+                &title,
+                &content,
+                parent.as_deref(),
+                None,
+                None,
+                client,
+            )
+            .await
+        }
         ConfluenceSubcommand::Update {
             page_id,
             title,
             content,
-        } => confluence::update_page(&page_id, &title, &content, None, None, client).await,
+            parent,
+        } => {
+            confluence::update_page(
+                &page_id,
+                &title,
+                &content,
+                parent.as_deref(),
+                None,
+                None,
+                client,
+            )
+            .await
+        }
         ConfluenceSubcommand::Children { page_id } => {
             confluence::get_page_children(&page_id, client).await
         }
@@ -1082,9 +1125,17 @@ async fn handle_confluence(
                 file,
                 comment,
                 minor,
+                content_type,
             } => {
-                confluence::upload_attachment(&page_id, &file, comment.as_deref(), minor, client)
-                    .await
+                confluence::upload_attachment(
+                    &page_id,
+                    &file,
+                    comment.as_deref(),
+                    minor,
+                    content_type.as_deref(),
+                    client,
+                )
+                .await
             }
         },
         ConfluenceSubcommand::Delete { page_id, yes } => {

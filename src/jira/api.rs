@@ -5,7 +5,8 @@ use crate::http_utils::encode_path_segment;
 use crate::jira::adf;
 use crate::jira::fields;
 use crate::markdown::adf_to_markdown;
-use crate::query_utils::inject_filter;
+use crate::query_utils::{clause_detector, inject_filter};
+use crate::response::require_field;
 use anyhow::Result;
 use regex::Regex;
 use serde_json::{Value, json};
@@ -14,11 +15,10 @@ use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::time::sleep;
 
-/// Matches `project` as a whole word followed by the JQL operators we care
-/// about (`=`, `!=`, `in (...)`, `not in (...)`), case-insensitive. Using a
-/// word boundary prevents false positives like `projectId = 10`.
-static PROJECT_CLAUSE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)\bproject\s*(?:=|!=|not\s+in\s*\(|in\s*\()").unwrap());
+/// Detects an existing `project` scope so the configured project filter is not
+/// injected on top of it. See `query_utils::clause_detector` for the operator
+/// coverage and word-boundary rationale.
+static PROJECT_CLAUSE_RE: LazyLock<Regex> = LazyLock::new(|| clause_detector("project"));
 
 fn convert_issue_to_markdown(issue: &mut Value) {
     let Some(fields) = issue.get_mut("fields") else {
@@ -64,9 +64,15 @@ fn apply_project_filter(jql: &str, config: &Config) -> String {
     )
 }
 
-pub async fn get_issue(issue_key: &str, as_markdown: bool, client: &ApiClient) -> Result<Value> {
+pub async fn get_issue(
+    issue_key: &str,
+    api_fields: Option<Vec<String>>,
+    as_markdown: bool,
+    client: &ApiClient,
+) -> Result<Value> {
     let path = format!("/rest/api/3/issue/{}", encode_path_segment(issue_key));
-    let url = fields::apply_field_filtering_to_url(&path);
+    let selected = fields::resolve_get_fields(api_fields, client.config());
+    let url = fields::apply_field_filtering_to_url(&path, &selected);
 
     let response = client
         .get(Service::Jira, &url)
@@ -250,9 +256,6 @@ pub async fn create_issue(
     description: Value,
     client: &ApiClient,
 ) -> Result<Value> {
-    let path = "/rest/api/3/issue";
-    let url = fields::apply_field_filtering_to_url(path);
-
     let description_adf = adf::process_description_input(description)?;
 
     let body = json!({
@@ -269,7 +272,7 @@ pub async fn create_issue(
     });
 
     let response = client
-        .post(Service::Jira, &url)
+        .post(Service::Jira, "/rest/api/3/issue")
         .await?
         .header("Content-Type", "application/json")
         .json(&body)
@@ -284,8 +287,8 @@ pub async fn create_issue(
 
     let data: Value = response.json().await?;
     Ok(json!({
-        "key": data["key"],
-        "id": data["id"]
+        "key": require_field(&data, "/key", "create issue")?,
+        "id": require_field(&data, "/id", "create issue")?,
     }))
 }
 
@@ -352,11 +355,10 @@ pub async fn delete_issue(
 pub async fn add_comment(issue_key: &str, comment: Value, client: &ApiClient) -> Result<Value> {
     let comment_adf = adf::process_comment_input(comment)?;
 
-    let base_path = format!(
+    let url = format!(
         "/rest/api/3/issue/{}/comment",
         encode_path_segment(issue_key)
     );
-    let url = fields::apply_field_filtering_to_url(&base_path);
 
     let body = json!({
         "body": comment_adf
@@ -377,7 +379,7 @@ pub async fn add_comment(issue_key: &str, comment: Value, client: &ApiClient) ->
     }
 
     let data: Value = response.json().await?;
-    Ok(json!({"id": data["id"]}))
+    Ok(json!({ "id": require_field(&data, "/id", "add comment")? }))
 }
 
 pub async fn update_comment(
@@ -388,12 +390,11 @@ pub async fn update_comment(
 ) -> Result<Value> {
     let body_adf = adf::process_comment_input(body)?;
 
-    let base_path = format!(
+    let url = format!(
         "/rest/api/3/issue/{}/comment/{}",
         encode_path_segment(issue_key),
         encode_path_segment(comment_id)
     );
-    let url = fields::apply_field_filtering_to_url(&base_path);
 
     let request_body = json!({
         "body": body_adf
@@ -414,7 +415,7 @@ pub async fn update_comment(
     }
 
     let data: Value = response.json().await?;
-    Ok(json!({"id": data["id"]}))
+    Ok(json!({ "id": require_field(&data, "/id", "update comment")? }))
 }
 
 /// Delete a single comment. Scoped to one comment by id (the id is the
@@ -647,11 +648,10 @@ pub async fn get_links(issue_key: &str, client: &ApiClient) -> Result<Value> {
 }
 
 pub async fn get_transitions(issue_key: &str, client: &ApiClient) -> Result<Value> {
-    let base_path = format!(
+    let url = format!(
         "/rest/api/3/issue/{}/transitions",
         encode_path_segment(issue_key)
     );
-    let url = fields::apply_field_filtering_to_url(&base_path);
 
     let response = client
         .get(Service::Jira, &url)
@@ -711,7 +711,7 @@ pub async fn add_worklog(
     }
 
     let data: Value = response.json().await?;
-    Ok(json!({ "id": data["id"] }))
+    Ok(json!({ "id": require_field(&data, "/id", "add worklog")? }))
 }
 
 pub async fn get_worklogs(issue_key: &str, client: &ApiClient) -> Result<Value> {
@@ -770,7 +770,7 @@ pub async fn update_worklog(
     }
 
     let data: Value = response.json().await?;
-    Ok(json!({ "id": data["id"] }))
+    Ok(json!({ "id": require_field(&data, "/id", "update worklog")? }))
 }
 
 pub async fn remove_worklog(
@@ -1305,12 +1305,6 @@ mod tests {
     }
 
     #[test]
-    fn test_get_issue_valid_issue_key() {
-        let issue_key = "PROJ-123";
-        assert_eq!(issue_key, "PROJ-123");
-    }
-
-    #[test]
     fn test_create_issue_required_fields() {
         let project_key = "PROJ";
         let summary = "Test Issue";
@@ -1456,6 +1450,30 @@ mod tests {
 
         assert!(result.is_ok(), "{:?}", result.err());
         assert_eq!(result.unwrap(), json!({}));
+    }
+
+    #[tokio::test]
+    async fn integ_get_issue_honors_explicit_fields() {
+        // `--fields` reaches the request URL verbatim — no hardwired whitelist
+        // caps it — and rendered fields stay suppressed.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/PROJ-1"))
+            .and(query_param("fields", "*all"))
+            .and(query_param("expand", "-renderedFields"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "key": "PROJ-1", "fields": { "summary": "S" } })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let result = get_issue("PROJ-1", Some(vec!["*all".to_string()]), false, &client)
+            .await
+            .unwrap();
+        assert_eq!(result["key"], "PROJ-1");
     }
 
     #[tokio::test]

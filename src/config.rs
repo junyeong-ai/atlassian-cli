@@ -709,9 +709,10 @@ impl Config {
             }
         }
 
-        if self.performance.request_timeout_ms < 100 || self.performance.request_timeout_ms > 60000
+        if self.performance.request_timeout_ms < 100
+            || self.performance.request_timeout_ms > 600_000
         {
-            bail!("Request timeout must be between 100ms and 60000ms");
+            bail!("Request timeout must be between 100ms and 600000ms");
         }
 
         Ok(())
@@ -1558,10 +1559,10 @@ mod tests {
         config.performance.request_timeout_ms = 100;
         assert!(config.validate().is_ok());
 
-        config.performance.request_timeout_ms = 60000;
+        config.performance.request_timeout_ms = 600_000;
         assert!(config.validate().is_ok());
 
-        config.performance.request_timeout_ms = 60001;
+        config.performance.request_timeout_ms = 600_001;
         assert!(config.validate().is_err());
     }
 

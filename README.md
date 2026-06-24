@@ -3,7 +3,7 @@
 [![CI](https://github.com/junyeong-ai/atlassian-cli/workflows/CI/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/ci.yml)
 [![Security](https://github.com/junyeong-ai/atlassian-cli/workflows/Security/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/security.yml)
 [![Rust](https://img.shields.io/badge/rust-1.96.0%2B%20(2024%20edition)-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.6.0-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
+[![Version](https://img.shields.io/badge/version-0.6.1-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
 
 > **🌐 한국어** | **[English](README.en.md)**
 
@@ -108,7 +108,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scri
 
 ```bash
 # 특정 릴리스 설치
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.6.0 bash
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.6.1 bash
 
 # 제거 (비대화형 기본값은 바이너리만 제거하고 skill/config는 보존)
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/uninstall.sh | bash
@@ -318,7 +318,7 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 |--------|------|
 | `search <CQL>` | CQL 검색 |
 | `get <ID>` | 페이지 조회 |
-| `create <SPACE> <TITLE> <CONTENT>` | 페이지 생성 (HTML) |
+| `create <SPACE> <TITLE> <CONTENT> [--parent <ID>]` | 페이지 생성 (HTML; `--parent`로 부모 페이지 아래 중첩) |
 | `update <ID> <TITLE> <CONTENT>` | 페이지 수정 (HTML) |
 | `delete <ID> --yes` | 페이지 삭제 (휴지통) |
 | `children <ID>` | 하위 페이지 |
@@ -326,7 +326,7 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 | `label list/add/remove <ID> [LABEL]` | 페이지 라벨 |
 | `property list/set/delete <ID> [KEY] [JSON]` | 콘텐츠 속성 (값은 strict JSON) |
 | `space list`, `space get <KEY>` | 스페이스 조회 |
-| `attachment list <ID>`, `attachment upload <ID> <FILE>` | 첨부 조회 / 업로드 |
+| `attachment list <ID>`, `attachment upload <ID> <FILE> [--content-type <MIME>]` | 첨부 조회 / 업로드 (Content-Type은 확장자에서 자동 매핑, `--content-type`로 오버라이드) |
 
 ### Config
 | 명령어 | 설명 |
@@ -348,7 +348,7 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 | `--format markdown` | ADF/HTML content 필드를 Markdown으로 변환 (JSON envelope 유지) |
 | `--all` | `search`: 전체 페이지네이션 |
 | `--stream` | `search --all`: JSONL을 stdout으로 |
-| `--fields a,b,c` | `jira search`: 반환 필드 지정 |
+| `--fields a,b,c` | `jira search`/`jira get`: 반환 필드 지정 (`get`은 `*all`로 전체 필드) |
 | `--expand a,b` | `confluence search`: 확장 필드 |
 | `--limit <N>` | `search`: 페이지 크기 |
 

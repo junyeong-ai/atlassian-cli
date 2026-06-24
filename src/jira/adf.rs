@@ -85,13 +85,16 @@ pub fn text_to_adf(text: &str) -> Value {
 pub fn process_adf_input(value: Value, field_name: &str) -> Result<Value> {
     match value {
         Value::String(text) => {
+            // String input is total: a string that is itself a valid ADF
+            // document is used as-is; everything else — including JSON-looking
+            // prose like `{"status":"done"}` — is the literal body. A string
+            // argument therefore never errors, so any text can always be posted.
             let trimmed = text.trim();
             if trimmed.starts_with('{')
-                && trimmed.ends_with('}')
                 && let Ok(parsed) = serde_json::from_str::<Value>(trimmed)
                 && parsed.is_object()
+                && validate_adf(&parsed).is_ok()
             {
-                validate_adf(&parsed)?;
                 return Ok(parsed);
             }
             Ok(text_to_adf(&text))
@@ -403,16 +406,17 @@ mod tests {
     }
 
     #[test]
-    fn test_process_adf_input_json_string_not_adf() {
+    fn test_process_adf_input_json_string_not_adf_becomes_literal_text() {
+        // A JSON-object-shaped string that is not a valid ADF document is the
+        // literal body, not an error — a user must be able to post arbitrary
+        // text like `{"foo":"bar"}` as a comment.
         let input = json!(r#"{"foo":"bar"}"#);
-        let result = process_adf_input(input, "test_field");
+        let result = process_adf_input(input, "test_field").unwrap();
 
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("missing required field 'type'")
+        assert_eq!(result["type"], "doc");
+        assert_eq!(
+            result["content"][0]["content"][0]["text"],
+            r#"{"foo":"bar"}"#
         );
     }
 

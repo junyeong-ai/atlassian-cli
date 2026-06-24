@@ -1,6 +1,6 @@
 ---
 name: jira-confluence
-version: 0.6.0
+version: 0.6.1
 description: Run Jira/Confluence operations through atlassian-cli — JQL/CQL search, issue CRUD, comments, transitions, issue links, worklogs, watchers, sprint/board/epic moves; Confluence page CRUD, footer comments, labels, content properties, spaces, and attachment upload, with ADF/HTML body editing. Also handles OAuth sign-in flows (`auth login/status/refresh`) when the user reports an auth problem or asks to switch accounts. Trigger on Jira tickets, Confluence pages, sprint planning, time logging, "내 이슈", "위키 검색", or any Atlassian workspace request.
 allowed-tools: Bash
 ---
@@ -14,13 +14,15 @@ atlassian-cli --profile work jira get PROJ-123 --format markdown
 atlassian-cli --pretty confluence search "space = TEAM" --limit 5
 ```
 
-`--format markdown` is the default for human-readable output (ADF→Markdown for Jira, HTML→Markdown for Confluence). JSON is the canonical machine output — pick markdown when you'll summarise, JSON when piping.
+`--format` defaults to `html`; pass `--format markdown` for human-readable output (ADF→Markdown for Jira, HTML→Markdown for Confluence). Either way the JSON envelope is preserved — the flag only converts the content fields (description, body) in place, it is not pure-markdown output. Pick markdown when you'll summarise, the JSON default when piping.
 
 ## Jira
 
 ```bash
 # Read
 atlassian-cli jira get PROJ-123 --format markdown
+atlassian-cli jira get PROJ-123 --fields '*all'             # full issue incl. custom fields
+atlassian-cli jira get PROJ-123 --fields summary,status,customfield_10020
 atlassian-cli jira search "assignee = currentUser() AND status != Done" --format markdown --limit 20
 atlassian-cli jira search "project = PROJ" --fields key,summary,status --limit 50
 atlassian-cli jira comment list PROJ-123 --format markdown
@@ -85,6 +87,8 @@ atlassian-cli jira epic unassign PROJ-1             # detach from its epic
 
 Board/sprint commands use the agile API. Pass `--project` to let the CLI resolve the board; if the project has several boards it lists them and asks for `--board`.
 
+`epic assign`/`unassign` drive the agile **Epic Link** endpoint, which only takes effect on **company-managed** projects. Team-managed (next-gen) projects model the epic as the issue's `parent`, so there the command returns success but has no effect — set the epic with `jira update KEY '{"parent":{"key":"EPIC-1"}}'` instead (when the project's field config allows it).
+
 ### ADF (rich text — only when plain text isn't enough)
 
 Root: `{"version": 1, "type": "doc", "content": [...]}`
@@ -100,6 +104,8 @@ Marks on text: `{"type":"text","text":"bold","marks":[{"type":"strong"}]}` — s
 
 List nesting is strict: `bulletList → listItem → paragraph → text`.
 
+A string arg is treated as ADF **only** if it parses to a complete valid ADF document; any other string — plain prose, or JSON-shaped text like `{"status":"done"}` — is posted verbatim as the literal body. So passing partial/invalid ADF silently lands as text rather than erroring; send a full, valid `doc` when you mean rich text.
+
 ## Confluence
 
 ```bash
@@ -114,7 +120,9 @@ atlassian-cli confluence search "space = TEAM" --all --stream > pages.jsonl
 
 # Pages — HTML storage format required
 atlassian-cli confluence create SPACE "Title" "<p>Content</p>"
+atlassian-cli confluence create SPACE "Title" "<p>Content</p>" --parent 12345  # nest under a page
 atlassian-cli confluence update 12345 "Title" "<p>Updated</p>"
+atlassian-cli confluence update 12345 "Title" "<p>Updated</p>" --parent 67890  # re-parent
 atlassian-cli confluence delete 12345 --yes      # moves to trash (recoverable)
 
 # Footer comments — storage HTML body; --reply-to threads under a comment
@@ -138,11 +146,13 @@ atlassian-cli confluence space list
 atlassian-cli confluence space get TEAM
 atlassian-cli confluence attachment list 12345
 atlassian-cli confluence attachment upload 12345 ./diagram.png --comment "v2"
+atlassian-cli confluence attachment upload 12345 ./icon.svg --content-type image/svg+xml
 ```
 
 - `comment update`/`delete` take the **comment id** (globally addressable); `comment add` takes the **page id**.
 - `property set` values are **strict JSON** — quote bare strings as `'"text"'`, not `text`.
-- `attachment upload` upserts by filename; add `--minor` to suppress watcher notifications on re-upload. Under OAuth, **every** Confluence command needs Confluence scopes (the default token set is Jira-only); uploads specifically need `write:attachment:confluence`.
+- `attachment upload` upserts by filename; add `--minor` to suppress watcher notifications on re-upload. The `Content-Type` is mapped from the file extension (so `diagram.png` → `image/png` and renders inline instead of becoming an opaque download); pass `--content-type <mime>` to override. Note: Confluence Cloud often blocks **inline SVG** rendering for security, so embed diagrams as PNG when you need them to display.
+- Under OAuth, Confluence v2 writes need granular scopes on the token, not just classic ones. A `401 "scope does not match"` means the scope was never requested at login: add it to the profile's `scopes` in config and re-run `auth login` (having it enabled on the OAuth app is not enough — the token only carries scopes the login *requested*). The write↔scope map: comment → `write:comment:confluence`, property → `write:content:confluence`, attachment → `write:attachment:confluence`, page create/update → `write:page:confluence`, page delete → `delete:page:confluence`, `space`/page-create space lookup → `read:space:confluence`.
 - CQL: searching by user requires account IDs or public names — username fields are restricted in Atlassian Cloud.
 
 ## Pagination & output cheatsheet
@@ -152,7 +162,7 @@ atlassian-cli confluence attachment upload 12345 ./diagram.png --comment "v2"
 | One page | (default `--limit N`) |
 | Every result | `--all` |
 | Stream to disk / pipe | `--all --stream` (outputs JSONL) |
-| Pick fields (Jira) | `--fields key,summary,status` |
+| Pick fields (Jira `get` & `search`) | `--fields key,summary,status` (or `*all` on `get` for the full issue) |
 | Expand fields (Confluence) | `--expand ancestors,space` |
 
 `--stream` writes JSONL to stdout and progress to stderr — never mix it with `--pretty`.

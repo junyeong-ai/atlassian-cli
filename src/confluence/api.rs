@@ -2,9 +2,10 @@ use crate::client::{ApiClient, Service};
 use crate::config::Config;
 use crate::confluence::fields::{apply_v2_filtering, build_search_expand};
 use crate::filter;
-use crate::http_utils::encode_path_segment;
+use crate::http_utils::{content_type_for_filename, encode_path_segment};
 use crate::markdown::confluence_to_markdown;
-use crate::query_utils::inject_filter;
+use crate::query_utils::{clause_detector, inject_filter};
+use crate::response::{require_field, require_u64};
 use anyhow::Result;
 use regex::Regex;
 use serde_json::{Value, json};
@@ -19,13 +20,11 @@ use tokio::time::sleep;
 /// non-body ceiling, so 50 is the real maximum a single page returns.
 const MAX_SEARCH_LIMIT: u32 = 50;
 
-/// Matches `space` as a whole word followed by a CQL comparison operator
-/// (`=`, `!=`, `in (...)`, `not in (...)`). The word boundary prevents
-/// false positives on identifiers ending in "space" (e.g. `mySpace = X`),
-/// matching the same defensive posture used for `PROJECT_CLAUSE_RE` in
-/// the Jira layer.
-static SPACE_CLAUSE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)\bspace\s*(?:=|!=|not\s+in\s*\(|in\s*\()").unwrap());
+/// Detects an existing `space` scope so the configured space filter is not
+/// injected on top of it. See `query_utils::clause_detector` for the operator
+/// coverage (including the dotted `space.key`/`space.type` CQL forms) and
+/// word-boundary rationale.
+static SPACE_CLAUSE_RE: LazyLock<Regex> = LazyLock::new(|| clause_detector("space"));
 
 fn apply_space_filter(cql: &str, config: &Config) -> String {
     if config.confluence.spaces_filter.is_empty() {
@@ -98,13 +97,13 @@ pub async fn search(
 
     let mut data: Value = response.json().await?;
 
-    let items = extract_content_from_results(&mut data, as_markdown);
-    let total = data["totalSize"].as_u64().unwrap_or(items.len() as u64);
+    let items = extract_content_from_results(&mut data, as_markdown)?;
+    let total = require_u64(&data, "/totalSize", "search")?;
 
     let mut output = json!({
         "items": items,
         "count": items.len(),
-        "total": total
+        "total": total,
     });
 
     filter::apply(&mut output, client.config());
@@ -136,10 +135,14 @@ pub async fn search_all(
         };
 
         if page_num == 1 {
+            // Progress-only: feeds the stderr "fetched X/Y" line. The returned
+            // envelope's `total` is the exact `all_items.len()` (see below), so
+            // unlike single-page `search` this estimate is non-load-bearing and
+            // a missing `totalSize` degrades to 0 rather than aborting the crawl.
             total_size = data["totalSize"].as_u64().unwrap_or(0);
         }
 
-        let mut items = extract_content_from_results(&mut data, as_markdown);
+        let mut items = extract_content_from_results(&mut data, as_markdown)?;
         // Apply response filtering per item so `--all` output matches the
         // single-page `search` envelope. Done before streaming so streamed
         // and accumulated items are filtered identically.
@@ -313,6 +316,7 @@ pub async fn create_page(
     space_key: &str,
     title: &str,
     content: &str,
+    parent_id: Option<&str>,
     include_all_fields: Option<bool>,
     additional_includes: Option<Vec<String>>,
     client: &ApiClient,
@@ -326,7 +330,7 @@ pub async fn create_page(
 
     let query_params = apply_v2_filtering(include_all_fields, additional_includes);
 
-    let body = json!({
+    let mut body = json!({
         "spaceId": space_id,
         "title": title,
         "body": {
@@ -334,6 +338,11 @@ pub async fn create_page(
             "value": content
         }
     });
+    // `parentId` nests the new page under an existing page; omitting it creates
+    // the page at the space root.
+    if let Some(parent) = parent_id {
+        body["parentId"] = json!(parent);
+    }
 
     let response = client
         .post(Service::Confluence, url)
@@ -352,8 +361,8 @@ pub async fn create_page(
 
     let data: Value = response.json().await?;
     Ok(json!({
-        "id": data["id"],
-        "title": data["title"]
+        "id": require_field(&data, "/id", "create page")?,
+        "title": data["title"],
     }))
 }
 
@@ -361,6 +370,7 @@ pub async fn update_page(
     page_id: &str,
     title: &str,
     content: &str,
+    parent_id: Option<&str>,
     include_all_fields: Option<bool>,
     additional_includes: Option<Vec<String>>,
     client: &ApiClient,
@@ -372,7 +382,7 @@ pub async fn update_page(
 
     // `status: "current"` is part of the v2 update contract and keeps the page
     // published; this CLI only edits live pages, so it is always "current".
-    let body = json!({
+    let mut body = json!({
         "id": page_id,
         "status": "current",
         "title": title,
@@ -384,6 +394,12 @@ pub async fn update_page(
             "number": next_version
         }
     });
+    // `parentId` re-parents the page when supplied. The v2 PUT preserves the
+    // page's existing parent when the field is omitted, so a plain update never
+    // detaches a child page.
+    if let Some(parent) = parent_id {
+        body["parentId"] = json!(parent);
+    }
 
     let response = client
         .put(Service::Confluence, &url)
@@ -402,8 +418,8 @@ pub async fn update_page(
 
     let data: Value = response.json().await?;
     Ok(json!({
-        "id": data["id"],
-        "version": data["version"]["number"]
+        "id": require_field(&data, "/id", "update page")?,
+        "version": require_u64(&data, "/version/number", "update page")?,
     }))
 }
 
@@ -580,16 +596,20 @@ pub async fn add_comment(
     client: &ApiClient,
 ) -> Result<Value> {
     // `pageId`/`parentCommentId` ride in the JSON body (serialized, not
-    // interpolated into a path) so they need no path encoding.
+    // interpolated into a path) so they need no path encoding. The v2
+    // footer-comment API requires *exactly one* container id: a reply carries
+    // only `parentCommentId` (the page is inferred from the parent comment), a
+    // top-level comment only `pageId`. Sending both is rejected with a 400
+    // ("Must specify one and only one of … pageId … or parentCommentId").
     let mut request_body = json!({
-        "pageId": page_id,
         "body": {
             "representation": "storage",
             "value": body,
         },
     });
-    if let Some(parent) = parent_id {
-        request_body["parentCommentId"] = json!(parent);
+    match parent_id {
+        Some(parent) => request_body["parentCommentId"] = json!(parent),
+        None => request_body["pageId"] = json!(page_id),
     }
 
     let response = client
@@ -607,7 +627,7 @@ pub async fn add_comment(
     }
 
     let data: Value = response.json().await?;
-    Ok(json!({"id": data["id"]}))
+    Ok(json!({ "id": require_field(&data, "/id", "add comment")? }))
 }
 
 /// Update a footer comment's body. v2 requires the next version number, so the
@@ -642,7 +662,7 @@ pub async fn update_comment(comment_id: &str, body: &str, client: &ApiClient) ->
     }
 
     let data: Value = response.json().await?;
-    Ok(json!({"id": data["id"]}))
+    Ok(json!({ "id": require_field(&data, "/id", "update comment")? }))
 }
 
 /// Delete a footer comment by id. The id is the specificity guard, so — like
@@ -802,7 +822,7 @@ pub async fn set_property(
     }
 
     let data: Value = response.json().await?;
-    Ok(json!({"id": data["id"]}))
+    Ok(json!({ "id": require_field(&data, "/id", "set property")? }))
 }
 
 /// Delete a content property from a page by key. The key is the specificity
@@ -913,6 +933,7 @@ pub async fn upload_attachment(
     file_path: &str,
     comment: Option<&str>,
     minor_edit: bool,
+    content_type: Option<&str>,
     client: &ApiClient,
 ) -> Result<Value> {
     let bytes = std::fs::read(file_path)
@@ -925,9 +946,17 @@ pub async fn upload_attachment(
         .ok_or_else(|| anyhow::anyhow!("Could not derive a file name from '{}'", file_path))?
         .to_string();
 
+    // An explicit `--content-type` wins; otherwise the type is mapped from the
+    // extension so images/PDFs render inline instead of becoming opaque
+    // `application/octet-stream` downloads.
+    let mime = content_type.unwrap_or_else(|| content_type_for_filename(&file_name));
+
     // `minorEdit` is always sent (the v1 endpoint expects it); `true` suppresses
     // the watcher notification that a re-upload would otherwise fire.
-    let part = reqwest::multipart::Part::bytes(bytes).file_name(file_name);
+    let part = reqwest::multipart::Part::bytes(bytes)
+        .file_name(file_name)
+        .mime_str(mime)
+        .map_err(|e| anyhow::anyhow!("Invalid content type '{}': {}", mime, e))?;
     let mut form = reqwest::multipart::Form::new()
         .part("file", part)
         .text("minorEdit", minor_edit.to_string());
@@ -956,15 +985,18 @@ pub async fn upload_attachment(
 
     // v1 wraps the created/updated attachment in a `results` array.
     let data: Value = response.json().await?;
-    Ok(json!({"id": data["results"][0]["id"]}))
+    Ok(json!({ "id": require_field(&data, "/results/0/id", "upload attachment")? }))
 }
 
-fn extract_content_from_results(data: &mut Value, as_markdown: bool) -> Vec<Value> {
+fn extract_content_from_results(data: &mut Value, as_markdown: bool) -> Result<Vec<Value>> {
+    // A present-but-empty `results` is a legitimate zero-match search; a
+    // *missing* `results` on a 2xx is schema drift, so bail rather than report
+    // an empty page (the same distinction `fetch_all_v2_results` enforces).
     let Some(results) = data.get_mut("results").and_then(|r| r.as_array_mut()) else {
-        return vec![];
+        anyhow::bail!("search succeeded but its response had no 'results' array: {data}");
     };
 
-    results
+    Ok(results
         .iter_mut()
         .filter_map(|item| {
             let mut content = item.get_mut("content")?.take();
@@ -982,7 +1014,7 @@ fn extract_content_from_results(data: &mut Value, as_markdown: bool) -> Vec<Valu
 
             Some(content)
         })
-        .collect()
+        .collect())
 }
 
 fn convert_page_to_markdown(data: &mut Value) {
@@ -1055,6 +1087,63 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result["total"], 0);
+    }
+
+    #[tokio::test]
+    async fn integ_search_returns_envelope_with_server_total() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/rest/api/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{ "content": { "id": "1", "title": "P" } }],
+                "totalSize": 7
+            })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let result = search("type = page", 10, None, None, false, &client)
+            .await
+            .unwrap();
+        assert_eq!(result["total"], 7);
+        assert_eq!(result["count"], 1);
+        assert_eq!(result["items"][0]["id"], "1");
+    }
+
+    #[tokio::test]
+    async fn integ_search_bails_on_missing_results() {
+        // A 2xx that omits `results` is schema drift, not a zero-match search.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/rest/api/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "totalSize": 0 })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = search("type = page", 10, None, None, false, &client)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no 'results' array"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn integ_search_requires_numeric_total_size() {
+        // Present `results` but absent `totalSize` must fail, not fabricate one.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/rest/api/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "results": [] })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = search("type = page", 10, None, None, false, &client)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("totalSize"), "got: {err}");
     }
 
     #[tokio::test]
@@ -1195,10 +1284,45 @@ mod tests {
             .await;
 
         let client = mock_client(server.uri());
-        let result = create_page("ENG", "Spec", "<p>x</p>", None, None, &client)
+        let result = create_page("ENG", "Spec", "<p>x</p>", None, None, None, &client)
             .await
             .unwrap();
         assert_eq!(result, json!({ "id": "pid", "title": "Spec" }));
+    }
+
+    #[tokio::test]
+    async fn integ_create_page_nests_under_parent() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/api/v2/spaces"))
+            .and(query_param("keys", "ENG"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "results": [{ "id": "sid" }] })),
+            )
+            .mount(&server)
+            .await;
+        // `--parent` rides in the body as `parentId`; body_json is exact, so its
+        // presence (and absence in the root-level test above) is asserted.
+        Mock::given(method("POST"))
+            .and(path("/wiki/api/v2/pages"))
+            .and(body_json(json!({
+                "spaceId": "sid",
+                "title": "Child",
+                "body": { "representation": "storage", "value": "<p>x</p>" },
+                "parentId": "999"
+            })))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+                "id": "pid", "title": "Child"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let result = create_page("ENG", "Child", "<p>x</p>", Some("999"), None, None, &client)
+            .await
+            .unwrap();
+        assert_eq!(result["id"], "pid");
     }
 
     #[tokio::test]
@@ -1229,10 +1353,54 @@ mod tests {
             .await;
 
         let client = mock_client(server.uri());
-        let result = update_page("12345", "Updated", "<p>y</p>", None, None, &client)
+        let result = update_page("12345", "Updated", "<p>y</p>", None, None, None, &client)
             .await
             .unwrap();
         assert_eq!(result, json!({ "id": "12345", "version": 6 }));
+    }
+
+    #[tokio::test]
+    async fn integ_update_page_reparents_when_parent_given() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/api/v2/pages/12345"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "version": { "number": 5 } })),
+            )
+            .mount(&server)
+            .await;
+        // `--parent` adds `parentId` to the PUT body; body_json is exact, so the
+        // sibling test above (no parentId) and this one together pin both paths.
+        Mock::given(method("PUT"))
+            .and(path("/wiki/api/v2/pages/12345"))
+            .and(body_json(json!({
+                "id": "12345",
+                "status": "current",
+                "title": "Updated",
+                "body": { "representation": "storage", "value": "<p>y</p>" },
+                "version": { "number": 6 },
+                "parentId": "777"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "12345", "version": { "number": 6 }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let result = update_page(
+            "12345",
+            "Updated",
+            "<p>y</p>",
+            Some("777"),
+            None,
+            None,
+            &client,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["version"], 6);
     }
 
     // --- Footer comment write -------------------------------------------
@@ -1263,8 +1431,11 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/wiki/api/v2/footer-comments"))
+            // A reply carries ONLY parentCommentId — sending pageId too makes
+            // the real v2 API 400 ("one and only one of … pageId … or
+            // parentCommentId"). body_json is an exact match, so the absence of
+            // pageId here is asserted.
             .and(body_json(json!({
-                "pageId": "123",
                 "body": { "representation": "storage", "value": "ok" },
                 "parentCommentId": "999"
             })))
@@ -1602,6 +1773,7 @@ mod tests {
             tmp.path().to_str().unwrap(),
             Some("v2"),
             true,
+            None,
             &client,
         )
         .await
@@ -1613,7 +1785,7 @@ mod tests {
     async fn integ_upload_attachment_reports_missing_file() {
         let server = MockServer::start().await;
         let client = mock_client(server.uri());
-        let err = upload_attachment("123", "/no/such/file.bin", None, false, &client)
+        let err = upload_attachment("123", "/no/such/file.bin", None, false, None, &client)
             .await
             .unwrap_err()
             .to_string();

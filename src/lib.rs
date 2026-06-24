@@ -7,6 +7,7 @@ pub(crate) mod http_utils;
 pub mod jira;
 pub mod markdown;
 pub(crate) mod query_utils;
+pub(crate) mod response;
 
 #[cfg(test)]
 pub mod test_utils;

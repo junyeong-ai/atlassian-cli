@@ -58,11 +58,11 @@ pub fn apply(value: &mut Value, config: &crate::config::Config) {
 fn apply_recursive(value: &mut Value, exclude_fields: &HashSet<&str>) {
     match value {
         Value::Object(map) => {
-            // Single-pass: drop excluded keys and empty-string values together.
-            map.retain(|k, v| {
-                !exclude_fields.contains(k.as_str())
-                    && !matches!(v, Value::String(s) if s.is_empty())
-            });
+            // Drop only the configured noise keys. Empty strings are preserved:
+            // a field set to "" is data (a cleared description, an empty
+            // property value), and silently dropping it would make "absent" and
+            // "empty" indistinguishable to the JSON consumers this CLI serves.
+            map.retain(|k, _| !exclude_fields.contains(k.as_str()));
             for nested in map.values_mut() {
                 apply_recursive(nested, exclude_fields);
             }
@@ -104,7 +104,9 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_empty_strings() {
+    fn test_preserves_empty_strings_and_null() {
+        // Empty strings and nulls are data, not noise: "absent" and "empty"
+        // must stay distinguishable for JSON consumers.
         let config = create_test_config();
         let mut data = json!({
             "name": "",
@@ -114,9 +116,9 @@ mod tests {
 
         apply(&mut data, &config);
         let obj = data.as_object().unwrap();
-        assert!(!obj.contains_key("name"));
-        assert!(obj.contains_key("status"));
-        assert!(obj.contains_key("valid"));
+        assert_eq!(obj["name"], json!(""));
+        assert_eq!(obj["status"], json!(null));
+        assert_eq!(obj["valid"], json!("data"));
     }
 
     #[test]
