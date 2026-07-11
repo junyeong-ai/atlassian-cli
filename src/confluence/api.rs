@@ -77,7 +77,7 @@ pub async fn search(
 
     let effective_limit = effective_search_limit(limit);
 
-    let response = client
+    let request = client
         .get(Service::Confluence, url)
         .await?
         .header("Accept", "application/json")
@@ -85,15 +85,8 @@ pub async fn search(
             ("cql", final_cql.as_str()),
             ("limit", &effective_limit.to_string()),
             ("expand", &expand),
-        ])
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Search failed ({}): {}", status, body);
-    }
+        ]);
+    let response = client.execute("search", request).await?;
 
     let mut data: Value = response.json().await?;
 
@@ -215,7 +208,7 @@ async fn fetch_initial_page(
     let url = "/wiki/rest/api/search";
     let effective_limit = effective_search_limit(limit).to_string();
 
-    let response = client
+    let request = client
         .get(Service::Confluence, url)
         .await?
         .header("Accept", "application/json")
@@ -223,32 +216,18 @@ async fn fetch_initial_page(
             ("cql", cql),
             ("limit", &effective_limit),
             ("expand", expand),
-        ])
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Search failed ({}): {}", status, body);
-    }
+        ]);
+    let response = client.execute("search", request).await?;
 
     response.json().await.map_err(Into::into)
 }
 
 async fn fetch_page(client: &ApiClient, url: &str) -> Result<Value> {
-    let response = client
+    let request = client
         .get_absolute(url)
         .await?
-        .header("Accept", "application/json")
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Search failed ({}): {}", status, body);
-    }
+        .header("Accept", "application/json");
+    let response = client.execute("search", request).await?;
 
     response.json().await.map_err(Into::into)
 }
@@ -264,19 +243,12 @@ pub async fn get_page(
 
     let query_params = apply_v2_filtering(include_all_fields, additional_includes);
 
-    let response = client
+    let request = client
         .get(Service::Confluence, &url)
         .await?
         .header("Accept", "application/json")
-        .query(&query_params)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to get page ({}): {}", status, body);
-    }
+        .query(&query_params);
+    let response = client.execute("get page", request).await?;
 
     let mut data: Value = response.json().await?;
     filter::apply(&mut data, client.config());
@@ -344,20 +316,13 @@ pub async fn create_page(
         body["parentId"] = json!(parent);
     }
 
-    let response = client
+    let request = client
         .post(Service::Confluence, url)
         .await?
         .header("Content-Type", "application/json")
         .query(&query_params)
-        .json(&body)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to create page ({}): {}", status, body);
-    }
+        .json(&body);
+    let response = client.execute("create page", request).await?;
 
     let data: Value = response.json().await?;
     Ok(json!({
@@ -401,20 +366,13 @@ pub async fn update_page(
         body["parentId"] = json!(parent);
     }
 
-    let response = client
+    let request = client
         .put(Service::Confluence, &url)
         .await?
         .header("Content-Type", "application/json")
         .query(&query_params)
-        .json(&body)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to update page ({}): {}", status, body);
-    }
+        .json(&body);
+    let response = client.execute("update page", request).await?;
 
     let data: Value = response.json().await?;
     Ok(json!({
@@ -429,17 +387,8 @@ pub async fn update_page(
 pub async fn delete_page(page_id: &str, client: &ApiClient) -> Result<Value> {
     let url = format!("/wiki/api/v2/pages/{}", encode_path_segment(page_id));
 
-    let response = client
-        .delete(Service::Confluence, &url)
-        .await?
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to delete page ({}): {}", status, body);
-    }
+    let request = client.delete(Service::Confluence, &url).await?;
+    client.execute("delete page", request).await?;
 
     Ok(json!({}))
 }
@@ -450,19 +399,14 @@ pub async fn delete_page(page_id: &str, client: &ApiClient) -> Result<Value> {
 /// unfiltered `id`; `get_space` applies the field filter before handing the
 /// object to the user.
 async fn fetch_space_by_key(space_key: &str, client: &ApiClient) -> Result<Option<Value>> {
-    let response = client
+    let request = client
         .get(Service::Confluence, "/wiki/api/v2/spaces")
         .await?
         .header("Accept", "application/json")
-        .query(&[("keys", space_key)])
-        .send()
+        .query(&[("keys", space_key)]);
+    let response = client
+        .execute(&format!("get space '{space_key}'"), request)
         .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to get space '{}' ({}): {}", space_key, status, body);
-    }
 
     let data: Value = response.json().await?;
     Ok(data["results"]
@@ -487,19 +431,12 @@ pub async fn resolve_space_id(space_key: &str, client: &ApiClient) -> Result<Str
 /// because the page endpoint omits the version object otherwise; endpoints that
 /// always include it ignore the redundant query param.
 async fn fetch_version_number(client: &ApiClient, url: &str) -> Result<u64> {
-    let response = client
+    let request = client
         .get(Service::Confluence, url)
         .await?
         .header("Accept", "application/json")
-        .query(&[("include-version", "true")])
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to fetch current version ({}): {}", status, body);
-    }
+        .query(&[("include-version", "true")]);
+    let response = client.execute("fetch current version", request).await?;
 
     let data: Value = response.json().await?;
     data["version"]["number"]
@@ -539,13 +476,9 @@ async fn fetch_all_v2_results(
             Some(n) => client.get(Service::Confluence, n).await?,
         };
 
-        let response = request.header("Accept", "application/json").send().await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to {} ({}): {}", what, status, body);
-        }
+        let response = client
+            .execute(what, request.header("Accept", "application/json"))
+            .await?;
 
         // A v2 list page always carries a `results` array; its absence on a 2xx
         // means schema drift or a wrong-shaped response. Bail rather than
@@ -612,19 +545,12 @@ pub async fn add_comment(
         None => request_body["pageId"] = json!(page_id),
     }
 
-    let response = client
+    let request = client
         .post(Service::Confluence, "/wiki/api/v2/footer-comments")
         .await?
         .header("Content-Type", "application/json")
-        .json(&request_body)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to add comment ({}): {}", status, body);
-    }
+        .json(&request_body);
+    let response = client.execute("add comment", request).await?;
 
     let data: Value = response.json().await?;
     Ok(json!({ "id": require_field(&data, "/id", "add comment")? }))
@@ -647,19 +573,12 @@ pub async fn update_comment(comment_id: &str, body: &str, client: &ApiClient) ->
         },
     });
 
-    let response = client
+    let request = client
         .put(Service::Confluence, &url)
         .await?
         .header("Content-Type", "application/json")
-        .json(&request_body)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to update comment ({}): {}", status, body);
-    }
+        .json(&request_body);
+    let response = client.execute("update comment", request).await?;
 
     let data: Value = response.json().await?;
     Ok(json!({ "id": require_field(&data, "/id", "update comment")? }))
@@ -673,17 +592,8 @@ pub async fn delete_comment(comment_id: &str, client: &ApiClient) -> Result<Valu
         encode_path_segment(comment_id)
     );
 
-    let response = client
-        .delete(Service::Confluence, &url)
-        .await?
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to delete comment ({}): {}", status, body);
-    }
+    let request = client.delete(Service::Confluence, &url).await?;
+    client.execute("delete comment", request).await?;
 
     Ok(json!({}))
 }
@@ -708,19 +618,12 @@ pub async fn add_label(page_id: &str, label: &str, client: &ApiClient) -> Result
 
     let request_body = json!([{ "prefix": "global", "name": label }]);
 
-    let response = client
+    let request = client
         .post(Service::Confluence, &url)
         .await?
         .header("Content-Type", "application/json")
-        .json(&request_body)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to add label ({}): {}", status, body);
-    }
+        .json(&request_body);
+    client.execute("add label", request).await?;
 
     Ok(json!({}))
 }
@@ -734,18 +637,11 @@ pub async fn remove_label(page_id: &str, label: &str, client: &ApiClient) -> Res
         encode_path_segment(page_id)
     );
 
-    let response = client
+    let request = client
         .delete(Service::Confluence, &url)
         .await?
-        .query(&[("name", label)])
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to remove label ({}): {}", status, body);
-    }
+        .query(&[("name", label)]);
+    client.execute("remove label", request).await?;
 
     Ok(json!({}))
 }
@@ -779,7 +675,7 @@ pub async fn set_property(
 
     let existing = fetch_property_by_key(client, &collection_url, key).await?;
 
-    let response = if let Some(prop) = existing {
+    let request = if let Some(prop) = existing {
         let prop_id = prop["id"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Property lookup returned no id"))?;
@@ -802,8 +698,6 @@ pub async fn set_property(
             .await?
             .header("Content-Type", "application/json")
             .json(&request_body)
-            .send()
-            .await?
     } else {
         let request_body = json!({ "key": key, "value": value });
         client
@@ -811,15 +705,9 @@ pub async fn set_property(
             .await?
             .header("Content-Type", "application/json")
             .json(&request_body)
-            .send()
-            .await?
     };
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to set property ({}): {}", status, body);
-    }
+    let response = client.execute("set property", request).await?;
 
     let data: Value = response.json().await?;
     Ok(json!({ "id": require_field(&data, "/id", "set property")? }))
@@ -845,17 +733,8 @@ pub async fn delete_property(page_id: &str, key: &str, client: &ApiClient) -> Re
         encode_path_segment(prop_id)
     );
 
-    let response = client
-        .delete(Service::Confluence, &url)
-        .await?
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to delete property ({}): {}", status, body);
-    }
+    let request = client.delete(Service::Confluence, &url).await?;
+    client.execute("delete property", request).await?;
 
     Ok(json!({}))
 }
@@ -869,19 +748,12 @@ async fn fetch_property_by_key(
     collection_url: &str,
     key: &str,
 ) -> Result<Option<Value>> {
-    let response = client
+    let request = client
         .get(Service::Confluence, collection_url)
         .await?
         .header("Accept", "application/json")
-        .query(&[("key", key)])
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to look up property ({}): {}", status, body);
-    }
+        .query(&[("key", key)]);
+    let response = client.execute("look up property", request).await?;
 
     let data: Value = response.json().await?;
     Ok(data["results"]
@@ -969,19 +841,12 @@ pub async fn upload_attachment(
         encode_path_segment(page_id)
     );
 
-    let response = client
+    let request = client
         .put(Service::Confluence, &url)
         .await?
         .header("X-Atlassian-Token", "nocheck")
-        .multipart(form)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to upload attachment ({}): {}", status, body);
-    }
+        .multipart(form);
+    let response = client.execute("upload attachment", request).await?;
 
     // v1 wraps the created/updated attachment in a `results` array.
     let data: Value = response.json().await?;

@@ -6,18 +6,17 @@
 //! - Cloud ID discovered post-exchange via accessible-resources
 //! - Refresh tokens **rotate** — caller must persist whichever value comes back
 //!
-//! The `oauth2` v5 crate is built against `reqwest` 0.12 while the rest of the
-//! binary uses 0.13. We construct a dedicated 0.12 client for the three
-//! low-frequency endpoint calls (authorize-URL build is local; only the token
-//! exchange + refresh actually hit the wire). API traffic still uses the main
-//! 0.13 client.
+//! Token-endpoint traffic runs on the binary's own `reqwest`/rustls stack,
+//! bridged into the `oauth2` crate's generic `AsyncHttpClient` interface by
+//! [`perform_oauth_request`] (the crate's bundled `reqwest` feature stays
+//! disabled so the dependency tree carries a single reqwest).
 
 use super::callback;
 use super::store::TokenSet;
 use crate::auth::DEFAULT_TOKEN_LIFETIME_SECS;
 use anyhow::{Context, Result, bail};
 use oauth2::basic::{BasicClient, BasicTokenResponse};
-use oauth2::reqwest as oa_reqwest;
+use oauth2::http;
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointNotSet, EndpointSet,
     PkceCodeChallenge, RedirectUrl, RefreshToken, Scope, TokenResponse, TokenUrl,
@@ -76,20 +75,47 @@ fn build_client(inputs: &FlowInputs<'_>) -> Result<ConfiguredClient> {
     )
 }
 
-fn oauth_http_client() -> Result<oa_reqwest::Client> {
+fn oauth_http_client() -> Result<reqwest::Client> {
     // Atlassian's auth.atlassian.com handles redirects internally; disabling
     // here matches the oauth2 crate's recommendation and prevents leaking
     // credentials to a redirected host.
-    oa_reqwest::ClientBuilder::new()
-        .redirect(oa_reqwest::redirect::Policy::none())
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .context("Failed to build OAuth HTTP client")
+}
+
+/// Execute one `oauth2`-crate request and reshape the reply into the crate's
+/// generic `HttpResponse`. Both sides speak the same `http` 1.x types, so the
+/// bridge is a direct move of method, URI, headers, and body bytes; the
+/// closure form `|req| perform_oauth_request(client.clone(), req)` satisfies
+/// the crate's `AsyncHttpClient` blanket impl.
+async fn perform_oauth_request(
+    client: reqwest::Client,
+    request: http::Request<Vec<u8>>,
+) -> Result<http::Response<Vec<u8>>, reqwest::Error> {
+    let (parts, body) = request.into_parts();
+    let response = client
+        .request(parts.method, parts.uri.to_string())
+        .headers(parts.headers)
+        .body(body)
+        .send()
+        .await?;
+
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = response.bytes().await?.to_vec();
+
+    let mut converted = http::Response::new(body);
+    *converted.status_mut() = status;
+    *converted.headers_mut() = headers;
+    Ok(converted)
 }
 
 /// Run the full interactive login: authorize → redirect → code → token → site discovery.
 pub async fn login(
     inputs: &FlowInputs<'_>,
-    api_http: &::reqwest::Client,
+    api_http: &reqwest::Client,
     open_browser: bool,
 ) -> Result<LoginOutcome> {
     let client = build_client(inputs)?;
@@ -120,10 +146,11 @@ pub async fn login(
 
     let result = callback::receive(listener, csrf.secret()).await?;
 
+    let send = |req| perform_oauth_request(oa_http.clone(), req);
     let token_response: BasicTokenResponse = client
         .exchange_code(AuthorizationCode::new(result.code))
         .set_pkce_verifier(pkce_verifier)
-        .request_async(&oa_http)
+        .request_async(&send)
         .await
         .context("Failed to exchange authorization code for tokens")?;
 
@@ -148,11 +175,12 @@ pub async fn refresh(
 ) -> Result<TokenSet> {
     let client = build_client(inputs)?;
     let oa_http = oauth_http_client()?;
+    let send = |req| perform_oauth_request(oa_http.clone(), req);
     let token_response: BasicTokenResponse = client
         .exchange_refresh_token(&RefreshToken::new(
             refresh_token.expose_secret().to_string(),
         ))
-        .request_async(&oa_http)
+        .request_async(&send)
         .await
         .context(
             "Failed to refresh OAuth token (refresh_token may be expired — try `auth login`)",
@@ -165,7 +193,7 @@ pub async fn refresh(
 }
 
 async fn fetch_accessible_resources(
-    http: &::reqwest::Client,
+    http: &reqwest::Client,
     access_token: &str,
 ) -> Result<Vec<SiteInfo>> {
     let response = http

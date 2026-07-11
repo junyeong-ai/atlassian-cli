@@ -5,7 +5,7 @@ Rust 2024 edition, single binary. CLI for Atlassian Cloud (Jira + Confluence).
 ## Build / test / lint
 
 ```bash
-cargo +1.96.0 build --release   # production binary at target/release/atlassian-cli
+cargo +1.97.0 build --release   # production binary at target/release/atlassian-cli
 cargo test                      # unit tests
 cargo clippy                    # lint; CI requires zero warnings
 cargo fmt                       # format; CI enforces rustfmt
@@ -19,7 +19,7 @@ Three auth methods, selected **explicitly** via `ATLASSIAN_AUTH_METHOD=basic|ser
 
 | Method | Principal | Base URL | Required fields | Token storage |
 |---|---|---|---|---|
-| `basic` | user (token owner) | `https://{domain}/rest/...` | `domain`, `email`, `token` | config.toml |
+| `basic` | user (token owner) | `https://{domain}/rest/...` | `domain`, `email`, `token` (classic/unscoped only — scoped API tokens 401 at the site URL; `execute` attaches a hint) | config.toml |
 | `service_account` | non-human SA | `https://api.atlassian.com/ex/{jira,confluence}/{cloud_id}/rest/...` | `client_id`, `client_secret`; `cloud_id` auto-discovered if omitted | in-memory only |
 | `oauth` | user (interactive) | `https://api.atlassian.com/ex/{jira,confluence}/{cloud_id}/rest/...` | `client_id`, `client_secret`, `redirect_port` (default 8976), `scopes` | OS keychain → 0600 file fallback |
 
@@ -60,6 +60,8 @@ This mix is deliberate — do not "modernize" the Confluence search path.
 - `jira create`/`update`/`comment`/`link`/`worklog`: plain text args auto-convert to ADF via `jira::adf::process_*_input`. For rich text, pass an ADF JSON document directly.
 - `--format markdown` on reads does **not** return pure markdown — it keeps the JSON envelope and converts content fields (description, body) in place.
 - `--stream` writes JSONL to stdout; progress/totals go to stderr. The function returns `Value::Null` so `output_json` suppresses any trailing output. Do not re-introduce a trailing summary line — it breaks `| jq`.
+- **Error contract**: a failed run prints a single-line JSON object to stderr — `{"error":{"message",...}}`, plus `status`/`operation`/`hint` fields when the failure is a typed `ApiError` — and exits with a stable code: 1 generic, 2 CLI usage (clap), 3 auth (401/403), 4 not found (404), 5 rate limited (429), 6 server error (5xx). Stdout carries results only.
+- **429 handling**: every API call routes through `ApiClient::execute`, which retries 429 up to 3 times (server `Retry-After` honored and capped at 60s, else exponential backoff from 500ms). Only 429 is retried — 5xx may have committed a write, so retrying it could duplicate the operation. Multipart requests (attachment upload) cannot be cloned and are sent exactly once.
 - **Destructive-op guard**: whole-resource deletes (`jira delete`, `confluence delete`) require an explicit `--yes` at the CLI layer (the binary is non-interactive/JSON-first, so a prompt would hang pipelines — a required flag is the guard). The API functions (`delete_issue`/`delete_page`) stay pure; the `--yes` check lives in the `main.rs` handler. Targeted sub-resource removals that already require a specific id — Jira `comment delete`, `link remove`, `worklog remove`, `watcher remove`; Confluence `comment delete`, `label remove`, `property delete` — do **not** require `--yes`, because the id/name/key is the specificity guard. Jira issue delete is irreversible (no recycle bin); Confluence page delete goes to trash.
 
 ## Auto-injected filters
@@ -79,14 +81,14 @@ Multi-operation domains (`comment`, `transition`, `link`, `worklog`, `watcher`, 
 
 1. For a new domain with multiple operations: add an `XAction` enum with variants (`Add`, `List`, `Remove`, etc.), then a `JiraSubcommand::X { action: XAction }` variant in `main.rs`.
 2. Add the match arm in `handle_jira`/`handle_confluence`/`handle_config`.
-3. Implement the async function in `jira/api.rs` or `confluence/api.rs`, taking `client: &ApiClient` and using `client.get/post/put/delete(Service::X, "/service-relative/path")`. Service-relative paths only — never construct absolute URLs.
+3. Implement the async function in `jira/api.rs` or `confluence/api.rs`, taking `client: &ApiClient`. Build the request with `client.get/post/put/delete(Service::X, "/service-relative/path")` and send it through `client.execute(operation, request)` — never call `.send()` directly. `execute` retries 429 (honoring `Retry-After`, safe for non-idempotent writes because 429 guarantees the request was not processed) and converts any non-2xx into a typed `ApiError`. Service-relative paths only — never construct absolute URLs.
 4. **URL safety**: percent-encode user input in path segments via `http_utils::encode_path_segment`. Use the reqwest `.query(&[(k, v)])` builder for query params containing user input — never `format!` user input into the URL string. Do not encode server-side identifiers (cloud IDs, numeric resource IDs) — the AsciiSet re-encodes `:` and would corrupt those.
 5. **Pagination**: Jira/Agile endpoints that follow the `values`/`isLast`/`startAt` contract must use the shared `paginate_values` helper (bails on missing `values`/`isLast` rather than silently truncating). Confluence v2 list endpoints are cursor-paginated — route them through `fetch_all_v2_results` instead (see `src/confluence/CLAUDE.md`). Either way, never return only the first page.
 6. **Bulk writes**: Agile bulk endpoints (sprint/backlog/epic moves) cap each POST at `AGILE_BULK_LIMIT = 50` issues. Route them through `post_issue_batches`, which chunks transparently and reports `processed/total` on partial failure.
 7. **Query filters**: when matching keyword-prefixed clauses (`project`, `space`) in user-provided JQL/CQL, run the regex against `query_utils::mask_string_literals(input)` so quoted text doesn't false-positive.
 8. List endpoints must return `{"items": [...]}` envelope. Write endpoints that create return `{"id": ...}`. Side-effect-only writes return `{}`.
 9. Read endpoints must call `filter::apply(&mut data, client.config())` before returning.
-10. Error messages must include status code: `anyhow::bail!("Failed to X ({}): {}", status, body)`.
+10. API failures come from `client.execute` as `client::ApiError` (Display: `Failed to {operation} ({status}): {body}`). Do not hand-roll status checks or `bail!` with ad-hoc error strings — the typed error is what maps to exit codes and the structured stderr object in `main.rs::render_error`.
 11. Tests must drive the production async function against a `wiremock::MockServer` via `test_utils::mock_client(server.uri())`. Verify method, path, query params, request body, and response envelope — synthetic data-shape assertions do not validate behavior.
 
 ## Debugging

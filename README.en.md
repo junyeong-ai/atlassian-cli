@@ -3,7 +3,7 @@
 [![CI](https://github.com/junyeong-ai/atlassian-cli/workflows/CI/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/ci.yml)
 [![Security](https://github.com/junyeong-ai/atlassian-cli/workflows/Security/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/security.yml)
 [![Rust](https://img.shields.io/badge/rust-1.96.0%2B%20(2024%20edition)-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.6.1-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
+[![Version](https://img.shields.io/badge/version-0.7.0-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
 [![DeepWiki](https://img.shields.io/badge/DeepWiki-junyeong--ai%2Fatlassian--cli-blue.svg?logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACwAAAAyCAYAAAAnWDnqAAAAAXNSR0IArs4c6QAAA05JREFUaEPtmUtyEzEQhtWTQyQLHNak2AB7ZnyXZMEjXMGeK/AIi+QuHrMnbChYY7MIh8g01fJoopFb0uhhEqqcbWTp06/uv1saEDv4O3n3dV60RfP947Mm9/SQc0ICFQgzfc4CYZoTPAswgSJCCUJUnAAoRHOAUOcATwbmVLWdGoH//PB8mnKqScAhsD0kYP3j/Yt5LPQe2KvcXmGvRHcDnpxfL2zOYJ1mFwrryWTz0advv1Ut4CJgf5uhDuDj5eUcAUoahrdY/56ebRWeraTjMt/00Sh3UDtjgHtQNHwcRGOC98BJEAEymycmYcWwOprTgcB6VZ5JK5TAJ+fXGLBm3FDAmn6oPPjR4rKCAoJCal2eAiQp2x0vxTPB3ALO2CRkwmDy5WohzBDwSEFKRwPbknEggCPB/imwrycgxX2NzoMCHhPkDwqYMr9tRcP5qNrMZHkVnOjRMWwLCcr8ohBVb1OMjxLwGCvjTikrsBOiA6fNyCrm8V1rP93iVPpwaE+gO0SsWmPiXB+jikdf6SizrT5qKasx5j8ABbHpFTx+vFXp9EnYQmLx02h1QTTrl6eDqxLnGjporxl3NL3agEvXdT0WmEost648sQOYAeJS9Q7bfUVoMGnjo4AZdUMQku50McDcMWcBPvr0SzbTAFDfvJqwLzgxwATnCgnp4wDl6Aa+Ax283gghmj+vj7feE2KBBRMW3FzOpLOADl0Isb5587h/U4gGvkt5v60Z1VLG8BhYjbzRwyQZemwAd6cCR5/XFWLYZRIMpX39AR0tjaGGiGzLVyhse5C9RKC6ai42ppWPKiBagOvaYk8lO7DajerabOZP46Lby5wKjw1HCRx7p9sVMOWGzb/vA1hwiWc6jm3MvQDTogQkiqIhJV0nBQBTU+3okKCFDy9WwferkHjtxib7t3xIUQtHxnIwtx4mpg26/HfwVNVDb4oI9RHmx5WGelRVlrtiw43zboCLaxv46AZeB3IlTkwouebTr1y2NjSpHz68WNFjHvupy3q8TFn3Hos2IAk4Ju5dCo8B3wP7VPr/FGaKiG+T+v+TQqIrOqMTL1VdWV1DdmcbO8KXBz6esmYWYKPwDL5b5FA1a0hwapHiom0r/cKaoqr+27/XcrS5UwSMbQAAAABJRU5ErkJggg==)](https://deepwiki.com/junyeong-ai/atlassian-cli)
 
 > **🌐 [한국어](README.md)** | **English**
@@ -139,7 +139,7 @@ Installs the latest prebuilt binary and can install the `jira-confluence` Claude
 
 ```bash
 # Install a specific release
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.6.1 bash
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.7.0 bash
 
 # Uninstall (non-interactive defaults keep skill/config)
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/uninstall.sh | bash
@@ -190,7 +190,7 @@ Pick one explicitly (no auto-detection):
 |---|---|---|
 | `oauth` ⭐ | the signed-in user | 3LO + PKCE; tokens stored in OS keychain, auto-refreshed |
 | `service_account` | non-human SA | OAuth 2.0 client_credentials; for CI / automation |
-| `basic` | API-token owner | personal token from <https://id.atlassian.com/manage-profile/security/api-tokens> |
+| `basic` | API-token owner | **classic (unscoped) token only** — scoped API tokens only work through the `api.atlassian.com` gateway and get 401 at the site URL; create a classic token at <https://id.atlassian.com/manage-profile/security/api-tokens> or use `oauth`/`service_account` |
 
 ### OAuth 2.0 (3LO) — recommended
 
@@ -399,6 +399,38 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 | `--expand` | Additional expand fields (ancestors, etc.; body.storage included by default) | confluence search |
 | `--format` | Output format (html, markdown) | jira get/search, confluence search/get/comments |
 | `--fields` | Specify fields | jira search, jira get |
+
+### Errors & exit codes
+
+Failures print a single-line JSON object to **stderr** (stdout carries results
+only, so `| jq` pipelines never see partial output):
+
+```json
+{"error":{"message":"Failed to get issue (404 Not Found): ...","operation":"get issue","status":404}}
+```
+
+API failures include `status` and `operation`; a `hint` field appears when a
+known remediation exists (e.g. a scoped token used with `basic` auth). Rate
+limits (429) are retried automatically up to 3 times, honoring `Retry-After`.
+
+| Exit code | Meaning |
+|---|---|
+| `0` | success |
+| `1` | generic failure |
+| `2` | CLI usage error |
+| `3` | authentication / permission (401, 403) |
+| `4` | not found (404) |
+| `5` | rate limited (429, retries exhausted) |
+| `6` | server error (5xx) |
+
+### Shell completion
+
+```bash
+atlassian-cli completions zsh > "${fpath[1]}/_atlassian-cli"   # zsh
+atlassian-cli completions bash > /etc/bash_completion.d/atlassian-cli
+```
+
+Supported: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: jira-confluence
-version: 0.6.1
+version: 0.7.0
 description: Run Jira/Confluence operations through atlassian-cli — JQL/CQL search, issue CRUD, comments, transitions, issue links, worklogs, watchers, sprint/board/epic moves; Confluence page CRUD, footer comments, labels, content properties, spaces, and attachment upload, with ADF/HTML body editing. Also handles OAuth sign-in flows (`auth login/status/refresh`) when the user reports an auth problem or asks to switch accounts. Trigger on Jira tickets, Confluence pages, sprint planning, time logging, "내 이슈", "위키 검색", or any Atlassian workspace request.
 allowed-tools: Bash
 ---
@@ -167,6 +167,16 @@ atlassian-cli confluence attachment upload 12345 ./icon.svg --content-type image
 
 `--stream` writes JSONL to stdout and progress to stderr — never mix it with `--pretty`.
 
+## Errors & exit codes
+
+Failures print a single-line JSON object to **stderr**; stdout stays results-only:
+
+```json
+{"error":{"message":"Failed to get issue (404 Not Found): ...","operation":"get issue","status":404,"hint":"..."}}
+```
+
+Parse `status`/`operation` instead of regexing the message; `hint` (when present) is the remediation to relay to the user. Exit codes: `0` ok, `1` generic, `2` usage, `3` auth (401/403), `4` not found, `5` rate limited (429 — already retried 3× with `Retry-After`; back off before rerunning), `6` server error (5xx).
+
 ## Authentication
 
 Credentials are pre-configured. **Do not print, request, infer, or modify secrets.**
@@ -176,7 +186,7 @@ The active profile dictates what identity the call runs as:
 | profile method | who calls Atlassian |
 |---|---|
 | `oauth` | the signed-in human (token in OS keychain, auto-refreshed) |
-| `basic` | the API-token owner |
+| `basic` | the API-token owner (classic/unscoped token only — a scoped token 401s at the site URL; the error carries a `hint`) |
 | `service_account` | a non-human service principal |
 
 Run `atlassian-cli config validate` first when a request will write or fetch many pages — it prints the resolved identity and fails fast on bad credentials.

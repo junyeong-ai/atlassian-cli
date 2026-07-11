@@ -3,7 +3,7 @@
 [![CI](https://github.com/junyeong-ai/atlassian-cli/workflows/CI/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/ci.yml)
 [![Security](https://github.com/junyeong-ai/atlassian-cli/workflows/Security/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/security.yml)
 [![Rust](https://img.shields.io/badge/rust-1.96.0%2B%20(2024%20edition)-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.6.1-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
+[![Version](https://img.shields.io/badge/version-0.7.0-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
 
 > **🌐 한국어** | **[English](README.en.md)**
 
@@ -108,7 +108,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scri
 
 ```bash
 # 특정 릴리스 설치
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.6.1 bash
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.7.0 bash
 
 # 제거 (비대화형 기본값은 바이너리만 제거하고 skill/config는 보존)
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/uninstall.sh | bash
@@ -136,7 +136,7 @@ cp target/release/atlassian-cli ~/.local/bin/
 
 | 방식 | 행위자 | 특징 |
 |---|---|---|
-| `basic` | 본인 (API token 발급자) | 가장 단순. 모든 행위가 본인 이름으로 기록 |
+| `basic` | 본인 (API token 발급자) | 가장 단순. **classic (unscoped) 토큰 전용** — scoped 토큰은 사이트 URL에서 401 (게이트웨이 전용) |
 | `service_account` | 비인간 service account | 자동화·CI 용. 별도 principal |
 | `oauth` | 본인 (대화형 로그인) | 사용자 권한 그대로 + refresh token 자동 관리 |
 
@@ -351,6 +351,35 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 | `--fields a,b,c` | `jira search`/`jira get`: 반환 필드 지정 (`get`은 `*all`로 전체 필드) |
 | `--expand a,b` | `confluence search`: 확장 필드 |
 | `--limit <N>` | `search`: 페이지 크기 |
+
+### 에러와 종료 코드
+
+실패 시 **stderr**로 한 줄짜리 JSON 객체를 출력합니다 (stdout은 결과 전용 — `| jq` 파이프라인이 깨지지 않습니다):
+
+```json
+{"error":{"message":"Failed to get issue (404 Not Found): ...","operation":"get issue","status":404}}
+```
+
+API 실패에는 `status`/`operation`이 포함되고, 알려진 해결책이 있으면 `hint` 필드가 붙습니다 (예: `basic` 인증에 scoped 토큰 사용). 429 (rate limit)는 `Retry-After`를 존중하며 최대 3회 자동 재시도됩니다.
+
+| 종료 코드 | 의미 |
+|---|---|
+| `0` | 성공 |
+| `1` | 일반 실패 |
+| `2` | CLI 사용법 오류 |
+| `3` | 인증/권한 (401, 403) |
+| `4` | 대상 없음 (404) |
+| `5` | rate limit (429, 재시도 소진) |
+| `6` | 서버 오류 (5xx) |
+
+### 셸 자동완성
+
+```bash
+atlassian-cli completions zsh > "${fpath[1]}/_atlassian-cli"   # zsh
+atlassian-cli completions bash > /etc/bash_completion.d/atlassian-cli
+```
+
+지원: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 
 ---
 

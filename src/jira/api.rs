@@ -74,18 +74,11 @@ pub async fn get_issue(
     let selected = fields::resolve_get_fields(api_fields, client.config());
     let url = fields::apply_field_filtering_to_url(&path, &selected);
 
-    let response = client
+    let request = client
         .get(Service::Jira, &url)
         .await?
-        .header("Accept", "application/json")
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to get issue ({}): {}", status, body);
-    }
+        .header("Accept", "application/json");
+    let response = client.execute("get issue", request).await?;
 
     let mut data: Value = response.json().await?;
 
@@ -115,19 +108,12 @@ pub async fn search(
         "fields": resolved_fields,
     });
 
-    let response = client
+    let request = client
         .post(Service::Jira, url)
         .await?
         .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to search ({}): {}", status, body);
-    }
+        .json(&body);
+    let response = client.execute("search", request).await?;
 
     let mut data: Value = response.json().await?;
     filter::apply(&mut data, client.config());
@@ -172,19 +158,12 @@ pub async fn search_all(
             body["nextPageToken"] = json!(token);
         }
 
-        let response = client
+        let request = client
             .post(Service::Jira, url)
             .await?
             .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to search ({}): {}", status, body);
-        }
+            .json(&body);
+        let response = client.execute("search", request).await?;
 
         let mut data: Value = response.json().await?;
         filter::apply(&mut data, client.config());
@@ -271,19 +250,12 @@ pub async fn create_issue(
         }
     });
 
-    let response = client
+    let request = client
         .post(Service::Jira, "/rest/api/3/issue")
         .await?
         .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to create issue ({}): {}", status, body);
-    }
+        .json(&body);
+    let response = client.execute("create issue", request).await?;
 
     let data: Value = response.json().await?;
     Ok(json!({
@@ -307,21 +279,14 @@ pub async fn update_issue(
         fields_obj.insert("description".to_string(), description_adf);
     }
 
-    let response = client
+    let request = client
         .put(Service::Jira, &url)
         .await?
         .header("Content-Type", "application/json")
         .json(&json!({
             "fields": fields_value
-        }))
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to update issue ({}): {}", status, body);
-    }
+        }));
+    client.execute("update issue", request).await?;
 
     Ok(json!({}))
 }
@@ -336,18 +301,11 @@ pub async fn delete_issue(
 ) -> Result<Value> {
     let url = format!("/rest/api/3/issue/{}", encode_path_segment(issue_key));
 
-    let response = client
+    let request = client
         .delete(Service::Jira, &url)
         .await?
-        .query(&[("deleteSubtasks", delete_subtasks.to_string())])
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to delete issue ({}): {}", status, body);
-    }
+        .query(&[("deleteSubtasks", delete_subtasks.to_string())]);
+    client.execute("delete issue", request).await?;
 
     Ok(json!({}))
 }
@@ -364,19 +322,12 @@ pub async fn add_comment(issue_key: &str, comment: Value, client: &ApiClient) ->
         "body": comment_adf
     });
 
-    let response = client
+    let request = client
         .post(Service::Jira, &url)
         .await?
         .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to add comment ({}): {}", status, body);
-    }
+        .json(&body);
+    let response = client.execute("add comment", request).await?;
 
     let data: Value = response.json().await?;
     Ok(json!({ "id": require_field(&data, "/id", "add comment")? }))
@@ -400,19 +351,12 @@ pub async fn update_comment(
         "body": body_adf
     });
 
-    let response = client
+    let request = client
         .put(Service::Jira, &url)
         .await?
         .header("Content-Type", "application/json")
-        .json(&request_body)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to update comment ({}): {}", status, body);
-    }
+        .json(&request_body);
+    let response = client.execute("update comment", request).await?;
 
     let data: Value = response.json().await?;
     Ok(json!({ "id": require_field(&data, "/id", "update comment")? }))
@@ -432,13 +376,8 @@ pub async fn delete_comment(
         encode_path_segment(comment_id)
     );
 
-    let response = client.delete(Service::Jira, &url).await?.send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to delete comment ({}): {}", status, body);
-    }
+    let request = client.delete(Service::Jira, &url).await?;
+    client.execute("delete comment", request).await?;
 
     Ok(json!({}))
 }
@@ -459,19 +398,12 @@ pub async fn transition_issue(
         }
     });
 
-    let response = client
+    let request = client
         .post(Service::Jira, &url)
         .await?
         .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to transition issue ({}): {}", status, body);
-    }
+        .json(&body);
+    client.execute("transition issue", request).await?;
 
     Ok(json!({}))
 }
@@ -482,18 +414,11 @@ pub async fn get_comments(issue_key: &str, as_markdown: bool, client: &ApiClient
         encode_path_segment(issue_key)
     );
 
-    let response = client
+    let request = client
         .get(Service::Jira, &url)
         .await?
-        .header("Accept", "application/json")
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to get comments ({}): {}", status, body);
-    }
+        .header("Accept", "application/json");
+    let response = client.execute("get comments", request).await?;
 
     let mut data: Value = response.json().await?;
     filter::apply(&mut data, client.config());
@@ -512,17 +437,10 @@ pub async fn get_comments(issue_key: &str, as_markdown: bool, client: &ApiClient
 }
 
 pub async fn get_link_types(client: &ApiClient) -> Result<Value> {
-    let response = client
+    let request = client
         .get(Service::Jira, "/rest/api/3/issueLinkType")
-        .await?
-        .send()
         .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to get link types ({}): {}", status, body);
-    }
+    let response = client.execute("get link types", request).await?;
 
     let mut data: Value = response.json().await?;
     filter::apply(&mut data, client.config());
@@ -547,19 +465,12 @@ pub async fn add_link(
         body["comment"] = json!({ "body": comment_adf });
     }
 
-    let response = client
+    let request = client
         .post(Service::Jira, "/rest/api/3/issueLink")
         .await?
         .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to create link ({}): {}", status, body);
-    }
+        .json(&body);
+    client.execute("create link", request).await?;
 
     Ok(json!({}))
 }
@@ -617,13 +528,8 @@ pub async fn remove_link(
         .ok_or_else(|| anyhow::anyhow!("Link ID missing from response"))?;
 
     let url = format!("/rest/api/3/issueLink/{}", encode_path_segment(link_id));
-    let response = client.delete(Service::Jira, &url).await?.send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to remove link ({}): {}", status, body);
-    }
+    let request = client.delete(Service::Jira, &url).await?;
+    client.execute("remove link", request).await?;
 
     Ok(json!({}))
 }
@@ -634,13 +540,8 @@ pub async fn get_links(issue_key: &str, client: &ApiClient) -> Result<Value> {
         encode_path_segment(issue_key)
     );
 
-    let response = client.get(Service::Jira, &url).await?.send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to get links ({}): {}", status, body);
-    }
+    let request = client.get(Service::Jira, &url).await?;
+    let response = client.execute("get links", request).await?;
 
     let mut data: Value = response.json().await?;
     filter::apply(&mut data, client.config());
@@ -653,18 +554,11 @@ pub async fn get_transitions(issue_key: &str, client: &ApiClient) -> Result<Valu
         encode_path_segment(issue_key)
     );
 
-    let response = client
+    let request = client
         .get(Service::Jira, &url)
         .await?
-        .header("Accept", "application/json")
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to get transitions ({}): {}", status, body);
-    }
+        .header("Accept", "application/json");
+    let response = client.execute("get transitions", request).await?;
 
     let mut data: Value = response.json().await?;
     filter::apply(&mut data, client.config());
@@ -696,19 +590,12 @@ pub async fn add_worklog(
         body["comment"] = comment_adf;
     }
 
-    let response = client
+    let request = client
         .post(Service::Jira, &url)
         .await?
         .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to add worklog ({}): {}", status, body);
-    }
+        .json(&body);
+    let response = client.execute("add worklog", request).await?;
 
     let data: Value = response.json().await?;
     Ok(json!({ "id": require_field(&data, "/id", "add worklog")? }))
@@ -720,13 +607,8 @@ pub async fn get_worklogs(issue_key: &str, client: &ApiClient) -> Result<Value> 
         encode_path_segment(issue_key)
     );
 
-    let response = client.get(Service::Jira, &url).await?.send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to get worklogs ({}): {}", status, body);
-    }
+    let request = client.get(Service::Jira, &url).await?;
+    let response = client.execute("get worklogs", request).await?;
 
     let mut data: Value = response.json().await?;
     filter::apply(&mut data, client.config());
@@ -755,19 +637,12 @@ pub async fn update_worklog(
         body["comment"] = comment_adf;
     }
 
-    let response = client
+    let request = client
         .put(Service::Jira, &url)
         .await?
         .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to update worklog ({}): {}", status, body);
-    }
+        .json(&body);
+    let response = client.execute("update worklog", request).await?;
 
     let data: Value = response.json().await?;
     Ok(json!({ "id": require_field(&data, "/id", "update worklog")? }))
@@ -784,29 +659,15 @@ pub async fn remove_worklog(
         encode_path_segment(worklog_id)
     );
 
-    let response = client.delete(Service::Jira, &url).await?.send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to remove worklog ({}): {}", status, body);
-    }
+    let request = client.delete(Service::Jira, &url).await?;
+    client.execute("remove worklog", request).await?;
 
     Ok(json!({}))
 }
 
 async fn get_myself(client: &ApiClient) -> Result<Value> {
-    let response = client
-        .get(Service::Jira, "/rest/api/3/myself")
-        .await?
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to get current user ({}): {}", status, body);
-    }
+    let request = client.get(Service::Jira, "/rest/api/3/myself").await?;
+    let response = client.execute("get current user", request).await?;
 
     response.json().await.map_err(Into::into)
 }
@@ -817,18 +678,11 @@ pub async fn add_watcher(issue_key: &str, client: &ApiClient) -> Result<Value> {
         encode_path_segment(issue_key)
     );
 
-    let response = client
+    let request = client
         .post(Service::Jira, &path)
         .await?
-        .header("Content-Type", "application/json")
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to add watcher ({}): {}", status, body);
-    }
+        .header("Content-Type", "application/json");
+    client.execute("add watcher", request).await?;
 
     Ok(json!({}))
 }
@@ -844,18 +698,11 @@ pub async fn remove_watcher(issue_key: &str, client: &ApiClient) -> Result<Value
         encode_path_segment(issue_key)
     );
 
-    let response = client
+    let request = client
         .delete(Service::Jira, &url)
         .await?
-        .query(&[("accountId", account_id)])
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to remove watcher ({}): {}", status, body);
-    }
+        .query(&[("accountId", account_id)]);
+    client.execute("remove watcher", request).await?;
 
     Ok(json!({}))
 }
@@ -866,13 +713,8 @@ pub async fn get_watchers(issue_key: &str, client: &ApiClient) -> Result<Value> 
         encode_path_segment(issue_key)
     );
 
-    let response = client.get(Service::Jira, &url).await?.send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to get watchers ({}): {}", status, body);
-    }
+    let request = client.get(Service::Jira, &url).await?;
+    let response = client.execute("get watchers", request).await?;
 
     let mut data: Value = response.json().await?;
     filter::apply(&mut data, client.config());
@@ -915,18 +757,8 @@ async fn paginate_values(
         query.push(("startAt", start_at_str.as_str()));
         query.push(("maxResults", page_size_str.as_str()));
 
-        let response = client
-            .get(Service::Jira, path)
-            .await?
-            .query(&query)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to {} ({}): {}", operation, status, body);
-        }
+        let request = client.get(Service::Jira, path).await?.query(&query);
+        let response = client.execute(operation, request).await?;
 
         let data: Value = response.json().await?;
 
@@ -983,17 +815,8 @@ async fn paginate_values(
 // -- Discovery endpoints --
 
 pub async fn get_issue_types(client: &ApiClient) -> Result<Value> {
-    let response = client
-        .get(Service::Jira, "/rest/api/3/issuetype")
-        .await?
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to get issue types ({}): {}", status, body);
-    }
+    let request = client.get(Service::Jira, "/rest/api/3/issuetype").await?;
+    let response = client.execute("get issue types", request).await?;
 
     let mut data: Value = response.json().await?;
     filter::apply(&mut data, client.config());
@@ -1001,17 +824,8 @@ pub async fn get_issue_types(client: &ApiClient) -> Result<Value> {
 }
 
 pub async fn get_priorities(client: &ApiClient) -> Result<Value> {
-    let response = client
-        .get(Service::Jira, "/rest/api/3/priority")
-        .await?
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to get priorities ({}): {}", status, body);
-    }
+    let request = client.get(Service::Jira, "/rest/api/3/priority").await?;
+    let response = client.execute("get priorities", request).await?;
 
     let mut data: Value = response.json().await?;
     filter::apply(&mut data, client.config());
@@ -1019,17 +833,8 @@ pub async fn get_priorities(client: &ApiClient) -> Result<Value> {
 }
 
 pub async fn get_statuses(client: &ApiClient) -> Result<Value> {
-    let response = client
-        .get(Service::Jira, "/rest/api/3/status")
-        .await?
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to get statuses ({}): {}", status, body);
-    }
+    let request = client.get(Service::Jira, "/rest/api/3/status").await?;
+    let response = client.execute("get statuses", request).await?;
 
     let mut data: Value = response.json().await?;
     filter::apply(&mut data, client.config());
@@ -1124,29 +929,20 @@ async fn post_issue_batches(
     for chunk in issues.chunks(AGILE_BULK_LIMIT) {
         let body = json!({ "issues": chunk });
 
-        let response = client
+        let request = client
             .post(Service::Jira, path)
             .await?
             .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+            .json(&body);
+        client.execute(operation, request).await.map_err(|err| {
             if processed == 0 {
-                anyhow::bail!("Failed to {} ({}): {}", operation, status, body);
+                err
+            } else {
+                err.context(format!(
+                    "Failed to {operation} after {processed}/{total} issues already processed"
+                ))
             }
-            anyhow::bail!(
-                "Failed to {} after {}/{} issues already processed ({}): {}",
-                operation,
-                processed,
-                total,
-                status,
-                body
-            );
-        }
+        })?;
 
         processed += chunk.len();
     }

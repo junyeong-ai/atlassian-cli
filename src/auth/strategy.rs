@@ -67,18 +67,11 @@ pub trait AuthStrategy: Send + Sync + std::fmt::Debug {
 /// (basic, oauth). Lives here — at the trait level — so neither strategy
 /// reaches into the other's module to share this helper.
 pub(crate) async fn probe_myself(client: &crate::ApiClient) -> Result<Identity> {
-    let response = client
+    let request = client
         .get(Service::Jira, "/rest/api/3/myself")
         .await?
-        .header("Accept", "application/json")
-        .send()
-        .await
-        .context("Failed to call /rest/api/3/myself")?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Authentication failed ({}): {}", status, body);
-    }
+        .header("Accept", "application/json");
+    let response = client.execute("verify credentials", request).await?;
     let data: serde_json::Value = response.json().await.context("Failed to parse /myself")?;
     Ok(Identity {
         display_name: data["displayName"]

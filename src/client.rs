@@ -1,10 +1,69 @@
-use crate::auth::AuthStrategy;
+use crate::auth::{AuthMethod, AuthStrategy};
 use crate::config::Config;
 use anyhow::{Context, Result};
+use reqwest::StatusCode;
 use std::sync::Arc;
 use std::time::Duration;
 
 pub(crate) const ATLASSIAN_PROXY_BASE: &str = "https://api.atlassian.com";
+
+/// Ceiling on 429 retries per request. Atlassian's point-based rate limits
+/// refill continuously, so a few short waits clear transient exhaustion;
+/// anything that survives this many retries is a budget problem the caller
+/// must see.
+const MAX_RATE_LIMIT_RETRIES: u32 = 3;
+
+/// Upper bound on any single retry wait. A server-provided `Retry-After`
+/// beyond this indicates an exhausted budget, not a transient spike — the
+/// capped wait gives one last attempt instead of stalling a pipeline for
+/// minutes.
+const RATE_LIMIT_DELAY_CAP: Duration = Duration::from_secs(60);
+
+/// Base delay for the exponential backoff used when a 429 carries no
+/// parseable `Retry-After` (doubles per attempt: 500ms, 1s, 2s).
+const RATE_LIMIT_BACKOFF_BASE: Duration = Duration::from_millis(500);
+
+/// A non-2xx response from the Atlassian API.
+///
+/// Every API call surfaces failures through this type (via
+/// [`ApiClient::execute`]) so the CLI layer can map the status to an exit
+/// code and a structured error object. `Display` renders the canonical
+/// `Failed to {operation} ({status}): {body}` message.
+#[derive(Debug)]
+pub struct ApiError {
+    pub operation: String,
+    pub status: StatusCode,
+    pub body: String,
+    /// Actionable remediation for failures whose cause is invisible in the
+    /// server response (e.g. a scoped token used with basic auth). Surfaced
+    /// as a discrete field in the CLI's structured error output.
+    pub hint: Option<&'static str>,
+}
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Failed to {} ({}): {}",
+            self.operation, self.status, self.body
+        )
+    }
+}
+
+impl std::error::Error for ApiError {}
+
+/// Delay before a 429 retry: the server's `Retry-After` (delta-seconds form)
+/// when present and parseable, else exponential backoff. Capped either way —
+/// see [`RATE_LIMIT_DELAY_CAP`].
+fn rate_limit_delay(headers: &reqwest::header::HeaderMap, attempt: u32) -> Duration {
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| RATE_LIMIT_BACKOFF_BASE * 2u32.saturating_pow(attempt))
+        .min(RATE_LIMIT_DELAY_CAP)
+}
 
 /// Extract path + query + fragment from an absolute URL by skipping `scheme://host`.
 /// Returns `None` if there is no scheme separator or nothing after the host.
@@ -145,6 +204,69 @@ impl ApiClient {
         Ok(self.http.get(url).header("Authorization", header))
     }
 
+    /// Send a prepared request, retrying rate-limited attempts and converting
+    /// any non-2xx response into a typed [`ApiError`] named after `operation`.
+    ///
+    /// Only 429 is retried: it is the one status that guarantees the server
+    /// did not process the request, so a retry is safe even for
+    /// non-idempotent writes (retrying 5xx could duplicate a write that the
+    /// server committed before failing). The wait honors `Retry-After` and
+    /// falls back to exponential backoff. Requests with a streaming body
+    /// (multipart uploads) cannot be cloned and are sent exactly once.
+    pub async fn execute(
+        &self,
+        operation: &str,
+        request: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response> {
+        let mut request = request;
+        let mut attempt: u32 = 0;
+        loop {
+            let retry = request.try_clone();
+            let response = request.send().await?;
+            let status = response.status();
+            if status.is_success() {
+                return Ok(response);
+            }
+            if status == StatusCode::TOO_MANY_REQUESTS
+                && attempt < MAX_RATE_LIMIT_RETRIES
+                && let Some(next) = retry
+            {
+                let delay = rate_limit_delay(response.headers(), attempt);
+                tracing::warn!(
+                    operation,
+                    attempt = attempt + 1,
+                    delay_ms = delay.as_millis() as u64,
+                    "rate limited (429), retrying"
+                );
+                tokio::time::sleep(delay).await;
+                request = next;
+                attempt += 1;
+                continue;
+            }
+            let body = response.text().await.unwrap_or_default();
+            return Err(ApiError {
+                operation: operation.to_string(),
+                status,
+                body,
+                hint: self.error_hint(status),
+            }
+            .into());
+        }
+    }
+
+    /// Remediation hint for failures whose cause the server response does not
+    /// explain. Currently: a 401 under basic auth, which is what a scoped API
+    /// token produces when used against the site URL (scoped tokens only work
+    /// through the `api.atlassian.com` gateway).
+    fn error_hint(&self, status: StatusCode) -> Option<&'static str> {
+        (status == StatusCode::UNAUTHORIZED && self.strategy.method() == AuthMethod::Basic)
+            .then_some(
+                "basic auth requires a classic (unscoped) API token; scoped API tokens are \
+                 rejected at the site URL — use a classic token or switch to the oauth or \
+                 service_account method",
+            )
+    }
+
     /// Rewrite an external absolute URL through the strategy
     /// (e.g. service_account swaps the host to the Atlassian proxy).
     pub fn rewrite_url(&self, service: Service, external_url: &str) -> String {
@@ -184,6 +306,140 @@ mod tests {
     fn test_service_path_segment() {
         assert_eq!(Service::Jira.path_segment(), "jira");
         assert_eq!(Service::Confluence.path_segment(), "confluence");
+    }
+
+    #[test]
+    fn rate_limit_delay_honors_retry_after_seconds() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(reqwest::header::RETRY_AFTER, "2".parse().unwrap());
+        assert_eq!(rate_limit_delay(&headers, 0), Duration::from_secs(2));
+    }
+
+    #[test]
+    fn rate_limit_delay_caps_excessive_retry_after() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(reqwest::header::RETRY_AFTER, "3600".parse().unwrap());
+        assert_eq!(rate_limit_delay(&headers, 0), RATE_LIMIT_DELAY_CAP);
+    }
+
+    #[test]
+    fn rate_limit_delay_backs_off_exponentially_without_header() {
+        let headers = reqwest::header::HeaderMap::new();
+        assert_eq!(rate_limit_delay(&headers, 0), RATE_LIMIT_BACKOFF_BASE);
+        assert_eq!(rate_limit_delay(&headers, 1), RATE_LIMIT_BACKOFF_BASE * 2);
+        assert_eq!(rate_limit_delay(&headers, 2), RATE_LIMIT_BACKOFF_BASE * 4);
+    }
+
+    #[test]
+    fn rate_limit_delay_falls_back_on_http_date_form() {
+        // The HTTP-date form of Retry-After is valid per RFC 9110 but rare
+        // from Atlassian; it must select the backoff path, not panic.
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::RETRY_AFTER,
+            "Fri, 11 Jul 2026 08:00:00 GMT".parse().unwrap(),
+        );
+        assert_eq!(rate_limit_delay(&headers, 0), RATE_LIMIT_BACKOFF_BASE);
+    }
+
+    #[tokio::test]
+    async fn execute_retries_429_then_succeeds() {
+        use crate::test_utils::mock_client;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/probe"))
+            .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "0"))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/probe"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let request = client.get(Service::Jira, "/probe").await.unwrap();
+        let response = client.execute("probe", request).await.unwrap();
+        assert_eq!(response.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn execute_surfaces_429_after_retries_exhausted() {
+        use crate::test_utils::mock_client;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/probe"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("Retry-After", "0")
+                    .set_body_string("budget exhausted"),
+            )
+            .expect(1 + MAX_RATE_LIMIT_RETRIES as u64)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let request = client.get(Service::Jira, "/probe").await.unwrap();
+        let err = client.execute("probe", request).await.unwrap_err();
+        let api_err = err.downcast_ref::<ApiError>().expect("typed ApiError");
+        assert_eq!(api_err.status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(api_err.operation, "probe");
+        assert!(err.to_string().contains("Failed to probe (429"));
+        assert!(err.to_string().contains("budget exhausted"));
+    }
+
+    #[tokio::test]
+    async fn execute_does_not_retry_server_errors() {
+        use crate::test_utils::mock_client;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/probe"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let request = client.post(Service::Jira, "/probe").await.unwrap();
+        let err = client.execute("probe", request).await.unwrap_err();
+        let api_err = err.downcast_ref::<ApiError>().expect("typed ApiError");
+        assert_eq!(api_err.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(api_err.hint.is_none());
+    }
+
+    #[tokio::test]
+    async fn execute_hints_on_401_under_basic_auth() {
+        use crate::test_utils::mock_client;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/probe"))
+            .respond_with(ResponseTemplate::new(401))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let request = client.get(Service::Jira, "/probe").await.unwrap();
+        let err = client.execute("probe", request).await.unwrap_err();
+        let api_err = err.downcast_ref::<ApiError>().expect("typed ApiError");
+        assert_eq!(api_err.status, StatusCode::UNAUTHORIZED);
+        let hint = api_err.hint.expect("401 under basic auth carries a hint");
+        assert!(hint.contains("classic"));
     }
 
     #[tokio::test]

@@ -65,6 +65,11 @@ enum Command {
     Confluence(ConfluenceCommand),
     Config(ConfigCommand),
     Auth(AuthCommand),
+    #[command(about = "Generate a shell completion script on stdout")]
+    Completions {
+        #[arg(value_enum, help = "Target shell")]
+        shell: clap_complete::Shell,
+    },
 }
 
 #[derive(Parser)]
@@ -599,7 +604,7 @@ enum ConfigSubcommand {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
     let cli = Cli::parse();
 
     let log_level = match cli.verbose {
@@ -614,6 +619,14 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
+    if let Err(err) = run(cli).await {
+        let (code, payload) = render_error(&err);
+        eprintln!("{payload}");
+        std::process::exit(code);
+    }
+}
+
+async fn run(cli: Cli) -> Result<()> {
     let overrides = cli.to_overrides();
     let config_path = cli.config.clone();
     let profile = cli.profile.clone();
@@ -641,7 +654,45 @@ async fn main() -> Result<()> {
             output_json(&result, cli.pretty);
             Ok(())
         }
+        Command::Completions { shell } => {
+            use clap::CommandFactory;
+            clap_complete::generate(
+                shell,
+                &mut Cli::command(),
+                "atlassian-cli",
+                &mut std::io::stdout(),
+            );
+            Ok(())
+        }
     }
+}
+
+/// Render a failed run as a single-line JSON object on stderr and pick the
+/// exit code. Stdout stays reserved for results, so `| jq` pipelines see
+/// either valid output or nothing.
+///
+/// Exit codes, stable for scripted callers: 1 generic, 2 CLI usage (clap),
+/// 3 auth (401/403), 4 not found (404), 5 rate limited (429),
+/// 6 server error (5xx). API failures carry `status`/`operation` (and
+/// `hint` when remediation is known) alongside `message`.
+fn render_error(err: &anyhow::Error) -> (i32, String) {
+    let mut error = serde_json::json!({ "message": format!("{err:#}") });
+    let mut code = 1;
+    if let Some(api) = err.downcast_ref::<atlassian_cli::ApiError>() {
+        error["status"] = api.status.as_u16().into();
+        error["operation"] = api.operation.clone().into();
+        if let Some(hint) = api.hint {
+            error["hint"] = hint.into();
+        }
+        code = match api.status.as_u16() {
+            401 | 403 => 3,
+            404 => 4,
+            429 => 5,
+            s if s >= 500 => 6,
+            _ => 1,
+        };
+    }
+    (code, serde_json::json!({ "error": error }).to_string())
 }
 
 async fn handle_config(

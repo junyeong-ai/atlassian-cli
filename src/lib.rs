@@ -14,6 +14,7 @@ pub mod test_utils;
 
 pub use auth::{AuthConfig, AuthStrategy};
 pub use client::ApiClient;
+pub use client::ApiError;
 pub use client::Service;
 pub use config::CliOverrides;
 pub use config::Config;

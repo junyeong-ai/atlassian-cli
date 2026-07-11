@@ -64,8 +64,11 @@ Both strategy impls delegate; neither inlines the format string.
 
 - `flow.rs` runs the authorize → code → token exchange via the `oauth2`
   crate (PKCE S256, `audience=api.atlassian.com`, `prompt=consent`).
-  The crate is built against reqwest 0.12; we use a dedicated 0.12 client
-  for OAuth endpoint calls while API traffic stays on the binary's 0.13.
+  The crate's bundled `reqwest` feature is disabled; token-endpoint calls
+  bridge into the binary's own reqwest/rustls client through
+  `perform_oauth_request` (redirects hard-disabled — a followed redirect
+  would hand the client credentials to the redirect target), keeping a
+  single reqwest in the dependency tree.
 - `callback.rs` is a one-shot loopback HTTP receiver on
   `127.0.0.1:{redirect_port}/callback` (RFC 8252). Pure tokio TCP — no
   HTTP framework dependency.
