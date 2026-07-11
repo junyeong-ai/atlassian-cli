@@ -451,7 +451,7 @@ Supported: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 
 **🌐 [한국어](README.md)** | **English**
 
-**Version 0.5.1** • Rust 2024 Edition
+**Version 0.7.0** • Rust 2024 Edition
 
 Made with ❤️ for productivity
 

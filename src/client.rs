@@ -211,25 +211,28 @@ impl ApiClient {
     /// did not process the request, so a retry is safe even for
     /// non-idempotent writes (retrying 5xx could duplicate a write that the
     /// server committed before failing). The wait honors `Retry-After` and
-    /// falls back to exponential backoff. Requests with a streaming body
-    /// (multipart uploads) cannot be cloned and are sent exactly once.
+    /// falls back to exponential backoff; because the wait can cross a
+    /// token's refresh threshold, each retry re-derives the `Authorization`
+    /// header instead of replaying the one built before the wait. Requests
+    /// with a streaming body (multipart uploads) cannot be cloned and are
+    /// sent exactly once.
     pub async fn execute(
         &self,
         operation: &str,
         request: reqwest::RequestBuilder,
     ) -> Result<reqwest::Response> {
-        let mut request = request;
+        let mut request = request.build()?;
         let mut attempt: u32 = 0;
         loop {
             let retry = request.try_clone();
-            let response = request.send().await?;
+            let response = self.http.execute(request).await?;
             let status = response.status();
             if status.is_success() {
                 return Ok(response);
             }
             if status == StatusCode::TOO_MANY_REQUESTS
                 && attempt < MAX_RATE_LIMIT_RETRIES
-                && let Some(next) = retry
+                && let Some(mut next) = retry
             {
                 let delay = rate_limit_delay(response.headers(), attempt);
                 tracing::warn!(
@@ -239,6 +242,13 @@ impl ApiClient {
                     "rate limited (429), retrying"
                 );
                 tokio::time::sleep(delay).await;
+                let authorization = self.strategy.authorization(&self.http).await?;
+                next.headers_mut().insert(
+                    reqwest::header::AUTHORIZATION,
+                    authorization
+                        .parse()
+                        .context("Authorization header is not a valid header value")?,
+                );
                 request = next;
                 attempt += 1;
                 continue;
@@ -255,15 +265,17 @@ impl ApiClient {
     }
 
     /// Remediation hint for failures whose cause the server response does not
-    /// explain. Currently: a 401 under basic auth, which is what a scoped API
-    /// token produces when used against the site URL (scoped tokens only work
-    /// through the `api.atlassian.com` gateway).
+    /// explain. Currently: a 401 under basic auth — commonly a wrong or
+    /// expired token, but also what a scoped API token produces when used
+    /// against the site URL (scoped tokens only work through the
+    /// `api.atlassian.com` gateway), which nothing in the server response
+    /// reveals.
     fn error_hint(&self, status: StatusCode) -> Option<&'static str> {
         (status == StatusCode::UNAUTHORIZED && self.strategy.method() == AuthMethod::Basic)
             .then_some(
-                "basic auth requires a classic (unscoped) API token; scoped API tokens are \
-                 rejected at the site URL — use a classic token or switch to the oauth or \
-                 service_account method",
+                "the token was rejected — verify it is valid and not expired, and note that \
+                 basic auth needs a classic (unscoped) API token: scoped tokens only work \
+                 through the api.atlassian.com gateway (oauth or service_account method)",
             )
     }
 
@@ -395,6 +407,69 @@ mod tests {
         assert_eq!(api_err.operation, "probe");
         assert!(err.to_string().contains("Failed to probe (429"));
         assert!(err.to_string().contains("budget exhausted"));
+    }
+
+    #[tokio::test]
+    async fn execute_rederives_authorization_on_retry() {
+        use crate::auth::AuthMethod;
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        /// Returns `Bearer token-{n}` with a fresh `n` per call, so the test
+        /// can assert that a retry carries a newly derived header rather than
+        /// a replay of the pre-wait one.
+        #[derive(Debug)]
+        struct CountingAuth {
+            base_url: String,
+            calls: AtomicU32,
+        }
+
+        #[async_trait::async_trait]
+        impl AuthStrategy for CountingAuth {
+            fn method(&self) -> AuthMethod {
+                AuthMethod::Basic
+            }
+
+            async fn authorization(&self, _http: &reqwest::Client) -> Result<String> {
+                let n = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+                Ok(format!("Bearer token-{n}"))
+            }
+
+            fn build_url(&self, _service: Service, path: &str) -> String {
+                format!("{}{}", self.base_url, path)
+            }
+
+            fn identity_label(&self) -> String {
+                "counting".to_string()
+            }
+        }
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/probe"))
+            .and(header("Authorization", "Bearer token-1"))
+            .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "0"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/probe"))
+            .and(header("Authorization", "Bearer token-2"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let strategy = Arc::new(CountingAuth {
+            base_url: server.uri(),
+            calls: AtomicU32::new(0),
+        });
+        let client =
+            ApiClient::new_with_strategy(strategy, crate::test_utils::create_test_config());
+        let request = client.get(Service::Jira, "/probe").await.unwrap();
+        let response = client.execute("probe", request).await.unwrap();
+        assert_eq!(response.status(), 200);
     }
 
     #[tokio::test]

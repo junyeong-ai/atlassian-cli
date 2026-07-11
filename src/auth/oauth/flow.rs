@@ -267,6 +267,72 @@ mod tests {
         assert_eq!(redirect_uri(8976), "http://127.0.0.1:8976/callback");
     }
 
+    #[tokio::test]
+    async fn perform_oauth_request_round_trips_method_headers_and_body() {
+        use wiremock::matchers::{body_string, header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .and(header("Content-Type", "application/x-www-form-urlencoded"))
+            .and(body_string("grant_type=authorization_code&code=abc"))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .set_body_raw(r#"{"error":"invalid_grant"}"#, "application/json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let request = http::Request::builder()
+            .method("POST")
+            .uri(format!("{}/oauth/token", server.uri()))
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(b"grant_type=authorization_code&code=abc".to_vec())
+            .unwrap();
+
+        let response = perform_oauth_request(oauth_http_client().unwrap(), request)
+            .await
+            .unwrap();
+
+        // Non-2xx must pass through untouched — the oauth2 crate parses the
+        // RFC 6749 error body itself.
+        assert_eq!(response.status(), 400);
+        assert_eq!(response.headers()["content-type"], "application/json");
+        assert_eq!(response.body(), br#"{"error":"invalid_grant"}"#);
+    }
+
+    #[tokio::test]
+    async fn perform_oauth_request_does_not_follow_redirects() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .respond_with(
+                ResponseTemplate::new(302).insert_header("Location", "https://attacker.example/"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let request = http::Request::builder()
+            .method("POST")
+            .uri(format!("{}/oauth/token", server.uri()))
+            .body(Vec::new())
+            .unwrap();
+
+        let response = perform_oauth_request(oauth_http_client().unwrap(), request)
+            .await
+            .unwrap();
+
+        // Following the redirect would replay the client credentials to the
+        // Location target; the 302 must surface as-is instead.
+        assert_eq!(response.status(), 302);
+    }
+
     #[test]
     fn resolve_cloud_id_prefers_pin() {
         let sites = vec![SiteInfo {

@@ -172,10 +172,10 @@ atlassian-cli confluence attachment upload 12345 ./icon.svg --content-type image
 Failures print a single-line JSON object to **stderr**; stdout stays results-only:
 
 ```json
-{"error":{"message":"Failed to get issue (404 Not Found): ...","operation":"get issue","status":404,"hint":"..."}}
+{"error":{"message":"Failed to get issue (404 Not Found): ...","operation":"get issue","status":404}}
 ```
 
-Parse `status`/`operation` instead of regexing the message; `hint` (when present) is the remediation to relay to the user. Exit codes: `0` ok, `1` generic, `2` usage, `3` auth (401/403), `4` not found, `5` rate limited (429 — already retried 3× with `Retry-After`; back off before rerunning), `6` server error (5xx).
+Parse `status`/`operation` instead of regexing the message; `hint` (present only when a known remediation exists, e.g. a 401 under basic auth) is the remediation to relay to the user. Exit codes: `0` ok, `1` generic, `2` usage, `3` auth (401/403), `4` not found, `5` rate limited (429 — already retried 3× with `Retry-After`; back off before rerunning), `6` server error (5xx).
 
 ## Authentication
 
