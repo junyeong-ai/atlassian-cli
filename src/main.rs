@@ -734,15 +734,39 @@ async fn handle_config(
         ConfigSubcommand::List => {
             println!("Configuration files (in precedence order):\n");
 
+            let mut profiles: Vec<String> = Vec::new();
+            let mut collect =
+                |path: &std::path::Path| match atlassian_cli::Config::profile_names(path) {
+                    Ok(names) => {
+                        for name in names {
+                            if !profiles.contains(&name) {
+                                profiles.push(name);
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("Warning: could not read profiles from {path:?}: {err:#}")
+                    }
+                };
+
             if let Some(global) = atlassian_cli::Config::global_config_path() {
                 let status = if global.exists() { "✓" } else { "✗" };
                 println!("Global:  {:?} {}", global, status);
+                if global.exists() {
+                    collect(&global);
+                }
             }
 
             if let Some(project) = atlassian_cli::Config::project_config_path() {
                 println!("Project: {:?} ✓", project);
+                collect(&project);
             } else {
                 println!("Project: (none)");
+            }
+
+            println!("\nProfiles (use --profile <name>):");
+            for name in &profiles {
+                println!("  {name}");
             }
 
             println!("\nEnvironment variables:");

@@ -164,7 +164,7 @@ atlassian-cli confluence attachment upload 12345 ./icon.svg --content-type image
 | Every result | `--all` |
 | Stream to disk / pipe | `--all --stream` (outputs JSONL) |
 | Pick fields (Jira `get` & `search`) | `--fields key,summary,status` (or `*all` on `get` for the full issue) |
-| Expand fields (Confluence) | `--expand ancestors,space` |
+| Expand fields (Confluence `search` only) | `--expand ancestors,space` — `get` has no `--expand`; read `spaceId` from `get`, then map it via `space list` |
 
 `--stream` writes JSONL to stdout and progress to stderr — never mix it with `--pretty`.
 
@@ -190,7 +190,7 @@ The active profile dictates what identity the call runs as:
 | `basic` | the API-token owner (classic/unscoped token only — a scoped token 401s at the site URL; the error carries a `hint`) |
 | `service_account` | a non-human service principal |
 
-Run `atlassian-cli config validate` first when a request will write or fetch many pages — it prints the resolved identity and fails fast on bad credentials.
+Run `atlassian-cli config validate` first when a request will write or fetch many pages — it prints the resolved identity and fails fast on bad credentials. Caveat: the identity probe hits a Jira endpoint, so on a Confluence-only-scoped profile it returns a 401 "scope does not match" even when the profile works — treat that specific failure as expected and confirm with a cheap read (e.g. `space list`) instead.
 
 When the user reports auth trouble or asks to switch accounts:
 

@@ -556,6 +556,22 @@ impl Config {
         Ok(config)
     }
 
+    /// Profile names defined in a config file, sorted, with `default` first
+    /// when present. Names only — no profile contents are exposed, so callers
+    /// (e.g. `config list`) can enumerate without touching secrets.
+    pub fn profile_names(path: &Path) -> Result<Vec<String>> {
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("Failed to read config file: {:?}", path))?;
+
+        let config_file: ConfigFile = toml::from_str(&content)
+            .with_context(|| format!("Failed to parse config file: {:?}", path))?;
+
+        let mut names: Vec<String> = config_file.profiles.keys().cloned().collect();
+        names.sort();
+        names.insert(0, "default".to_string());
+        Ok(names)
+    }
+
     /// Load a profile from a config file.
     /// Returns `Ok(None)` if the named profile doesn't exist in this file
     /// (other config files may still have it).
@@ -847,6 +863,56 @@ rate_limit_delay_ms = 200
 #[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_names_lists_default_first_then_sorted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            r#"
+[default]
+
+[zeta.auth]
+method = "basic"
+email = "a@b.c"
+token = "t"
+
+[alpha]
+domain = "x.atlassian.net"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            Config::profile_names(&path).unwrap(),
+            vec!["default", "alpha", "zeta"]
+        );
+    }
+
+    #[test]
+    fn profile_names_reports_default_even_when_implicit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            "[only.auth]\nmethod = \"basic\"\nemail = \"a@b.c\"\ntoken = \"t\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            Config::profile_names(&path).unwrap(),
+            vec!["default", "only"]
+        );
+    }
+
+    #[test]
+    fn profile_names_errors_on_invalid_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "not [valid toml").unwrap();
+        assert!(Config::profile_names(&path).is_err());
+    }
 
     // ---------- AuthResolver tests ----------
     // These tests mutate process-global environment variables, so they must
