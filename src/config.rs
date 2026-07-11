@@ -560,6 +560,9 @@ impl Config {
     /// when present. Names only — no profile contents are exposed, so callers
     /// (e.g. `config list`) can enumerate without touching secrets.
     pub fn profile_names(path: &Path) -> Result<Vec<String>> {
+        #[cfg(unix)]
+        Self::check_permissions(path)?;
+
         let content = fs::read_to_string(path)
             .with_context(|| format!("Failed to read config file: {:?}", path))?;
 
