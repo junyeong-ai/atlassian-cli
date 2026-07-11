@@ -169,6 +169,8 @@ download_binary() {
         return 1
     fi
 
+    verify_attestation "$BINARY_TMP_DIR/$archive"
+
     echo "Extracting..." >&2
     (cd "$BINARY_TMP_DIR" && tar -xzf "$archive") >&2 || return 1
     binary_path="$BINARY_TMP_DIR/$BINARY_NAME"
@@ -187,11 +189,9 @@ cargo_build_release() {
         return 1
     fi
 
-    if cargo +1.96.0 --version >/dev/null 2>&1; then
-        cargo +1.96.0 build --release
-    else
-        cargo build --release
-    fi
+    # rust-toolchain.toml in the checkout pins the toolchain; a rustup-managed
+    # cargo resolves it automatically, so no version is hardcoded here.
+    cargo build --release
 }
 
 build_from_source() {
@@ -205,17 +205,43 @@ build_from_source() {
     echo "$PROJECT_ROOT/target/release/$BINARY_NAME"
 }
 
-install_binary() {
-    local binary_path="$1"
+# Defense-in-depth on top of the mandatory sha256 check: the checksum file
+# shares its origin with the archive, while a GitHub attestation proves the
+# artifact was built by this repository's release workflow. Verification is
+# opportunistic (needs an authenticated `gh`), never silent, and never fatal —
+# the checksum remains the hard gate.
+verify_attestation() {
+    local archive_path="$1"
 
-    mkdir -p "$INSTALL_DIR"
-    cp "$binary_path" "$INSTALL_DIR/$BINARY_NAME"
-    chmod +x "$INSTALL_DIR/$BINARY_NAME"
-
-    if [[ "${OSTYPE:-}" == "darwin"* ]]; then
-        codesign --force --deep --sign - "$INSTALL_DIR/$BINARY_NAME" 2>/dev/null || true
+    if ! command -v gh >/dev/null; then
+        echo "gh CLI not found; skipping build-provenance verification (checksum already verified)" >&2
+        return 0
     fi
 
+    if gh attestation verify "$archive_path" --repo "$REPO" >/dev/null 2>&1; then
+        echo "Build provenance verified (GitHub attestation)" >&2
+    else
+        echo "WARNING: could not verify build-provenance attestation for $(basename "$archive_path")" >&2
+        echo "  (needs 'gh auth login' and network access; the sha256 checksum did verify)" >&2
+    fi
+}
+
+install_binary() {
+    local binary_path="$1"
+    local staged
+
+    mkdir -p "$INSTALL_DIR"
+    # Stage next to the destination and rename: replacing a running binary
+    # in place fails with ETXTBSY on Linux, while rename always succeeds.
+    staged="$INSTALL_DIR/.$BINARY_NAME.tmp.$$"
+    cp "$binary_path" "$staged"
+    chmod +x "$staged"
+
+    if [[ "${OSTYPE:-}" == "darwin"* ]]; then
+        codesign --force --deep --sign - "$staged" 2>/dev/null || true
+    fi
+
+    mv -f "$staged" "$INSTALL_DIR/$BINARY_NAME"
     echo "Installed to $INSTALL_DIR/$BINARY_NAME" >&2
 }
 

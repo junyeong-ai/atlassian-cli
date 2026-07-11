@@ -161,6 +161,7 @@ echo
 echo "Uninstallation complete"
 echo
 echo "Remaining items not removed automatically:"
+echo "  - OAuth tokens in the OS keychain (run 'atlassian-cli auth logout' BEFORE uninstalling to clear them)"
 echo "  - Project-level config: ./.atlassian.toml or ./.atlassian/config.toml"
 echo "  - Repository checkout files"
 echo "  - Environment variables in your shell profile"
