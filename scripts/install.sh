@@ -27,10 +27,12 @@ PROJECT_SKILL_DIR="$PROJECT_ROOT/.claude/skills/$SKILL_NAME"
 SKILL_SOURCE_DIR=""
 SKILL_TMP_DIR=""
 BINARY_TMP_DIR=""
+STAGED_BINARY=""
 
 cleanup() {
     [ -n "$SKILL_TMP_DIR" ] && rm -rf "$SKILL_TMP_DIR"
     [ -n "$BINARY_TMP_DIR" ] && rm -rf "$BINARY_TMP_DIR"
+    [ -n "$STAGED_BINARY" ] && rm -f "$STAGED_BINARY"
     return 0
 }
 
@@ -206,42 +208,56 @@ build_from_source() {
 }
 
 # Defense-in-depth on top of the mandatory sha256 check: the checksum file
-# shares its origin with the archive, while a GitHub attestation proves the
-# artifact was built by this repository's release workflow. Verification is
-# opportunistic (needs an authenticated `gh`), never silent, and never fatal —
-# the checksum remains the hard gate.
+# shares its origin with the archive, so it only catches transport corruption,
+# while a GitHub attestation proves the artifact was built by this
+# repository's release workflow. The three outcomes are reported distinctly —
+# tooling absent and unauthenticated are skips, but a verification that RAN
+# and rejected the artifact surfaces gh's own diagnostics. Rejection is loud
+# yet non-fatal: releases published before attestations existed fail this
+# check legitimately, so the installer warns and defers to the operator
+# instead of guessing which case it is.
 verify_attestation() {
     local archive_path="$1"
+    local gh_output
 
     if ! command -v gh >/dev/null; then
-        echo "gh CLI not found; skipping build-provenance verification (checksum already verified)" >&2
+        echo "gh CLI not found; skipping build-provenance verification" >&2
         return 0
     fi
 
-    if gh attestation verify "$archive_path" --repo "$REPO" >/dev/null 2>&1; then
-        echo "Build provenance verified (GitHub attestation)" >&2
-    else
-        echo "WARNING: could not verify build-provenance attestation for $(basename "$archive_path")" >&2
-        echo "  (needs 'gh auth login' and network access; the sha256 checksum did verify)" >&2
+    if ! gh auth status >/dev/null 2>&1; then
+        echo "gh CLI is not authenticated; skipping build-provenance verification (run 'gh auth login' to enable it)" >&2
+        return 0
     fi
+
+    if gh_output=$(gh attestation verify "$archive_path" --repo "$REPO" 2>&1); then
+        echo "Build provenance verified (GitHub attestation)" >&2
+        return 0
+    fi
+
+    echo "WARNING: build-provenance verification FAILED for $(basename "$archive_path"):" >&2
+    printf '%s\n' "$gh_output" >&2
+    echo "  No valid attestation from $REPO's release workflow matches this artifact." >&2
+    echo "  Releases published before attestations were introduced fail this check legitimately;" >&2
+    echo "  for a current release this can indicate a tampered artifact — stop and verify manually." >&2
 }
 
 install_binary() {
     local binary_path="$1"
-    local staged
 
     mkdir -p "$INSTALL_DIR"
     # Stage next to the destination and rename: replacing a running binary
     # in place fails with ETXTBSY on Linux, while rename always succeeds.
-    staged="$INSTALL_DIR/.$BINARY_NAME.tmp.$$"
-    cp "$binary_path" "$staged"
-    chmod +x "$staged"
+    STAGED_BINARY="$INSTALL_DIR/.$BINARY_NAME.tmp.$$"
+    cp "$binary_path" "$STAGED_BINARY"
+    chmod +x "$STAGED_BINARY"
 
     if [[ "${OSTYPE:-}" == "darwin"* ]]; then
-        codesign --force --deep --sign - "$staged" 2>/dev/null || true
+        codesign --force --deep --sign - "$STAGED_BINARY" 2>/dev/null || true
     fi
 
-    mv -f "$staged" "$INSTALL_DIR/$BINARY_NAME"
+    mv -f "$STAGED_BINARY" "$INSTALL_DIR/$BINARY_NAME"
+    STAGED_BINARY=""
     echo "Installed to $INSTALL_DIR/$BINARY_NAME" >&2
 }
 
