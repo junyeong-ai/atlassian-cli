@@ -603,8 +603,24 @@ enum ConfigSubcommand {
     Validate,
 }
 
+/// Restore the conventional Unix reaction to a closed pipe. Rust ignores
+/// SIGPIPE by default, so `println!` panics with a broken-pipe error when a
+/// consumer like `head` or `jq` exits early — fatal for a JSON-first CLI
+/// whose stdout is routinely piped. SIG_DFL makes the process end quietly at
+/// that point instead, exactly like `cat` or `grep`.
+#[cfg(unix)]
+fn reset_sigpipe() {
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
+#[cfg(not(unix))]
+fn reset_sigpipe() {}
+
 #[tokio::main]
 async fn main() {
+    reset_sigpipe();
     let cli = Cli::parse();
 
     let log_level = match cli.verbose {

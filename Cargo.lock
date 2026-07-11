@@ -252,6 +252,7 @@ dependencies = [
  "dirs",
  "htmd",
  "keyring-core",
+ "libc",
  "oauth2",
  "percent-encoding",
  "regex",
