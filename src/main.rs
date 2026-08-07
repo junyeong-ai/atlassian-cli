@@ -1353,36 +1353,47 @@ async fn handle_auth(
             Ok(())
         }
         AuthSubcommand::Logout => {
-            // Only proceed if the profile is OAuth — basic / service_account
-            // have no stored session, and silently succeeding would mislead.
+            // Clearing is driven by what is stored, not by the configured
+            // method: a profile moved off OAuth keeps its persisted session,
+            // and gating on the method would leave that credential unreachable.
             let config = atlassian_cli::Config::load_without_validation(
                 config_path.as_ref(),
                 profile.as_ref(),
                 overrides,
             )?;
-            match config.auth.as_ref().map(|a| a.method()) {
-                Some(AuthMethod::OAuth) => {
-                    TokenStore::new(&config.profile)?.delete().await?;
-                    println!("✓ OAuth tokens cleared for profile '{}'", config.profile);
+            let store = TokenStore::new(&config.profile)?;
+            match store.load().await? {
+                Some(loaded) => {
+                    store.delete().await?;
+                    println!(
+                        "✓ OAuth session cleared for profile '{}' ({})",
+                        config.profile, loaded.backend
+                    );
                 }
-                Some(method) => println!(
-                    "Profile '{}' uses '{}' auth — nothing to log out (no stored session).",
-                    config.profile, method
-                ),
                 None => println!(
-                    "Profile '{}' has no auth configured — nothing to log out.",
+                    "No stored session for profile '{}' — nothing to clear.",
                     config.profile
                 ),
             }
             Ok(())
         }
         AuthSubcommand::Status => {
-            let profile_name = profile.as_deref().unwrap_or("default");
-            let store = TokenStore::new(profile_name)?;
-            match store.load().await? {
-                Some(loaded) => {
+            // The configured method and the stored session are independent
+            // facts: a profile switched away from OAuth still has whatever the
+            // last login persisted. Report the method from config and the
+            // session from the store, never inferring one from the other.
+            let config = atlassian_cli::Config::load_without_validation(
+                config_path.as_ref(),
+                profile.as_ref(),
+                overrides,
+            )?;
+            let method = config.auth.as_ref().map(|a| a.method());
+            let session = TokenStore::new(&config.profile)?.load().await?;
+
+            match (method, &session) {
+                (Some(AuthMethod::OAuth), Some(loaded)) => {
                     let t = &loaded.tokens;
-                    println!("✓ Logged in (profile: {})", profile_name);
+                    println!("✓ Logged in (profile: {})", config.profile);
                     println!("  Storage: {}", loaded.backend);
                     if let Some(cid) = &t.cloud_id {
                         println!("  Cloud ID: {}", cid);
@@ -1403,10 +1414,31 @@ async fn handle_auth(
                         }
                     );
                 }
-                None => println!(
+                (Some(AuthMethod::OAuth), None) => println!(
                     "Not logged in (profile: {}). Run `atlassian-cli auth login`.",
-                    profile_name
+                    config.profile
                 ),
+                (Some(method), _) => {
+                    println!(
+                        "Profile '{}' uses '{}' auth — credentials are read from config/env, \
+                         not a stored session.",
+                        config.profile, method
+                    );
+                }
+                (None, _) => println!("Profile '{}' has no auth configured.", config.profile),
+            }
+
+            // A session left behind by a previous OAuth configuration is a live
+            // credential the current method never consults. Surface it so it can
+            // be cleared rather than lingering unnoticed in the keychain.
+            if !matches!(method, Some(AuthMethod::OAuth))
+                && let Some(loaded) = &session
+            {
+                println!(
+                    "  Stale OAuth session present ({}) from an earlier configuration — \
+                     run `atlassian-cli auth logout` to clear it.",
+                    loaded.backend
+                );
             }
             Ok(())
         }
