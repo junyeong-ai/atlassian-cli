@@ -52,12 +52,16 @@ impl AuthStrategy for BasicStrategy {
     }
 
     fn build_url(&self, _service: Service, path: &str) -> String {
-        // The separator is written here instead of being assumed from `path`,
-        // so no argument can extend the authority. Concatenating a path that
-        // does not begin with `/` would: `https://site` + `@host/x` resolves
-        // with `@host` as the host and `site` as userinfo, aiming this
-        // strategy's reusable credential at a host it never validated.
-        format!("https://{}/{}", self.domain, path.trim_start_matches('/'))
+        // The separator belongs to the origin, not to `path`, so it is written
+        // here and only a leading one is consumed. Letting `path` supply it
+        // would let `path` reach the authority: `https://{domain}` + `@host/x`
+        // parses with `@host` as the host and the domain as userinfo, pointing
+        // a reusable credential at an origin that was never validated.
+        format!(
+            "https://{}/{}",
+            self.domain,
+            path.strip_prefix('/').unwrap_or(path)
+        )
     }
 
     async fn probe_identity(&self, client: &crate::ApiClient) -> Result<Option<Identity>> {

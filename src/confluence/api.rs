@@ -49,18 +49,18 @@ fn effective_search_limit(limit: u32) -> u32 {
     limit.clamp(1, MAX_SEARCH_LIMIT)
 }
 
-/// Reduce a server-supplied pagination link to a site-root-relative path.
+/// Reduce a server-supplied pagination link to a site-rooted path.
 ///
-/// Exactly two shapes are usable: a link already rooted at the site
-/// (`/wiki/…`), and an absolute link, whose path is kept and whose host is
-/// discarded. Anything else is rejected rather than guessed at — a value must
-/// prove it is a path, because a request built from one carries the caller's
-/// credentials and `build_url` appends it to the configured origin.
+/// Two shapes are usable: a link already rooted at the site (`/wiki/…`), and an
+/// absolute link, whose path is kept and whose host is discarded. Anything else
+/// is rejected. A link must prove it is a path, because the request built from
+/// it carries the caller's credentials and `build_url` appends it to the
+/// configured origin.
 ///
-/// The site-root test comes first on purpose. Confluence does not
-/// percent-encode the `cql` value it echoes into a `next` link, so a search
-/// for a URL yields a legitimately relative link containing `://`; deciding
-/// "absolute" from that substring would mangle the path and drop the cursor.
+/// Rootedness is decided before anything else. Confluence echoes `cql` into a
+/// `next` link without percent-encoding it, so searching for a URL yields a
+/// genuinely rooted link that contains `://`; reading "absolute" out of that
+/// substring would discard the real path along with the cursor.
 fn link_path(link: &str) -> Option<&str> {
     if link.starts_with('/') {
         return Some(link);
@@ -68,21 +68,51 @@ fn link_path(link: &str) -> Option<&str> {
     extract_path_and_query(link).filter(|path| path.starts_with('/'))
 }
 
-/// Service-relative path of the next v1 search page.
+/// The paths a cursor walk has already requested.
 ///
-/// v1 states `next` relative to `_links.base`, whose path carries the `/wiki`
-/// prefix the request needs (`base` = `…/wiki`, `next` = `/rest/api/search?…`).
-/// v2 instead states `next` from the site root (`/wiki/api/v2/…`) and needs no
-/// join — hence the two callers differ.
-fn v1_next_path(links: &Value, next: &str) -> Option<String> {
-    if !next.starts_with('/') {
-        // Not site-root-relative, so the only acceptable reading is an
-        // absolute URL — whose path already carries `/wiki`, leaving nothing
-        // to join. `link_path` rejects every other shape.
-        return link_path(next).map(str::to_owned);
+/// A cursor that resolves to a page already fetched is not advancing, and
+/// following it would loop until the server stopped answering. Membership is
+/// keyed on the resolved path because that is what determines the request —
+/// keying on the raw link would let a server vary only the discarded host and
+/// walk forever.
+#[derive(Default)]
+struct CursorTrail(HashSet<String>);
+
+impl CursorTrail {
+    /// Resolve `link` and record it as the next step of the walk.
+    ///
+    /// Errors when the link carries no usable path, or when it revisits one.
+    /// Neither is the end of the collection, so neither may pass for one: a
+    /// short list returned as if complete is the failure this walk exists to
+    /// prevent.
+    fn step(&mut self, what: &str, link: &str) -> Result<String> {
+        let path = link_path(link)
+            .ok_or_else(|| {
+                anyhow::anyhow!("Failed to {what}: pagination link had no path: {link}")
+            })?
+            .to_string();
+        if !self.0.insert(path.clone()) {
+            anyhow::bail!("Failed to {what}: pagination cursor did not advance");
+        }
+        Ok(path)
     }
-    let prefix = links["base"].as_str().and_then(link_path).unwrap_or("");
-    Some(format!("{prefix}{next}"))
+}
+
+/// Join a v1 search `_links` envelope into the link of its next page.
+///
+/// The two API generations disagree on what `next` is relative to. v1 states it
+/// against `_links.base`, whose path carries the `/wiki` prefix the request
+/// needs (`base` = `…/wiki`, `next` = `/rest/api/search?…`); v2 states it from
+/// the site root (`/wiki/api/v2/…`), already complete. Only v1 joins, and only
+/// when `next` is rooted — an absolute `next` is its own answer.
+///
+/// The result is a link, not a path: `link_path` still reduces it, so a `base`
+/// naming a foreign host contributes nothing but its path.
+fn v1_next_link(links: &Value, next: &str) -> String {
+    match links["base"].as_str() {
+        Some(base) if next.starts_with('/') => format!("{base}{next}"),
+        _ => next.to_string(),
+    }
 }
 
 pub async fn search(
@@ -141,6 +171,7 @@ pub async fn search_all(
     let mut page_num = 1;
     let mut next_url: Option<String> = None;
     let mut total_size: u64 = 0;
+    let mut trail = CursorTrail::default();
 
     loop {
         let mut data = if let Some(ref url) = next_url {
@@ -185,19 +216,14 @@ pub async fn search_all(
 
         // _links.next is our signal to continue paginating; absence means we're done.
         // `let-else` keeps the happy path flat and removes the unwraps below.
-        let Some(next_path) = data["_links"]["next"].as_str() else {
+        let Some(link) = data["_links"]["next"].as_str() else {
             break;
         };
         if count == 0 {
             break;
         }
 
-        // A `next` with no usable path is schema drift, not the end of the
-        // result set — bail rather than return a truncated crawl.
-        let path = v1_next_path(&data["_links"], next_path).ok_or_else(|| {
-            anyhow::anyhow!("Failed to search: pagination link had no path: {next_path}")
-        })?;
-        next_url = Some(path);
+        next_url = Some(trail.step("search", &v1_next_link(&data["_links"], link))?);
 
         page_num += 1;
         sleep(Duration::from_millis(
@@ -483,7 +509,7 @@ async fn fetch_all_v2_results(
 ) -> Result<Vec<Value>> {
     let mut results: Vec<Value> = Vec::new();
     let mut next: Option<String> = None;
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut trail = CursorTrail::default();
 
     loop {
         let request = match next.as_deref() {
@@ -506,21 +532,7 @@ async fn fetch_all_v2_results(
         results.extend(page.iter().cloned());
 
         match data["_links"]["next"].as_str() {
-            Some(n) if !n.is_empty() => {
-                // A link with no usable path is schema drift, not the end of
-                // the collection — bail rather than return a truncated list.
-                let next_path = link_path(n).ok_or_else(|| {
-                    anyhow::anyhow!("Failed to {}: pagination link had no path: {}", what, n)
-                })?;
-                // Record the resolved path, not the raw link: the path is what
-                // decides the request, so it is also what "did not advance"
-                // has to mean. Keying on the raw link would let a server that
-                // varies only the discarded prefix loop this forever.
-                if !seen.insert(next_path.to_string()) {
-                    anyhow::bail!("Failed to {}: pagination cursor did not advance", what);
-                }
-                next = Some(next_path.to_string());
-            }
+            Some(link) if !link.is_empty() => next = Some(trail.step(what, link)?),
             _ => break,
         }
     }
@@ -1122,23 +1134,30 @@ mod tests {
         assert_eq!(result, "space IN (\"SPACE1\")");
     }
 
+    /// v1 pagination resolved end to end: join `_links`, then reduce.
+    fn v1_resolved(base: Value, next: &str) -> Option<String> {
+        link_path(&v1_next_link(&base, next)).map(str::to_owned)
+    }
+
     #[test]
-    fn v1_next_path_joins_relative_next_onto_the_base_path() {
+    fn v1_joins_a_rooted_next_onto_the_base_path() {
         // `_links.base` carries the `/wiki` prefix that `next` omits.
-        let links = json!({ "base": "https://test.atlassian.net/wiki" });
         assert_eq!(
-            v1_next_path(&links, "/rest/api/search?cql=type%3Dpage&cursor=abc123").unwrap(),
+            v1_resolved(
+                json!({ "base": "https://test.atlassian.net/wiki" }),
+                "/rest/api/search?cql=type%3Dpage&cursor=abc123"
+            )
+            .unwrap(),
             "/wiki/rest/api/search?cql=type%3Dpage&cursor=abc123"
         );
     }
 
     #[test]
-    fn v1_next_path_keeps_absolute_next_path_without_rejoining() {
+    fn v1_leaves_an_absolute_next_unjoined() {
         // An absolute `next` already carries `/wiki`; joining would double it.
-        let links = json!({ "base": "https://test.atlassian.net/wiki" });
         assert_eq!(
-            v1_next_path(
-                &links,
+            v1_resolved(
+                json!({ "base": "https://test.atlassian.net/wiki" }),
                 "https://test.atlassian.net/wiki/rest/api/search?cursor=xyz"
             )
             .unwrap(),
@@ -1147,9 +1166,9 @@ mod tests {
     }
 
     #[test]
-    fn v1_next_path_survives_a_missing_base() {
+    fn v1_survives_a_missing_base() {
         assert_eq!(
-            v1_next_path(&json!({}), "/rest/api/search?cursor=z").unwrap(),
+            v1_resolved(json!({}), "/rest/api/search?cursor=z").unwrap(),
             "/rest/api/search?cursor=z"
         );
     }
@@ -1164,17 +1183,26 @@ mod tests {
             Some("/wiki/api/v2/pages?cursor=x")
         );
         assert_eq!(
-            v1_next_path(
-                &json!({ "base": "https://test.atlassian.net/wiki" }),
+            v1_resolved(
+                json!({ "base": "https://test.atlassian.net/wiki" }),
                 "https://evil.example/wiki/rest/api/search?cursor=x"
             )
             .unwrap(),
             "/wiki/rest/api/search?cursor=x"
         );
+        // A `base` naming a foreign host is reduced the same way.
+        assert_eq!(
+            v1_resolved(
+                json!({ "base": "https://evil.example/wiki" }),
+                "/rest/api/search"
+            )
+            .unwrap(),
+            "/wiki/rest/api/search"
+        );
     }
 
     #[test]
-    fn link_path_passes_relative_links_through_and_rejects_hostless_absolutes() {
+    fn link_path_passes_rooted_links_through_and_rejects_hostless_absolutes() {
         assert_eq!(
             link_path("/wiki/api/v2/pages?cursor=x"),
             Some("/wiki/api/v2/pages?cursor=x")
@@ -1195,7 +1223,7 @@ mod tests {
         ] {
             assert_eq!(link_path(link), None, "must reject {link}");
             assert_eq!(
-                v1_next_path(&json!({ "base": "https://s.atlassian.net/wiki" }), link),
+                v1_resolved(json!({ "base": "https://s.atlassian.net/wiki" }), link),
                 None,
                 "must reject {link}"
             );
@@ -1203,18 +1231,40 @@ mod tests {
     }
 
     #[test]
-    fn link_path_keeps_a_relative_link_whose_query_contains_a_scheme() {
+    fn link_path_keeps_a_rooted_link_whose_query_contains_a_scheme() {
         // Confluence echoes `cql` into `next` without percent-encoding it, so
-        // searching for a URL produces a genuinely relative link containing
+        // searching for a URL produces a genuinely rooted link containing
         // `://`. Reading that as "absolute" would drop the path and cursor.
         let n = "/wiki/api/v2/pages?cursor=abc&cql=text~http://x.example/p";
         assert_eq!(link_path(n), Some(n));
 
         let v1 = "/rest/api/search?cql=text~%22http://x.example%22&cursor=abc";
         assert_eq!(
-            v1_next_path(&json!({ "base": "https://s.atlassian.net/wiki" }), v1).unwrap(),
+            v1_resolved(json!({ "base": "https://s.atlassian.net/wiki" }), v1).unwrap(),
             format!("/wiki{v1}")
         );
+    }
+
+    #[test]
+    fn cursor_trail_rejects_a_revisited_path() {
+        let mut trail = CursorTrail::default();
+        assert_eq!(trail.step("search", "/a?cursor=1").unwrap(), "/a?cursor=1");
+        assert_eq!(trail.step("search", "/a?cursor=2").unwrap(), "/a?cursor=2");
+        // Same resolved path behind a different host: still not advancing.
+        let err = trail
+            .step("search", "https://elsewhere.invalid/a?cursor=1")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("did not advance"), "{err}");
+    }
+
+    #[test]
+    fn cursor_trail_rejects_a_link_with_no_path() {
+        let err = CursorTrail::default()
+            .step("search", "https://elsewhere.invalid")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no path"), "{err}");
     }
 
     #[test]
@@ -1870,6 +1920,32 @@ mod tests {
         let result = get_labels("9", &client).await.unwrap();
         assert_eq!(result["items"].as_array().unwrap().len(), 2);
         assert_eq!(result["items"][1]["name"], "b");
+    }
+
+    #[tokio::test]
+    async fn integ_v1_search_all_bails_when_the_cursor_stops_advancing() {
+        let server = MockServer::start().await;
+        // v1 walks the same cursor forever unless the trail stops it. Every
+        // page is non-empty, so the `count == 0` exit never fires.
+        Mock::given(method("GET"))
+            .and(path("/wiki/rest/api/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{ "content": { "id": "1", "title": "a" } }],
+                "totalSize": 99,
+                "_links": {
+                    "base": format!("{}/wiki", server.uri()),
+                    "next": "/rest/api/search?cursor=stuck"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = search_all("type = page", 50, None, None, false, false, &client)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("did not advance"), "unexpected error: {err}");
     }
 
     #[tokio::test]

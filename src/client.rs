@@ -65,9 +65,18 @@ fn rate_limit_delay(headers: &reqwest::header::HeaderMap, attempt: u32) -> Durat
         .min(RATE_LIMIT_DELAY_CAP)
 }
 
-/// Extract path + query + fragment from an absolute URL by skipping `scheme://host`.
-/// Returns `None` if there is no scheme separator or nothing after the host.
-/// Safe against false matches in query strings — only examines the host boundary.
+/// Borrow everything after the authority of an absolute URL — path, query and
+/// fragment. `None` when the input carries no scheme or stops at the authority.
+///
+/// This is RFC 3986's own rule rather than an approximation of it: a scheme
+/// cannot contain `:` or `/`, so the first `://` is the scheme separator, and
+/// the authority runs to the first `/`, `?` or `#` that follows. A test pins
+/// that agreement against the `url` crate.
+///
+/// The result borrows from the input so a pagination cursor survives byte for
+/// byte. Round-tripping through a URL type instead would rewrite it — `url`
+/// removes dot segments, turning `/a/./b` into `/a/b` — and a cursor is opaque
+/// server state that must come back exactly as it was handed out.
 pub(crate) fn extract_path_and_query(url: &str) -> Option<&str> {
     let after_scheme = url.find("://").map(|i| &url[i + 3..])?;
     let boundary = after_scheme.find(['/', '?', '#'])?;
@@ -79,15 +88,14 @@ pub(crate) fn extract_path_and_query(url: &str) -> Option<&str> {
 /// oauth) — the format is dictated by Atlassian, so the same builder serves
 /// every variant.
 pub(crate) fn proxy_url(service: Service, cloud_id: &str, path: &str) -> String {
-    // As in `BasicStrategy::build_url`, the separator before `path` is written
-    // explicitly so the argument can only ever land in the path, never extend
-    // the authority.
+    // Separator written here for the same reason as `BasicStrategy::build_url`:
+    // `path` may only land in the path, never reach the authority.
     format!(
         "{}/ex/{}/{}/{}",
         ATLASSIAN_PROXY_BASE,
         service.path_segment(),
         cloud_id,
-        path.trim_start_matches('/')
+        path.strip_prefix('/').unwrap_or(path)
     )
 }
 
@@ -298,6 +306,37 @@ mod tests {
             extract_path_and_query("https://host.com/rest/api/3/issue/K-1?redirect=/wiki/foo"),
             Some("/rest/api/3/issue/K-1?redirect=/wiki/foo")
         );
+    }
+
+    #[test]
+    fn extract_path_and_query_agrees_with_a_reference_url_parser() {
+        // Differential check against `url`: the authority boundary must land
+        // where a standards implementation puts it. Cursors are compared as
+        // written, since `url` normalizes dot segments and this must not.
+        for url in [
+            "https://site.atlassian.net/wiki/api/v2/spaces?limit=2&cursor=eyJpZCI6MjJ9",
+            "https://site.atlassian.net/rest/api/search?cursor=_t_WyJc%3D_h_W10%3D&cql=type=page",
+            "https://site.atlassian.net/wiki/rest/api/search?cql=text%20~%20%22a//b%22",
+            "https://user@site.atlassian.net/wiki/api/v2/pages?cursor=a%2fb",
+            "https://site.atlassian.net:8443/wiki/api/v2/pages?cursor=x",
+            "https://site.atlassian.net/a?b=c#frag",
+        ] {
+            let parsed = reqwest::Url::parse(url).expect("valid url");
+            let mut reference = parsed.path().to_string();
+            if let Some(q) = parsed.query() {
+                reference.push('?');
+                reference.push_str(q);
+            }
+            if let Some(f) = parsed.fragment() {
+                reference.push('#');
+                reference.push_str(f);
+            }
+            assert_eq!(
+                extract_path_and_query(url),
+                Some(reference.as_str()),
+                "{url}"
+            );
+        }
     }
 
     #[test]

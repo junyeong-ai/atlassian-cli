@@ -38,14 +38,14 @@ Every page request is issued as a **service-relative path** through `client.get(
 
 `link_path` accepts a link only if it is rooted at the site (`/…`) or absolute (host discarded, path kept), and returns `None` for anything else. Two details are easy to get wrong and are pinned by tests:
 
-- **Test the leading `/` before looking for a scheme.** Confluence does not percent-encode the `cql` it echoes into `next`, so searching for a URL yields a relative link that contains `://`. Classifying on `contains("://")` first mangles that link and drops its cursor.
+- **Test the leading `/` before looking for a scheme.** Confluence does not percent-encode the `cql` it echoes into `next`, so searching for a URL yields a rooted link that contains `://`. Classifying on `contains("://")` first mangles that link and drops its cursor.
 - **A scheme-less link is not automatically a path.** `@evil.example/…` has no scheme and no leading `/`; appending it to the configured origin hands the request to `evil.example`. Reject rather than pass through.
 
-A link that satisfies neither shape is schema drift — both call sites bail, matching the module's refusal to return a truncated list.
+Both walks record their steps in a `CursorTrail`, which resolves each link and refuses one that repeats a path already fetched. It keys on the resolved path, not the raw link, so a server that varies only the discarded host cannot keep the walk going. A link with no usable path, and a cursor that stops advancing, are both schema drift: they bail, matching the module's refusal to return a truncated list.
 
 The two API generations disagree on what `next` is relative to, which is the only reason there are two mechanisms:
 
-- **v1 search** (`search_all`): `_links.base` is `…/wiki` and `_links.next` is `/rest/api/search?…` — relative to the *base path*. `v1_next_path` joins the base's path onto it. Resolving `next` as host-root-relative (what a standards-conformant URL join does) would drop `/wiki` and 404.
+- **v1 search** (`search_all`): `_links.base` is `…/wiki` and `_links.next` is `/rest/api/search?…` — relative to the *base path*. `v1_next_link` joins the two into an absolute link, which `link_path` then reduces. Resolving `next` as host-root-relative (what a standards-conformant URL join does) would drop `/wiki` and 404.
 - **v2 lists** (`fetch_all_v2_results`): `_links.next` is already rooted at the site (`/wiki/api/v2/…`), so it is used as-is. Joining it onto `base` would duplicate `/wiki`. Every v2 list endpoint (`get_comments`, `get_page_children`, `get_labels`, `get_properties`, `get_spaces`, `get_attachments`) funnels through this helper, which follows `next` to exhaustion so a single page is never silently returned as the whole set. The per-call `query` (e.g. `get_comments`'s `body-format=storage`) is sent on the **first** request only — each `next` link already carries it forward. Results are wrapped and filtered once via `v2_list_envelope`.
 
 Do not re-inline a one-page GET for any v2 list — silent truncation past the first page is exactly what this helper exists to prevent.
