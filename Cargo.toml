@@ -2,7 +2,7 @@
 name = "atlassian-cli"
 version = "0.7.0"
 edition = "2024"
-rust-version = "1.97.0"
+rust-version = "1.97.1"
 authors = ["Atlassian CLI Team"]
 description = "High-performance CLI for Atlassian Jira and Confluence"
 license = "MIT"
@@ -31,7 +31,7 @@ dirs = "6.0"
 anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-base64 = "0.22"
+base64 = "0.23"
 htmd = "0.5"
 regex = "1.12"
 percent-encoding = "2"
