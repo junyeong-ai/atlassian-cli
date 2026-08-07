@@ -1,6 +1,6 @@
 use super::strategy::AuthStrategy;
 use crate::auth::{AuthMethod, DEFAULT_TOKEN_LIFETIME_SECS, TOKEN_REFRESH_BUFFER_SECS};
-use crate::client::{Service, proxy_url, rewrite_via_proxy};
+use crate::client::{Service, proxy_url};
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use secrecy::{ExposeSecret, SecretString};
@@ -200,10 +200,6 @@ impl AuthStrategy for ServiceAccountStrategy {
         proxy_url(service, &self.cloud_id, path)
     }
 
-    fn rewrite_url(&self, service: Service, external_url: &str) -> String {
-        rewrite_via_proxy(service, &self.cloud_id, external_url)
-    }
-
     fn cloud_id(&self) -> Option<&str> {
         Some(&self.cloud_id)
     }
@@ -248,26 +244,6 @@ mod tests {
         assert_eq!(
             s.build_url(Service::Confluence, "/wiki/rest/api/search"),
             "https://api.atlassian.com/ex/confluence/cloud-abc-123/wiki/rest/api/search"
-        );
-    }
-
-    #[test]
-    fn rewrite_url_swaps_host() {
-        let s = fixture();
-        let url = "https://oyitsm.atlassian.net/wiki/rest/api/search?cursor=abc";
-        assert_eq!(
-            s.rewrite_url(Service::Confluence, url),
-            "https://api.atlassian.com/ex/confluence/cloud-abc-123/wiki/rest/api/search?cursor=abc"
-        );
-    }
-
-    #[test]
-    fn rewrite_url_query_with_path_like_text_is_safe() {
-        let s = fixture();
-        let url = "https://oyitsm.atlassian.net/rest/api/3/issue/K-1?redirect=/wiki/foo";
-        assert_eq!(
-            s.rewrite_url(Service::Jira, url),
-            "https://api.atlassian.com/ex/jira/cloud-abc-123/rest/api/3/issue/K-1?redirect=/wiki/foo"
         );
     }
 

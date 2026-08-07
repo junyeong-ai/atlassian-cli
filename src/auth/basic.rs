@@ -52,7 +52,12 @@ impl AuthStrategy for BasicStrategy {
     }
 
     fn build_url(&self, _service: Service, path: &str) -> String {
-        format!("https://{}{}", self.domain, path)
+        // The separator is written here instead of being assumed from `path`,
+        // so no argument can extend the authority. Concatenating a path that
+        // does not begin with `/` would: `https://site` + `@host/x` resolves
+        // with `@host` as the host and `site` as userinfo, aiming this
+        // strategy's reusable credential at a host it never validated.
+        format!("https://{}/{}", self.domain, path.trim_start_matches('/'))
     }
 
     async fn probe_identity(&self, client: &crate::ApiClient) -> Result<Option<Identity>> {
@@ -102,13 +107,6 @@ mod tests {
             s.build_url(Service::Jira, "/rest/api/3/issue/X-1"),
             "https://test.atlassian.net/rest/api/3/issue/X-1"
         );
-    }
-
-    #[test]
-    fn rewrite_url_passthrough() {
-        let s = BasicStrategy::new(Some("test.atlassian.net"), "u@x".into(), "tk".into()).unwrap();
-        let url = "https://test.atlassian.net/wiki/rest/api/search?cursor=abc";
-        assert_eq!(s.rewrite_url(Service::Confluence, url), url);
     }
 
     #[test]

@@ -4,7 +4,7 @@ use super::flow::{self, FlowInputs};
 use super::store::{TokenSet, TokenStore};
 use crate::auth::strategy::{AuthStrategy, Identity, probe_myself};
 use crate::auth::{AuthMethod, TOKEN_REFRESH_BUFFER_SECS};
-use crate::client::{Service, proxy_url, rewrite_via_proxy};
+use crate::client::{Service, proxy_url};
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use secrecy::ExposeSecret;
@@ -177,10 +177,6 @@ impl AuthStrategy for OAuthStrategy {
 
     fn build_url(&self, service: Service, path: &str) -> String {
         proxy_url(service, &self.cloud_id, path)
-    }
-
-    fn rewrite_url(&self, service: Service, external_url: &str) -> String {
-        rewrite_via_proxy(service, &self.cloud_id, external_url)
     }
 
     fn cloud_id(&self) -> Option<&str> {

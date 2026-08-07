@@ -1,4 +1,4 @@
-use crate::client::{ApiClient, Service};
+use crate::client::{ApiClient, Service, extract_path_and_query};
 use crate::config::Config;
 use crate::confluence::fields::{apply_v2_filtering, build_search_expand};
 use crate::filter;
@@ -49,18 +49,40 @@ fn effective_search_limit(limit: u32) -> u32 {
     limit.clamp(1, MAX_SEARCH_LIMIT)
 }
 
-/// Combine a Confluence pagination envelope's `_links.base` and `_links.next`
-/// into the URL of the next page. Both inputs are server-supplied and never
-/// contain user-controlled segments — they bypass `encode_path_segment` for
-/// that reason. The result is later normalized via `client.rewrite_url` so
-/// service-account auth still routes through the proxy host.
-fn build_next_url(links_base: &str, next_path: &str) -> String {
-    if next_path.starts_with("http") {
-        next_path.to_string()
-    } else {
-        // `links_base` from the API response already includes `/wiki`.
-        format!("{}{}", links_base, next_path)
+/// Reduce a server-supplied pagination link to a site-root-relative path.
+///
+/// Exactly two shapes are usable: a link already rooted at the site
+/// (`/wiki/…`), and an absolute link, whose path is kept and whose host is
+/// discarded. Anything else is rejected rather than guessed at — a value must
+/// prove it is a path, because a request built from one carries the caller's
+/// credentials and `build_url` appends it to the configured origin.
+///
+/// The site-root test comes first on purpose. Confluence does not
+/// percent-encode the `cql` value it echoes into a `next` link, so a search
+/// for a URL yields a legitimately relative link containing `://`; deciding
+/// "absolute" from that substring would mangle the path and drop the cursor.
+fn link_path(link: &str) -> Option<&str> {
+    if link.starts_with('/') {
+        return Some(link);
     }
+    extract_path_and_query(link).filter(|path| path.starts_with('/'))
+}
+
+/// Service-relative path of the next v1 search page.
+///
+/// v1 states `next` relative to `_links.base`, whose path carries the `/wiki`
+/// prefix the request needs (`base` = `…/wiki`, `next` = `/rest/api/search?…`).
+/// v2 instead states `next` from the site root (`/wiki/api/v2/…`) and needs no
+/// join — hence the two callers differ.
+fn v1_next_path(links: &Value, next: &str) -> Option<String> {
+    if !next.starts_with('/') {
+        // Not site-root-relative, so the only acceptable reading is an
+        // absolute URL — whose path already carries `/wiki`, leaving nothing
+        // to join. `link_path` rejects every other shape.
+        return link_path(next).map(str::to_owned);
+    }
+    let prefix = links["base"].as_str().and_then(link_path).unwrap_or("");
+    Some(format!("{prefix}{next}"))
 }
 
 pub async fn search(
@@ -170,13 +192,12 @@ pub async fn search_all(
             break;
         }
 
-        // _links.base is the site URL (e.g. "https://domain.atlassian.net/wiki").
-        // If missing, next_path must already be absolute.
-        let raw_url = match data["_links"]["base"].as_str() {
-            Some(base) => build_next_url(base, next_path),
-            None => next_path.to_string(),
-        };
-        next_url = Some(client.rewrite_url(Service::Confluence, &raw_url));
+        // A `next` with no usable path is schema drift, not the end of the
+        // result set — bail rather than return a truncated crawl.
+        let path = v1_next_path(&data["_links"], next_path).ok_or_else(|| {
+            anyhow::anyhow!("Failed to search: pagination link had no path: {next_path}")
+        })?;
+        next_url = Some(path);
 
         page_num += 1;
         sleep(Duration::from_millis(
@@ -222,9 +243,9 @@ async fn fetch_initial_page(
     response.json().await.map_err(Into::into)
 }
 
-async fn fetch_page(client: &ApiClient, url: &str) -> Result<Value> {
+async fn fetch_page(client: &ApiClient, path: &str) -> Result<Value> {
     let request = client
-        .get_absolute(url)
+        .get(Service::Confluence, path)
         .await?
         .header("Accept", "application/json");
     let response = client.execute("search", request).await?;
@@ -451,10 +472,9 @@ async fn fetch_version_number(client: &ApiClient, url: &str) -> Result<u64> {
 /// here guarantees complete results.
 ///
 /// `query` is applied to the first request only — each `next` link already
-/// carries the original query (cursor, limit, `body-format`, …). A relative
-/// `next` (`/wiki/…`) is re-issued against the service base; an absolute one is
-/// routed through `rewrite_url` so proxy/service-account auth follows it to the
-/// correct host.
+/// carries the original query (cursor, limit, `body-format`, …). v2 states
+/// `next` from the site root (`/wiki/…`), so it is re-issued as a path; an
+/// absolute link is reduced to its path first, never dialed as given.
 async fn fetch_all_v2_results(
     client: &ApiClient,
     what: &str,
@@ -468,12 +488,7 @@ async fn fetch_all_v2_results(
     loop {
         let request = match next.as_deref() {
             None => client.get(Service::Confluence, path).await?.query(query),
-            Some(n) if n.starts_with("http") => {
-                client
-                    .get_absolute(&client.rewrite_url(Service::Confluence, n))
-                    .await?
-            }
-            Some(n) => client.get(Service::Confluence, n).await?,
+            Some(next_path) => client.get(Service::Confluence, next_path).await?,
         };
 
         let response = client
@@ -492,12 +507,19 @@ async fn fetch_all_v2_results(
 
         match data["_links"]["next"].as_str() {
             Some(n) if !n.is_empty() => {
-                // A cursor that repeats a URL we've already fetched is not
-                // advancing — bail instead of looping forever.
-                if !seen.insert(n.to_string()) {
+                // A link with no usable path is schema drift, not the end of
+                // the collection — bail rather than return a truncated list.
+                let next_path = link_path(n).ok_or_else(|| {
+                    anyhow::anyhow!("Failed to {}: pagination link had no path: {}", what, n)
+                })?;
+                // Record the resolved path, not the raw link: the path is what
+                // decides the request, so it is also what "did not advance"
+                // has to mean. Keying on the raw link would let a server that
+                // varies only the discarded prefix loop this forever.
+                if !seen.insert(next_path.to_string()) {
                     anyhow::bail!("Failed to {}: pagination cursor did not advance", what);
                 }
-                next = Some(n.to_string());
+                next = Some(next_path.to_string());
             }
             _ => break,
         }
@@ -1101,25 +1123,118 @@ mod tests {
     }
 
     #[test]
-    fn test_build_next_url_relative_path() {
-        let links_base = "https://test.atlassian.net/wiki";
-        let next_path = "/rest/api/search?cql=type%3Dpage&cursor=abc123";
-        let result = build_next_url(links_base, next_path);
+    fn v1_next_path_joins_relative_next_onto_the_base_path() {
+        // `_links.base` carries the `/wiki` prefix that `next` omits.
+        let links = json!({ "base": "https://test.atlassian.net/wiki" });
         assert_eq!(
-            result,
-            "https://test.atlassian.net/wiki/rest/api/search?cql=type%3Dpage&cursor=abc123"
+            v1_next_path(&links, "/rest/api/search?cql=type%3Dpage&cursor=abc123").unwrap(),
+            "/wiki/rest/api/search?cql=type%3Dpage&cursor=abc123"
         );
     }
 
     #[test]
-    fn test_build_next_url_absolute() {
-        let base_url = "https://test.atlassian.net/wiki";
-        let next_path = "https://other.atlassian.net/wiki/rest/api/search?cursor=xyz";
-        let result = build_next_url(base_url, next_path);
+    fn v1_next_path_keeps_absolute_next_path_without_rejoining() {
+        // An absolute `next` already carries `/wiki`; joining would double it.
+        let links = json!({ "base": "https://test.atlassian.net/wiki" });
         assert_eq!(
-            result,
-            "https://other.atlassian.net/wiki/rest/api/search?cursor=xyz"
+            v1_next_path(
+                &links,
+                "https://test.atlassian.net/wiki/rest/api/search?cursor=xyz"
+            )
+            .unwrap(),
+            "/wiki/rest/api/search?cursor=xyz"
         );
+    }
+
+    #[test]
+    fn v1_next_path_survives_a_missing_base() {
+        assert_eq!(
+            v1_next_path(&json!({}), "/rest/api/search?cursor=z").unwrap(),
+            "/rest/api/search?cursor=z"
+        );
+    }
+
+    #[test]
+    fn link_path_discards_the_host_a_response_names() {
+        // The decisive property: a pagination link pointing at a foreign host
+        // contributes its path only. The host always comes from `build_url`,
+        // so credentials cannot be steered elsewhere by a response body.
+        assert_eq!(
+            link_path("https://evil.example/wiki/api/v2/pages?cursor=x"),
+            Some("/wiki/api/v2/pages?cursor=x")
+        );
+        assert_eq!(
+            v1_next_path(
+                &json!({ "base": "https://test.atlassian.net/wiki" }),
+                "https://evil.example/wiki/rest/api/search?cursor=x"
+            )
+            .unwrap(),
+            "/wiki/rest/api/search?cursor=x"
+        );
+    }
+
+    #[test]
+    fn link_path_passes_relative_links_through_and_rejects_hostless_absolutes() {
+        assert_eq!(
+            link_path("/wiki/api/v2/pages?cursor=x"),
+            Some("/wiki/api/v2/pages?cursor=x")
+        );
+        assert_eq!(link_path("https://test.atlassian.net"), None);
+    }
+
+    #[test]
+    fn link_path_rejects_a_link_that_would_extend_the_authority() {
+        // No scheme and no leading `/`. Treating it as a path would build
+        // `https://site@evil.example/…`, which RFC 3986 resolves with
+        // `evil.example` as the host and `site` as userinfo — the request's
+        // credentials would go to a host named by the response.
+        for link in [
+            "@evil.example/wiki/api/v2/pages?cursor=x",
+            "evil.example/wiki/api/v2/pages",
+            ":@evil.example/x",
+        ] {
+            assert_eq!(link_path(link), None, "must reject {link}");
+            assert_eq!(
+                v1_next_path(&json!({ "base": "https://s.atlassian.net/wiki" }), link),
+                None,
+                "must reject {link}"
+            );
+        }
+    }
+
+    #[test]
+    fn link_path_keeps_a_relative_link_whose_query_contains_a_scheme() {
+        // Confluence echoes `cql` into `next` without percent-encoding it, so
+        // searching for a URL produces a genuinely relative link containing
+        // `://`. Reading that as "absolute" would drop the path and cursor.
+        let n = "/wiki/api/v2/pages?cursor=abc&cql=text~http://x.example/p";
+        assert_eq!(link_path(n), Some(n));
+
+        let v1 = "/rest/api/search?cql=text~%22http://x.example%22&cursor=abc";
+        assert_eq!(
+            v1_next_path(&json!({ "base": "https://s.atlassian.net/wiki" }), v1).unwrap(),
+            format!("/wiki{v1}")
+        );
+    }
+
+    #[test]
+    fn every_built_url_keeps_the_configured_host_as_the_authority() {
+        // Parse rather than string-compare: the defect this guards against is
+        // precisely one that string inspection reads as harmless.
+        use crate::auth::AuthStrategy;
+        let basic =
+            crate::auth::BasicStrategy::new(Some("test.atlassian.net"), "u@x".into(), "tk".into())
+                .unwrap();
+        for path in [
+            "/wiki/api/v2/pages",
+            "@evil.example/wiki",
+            "//evil.example/wiki",
+            "wiki/api/v2/pages",
+        ] {
+            let url = reqwest::Url::parse(&basic.build_url(Service::Confluence, path)).unwrap();
+            assert_eq!(url.host_str(), Some("test.atlassian.net"), "path {path}");
+            assert_eq!(url.username(), "", "path {path} leaked userinfo");
+        }
     }
 
     #[tokio::test]
@@ -1724,11 +1839,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn integ_list_follows_absolute_next_cursor() {
+    async fn integ_list_follows_absolute_next_cursor_on_the_configured_host() {
         let server = MockServer::start().await;
-        // When the API returns an absolute `_links.next`, the helper routes it
-        // through `rewrite_url` + `get_absolute` (the `starts_with("http")` arm).
-        let next = format!("{}/wiki/api/v2/pages/9/labels?cursor=P2", server.uri());
+        // An absolute `_links.next` contributes its path only. Here it names a
+        // host the client was never configured with: pagination must continue
+        // against the mock server, so the second page is served and the
+        // credential is never offered to the host the response named.
+        let next = "https://elsewhere.invalid/wiki/api/v2/pages/9/labels?cursor=P2".to_string();
         Mock::given(method("GET"))
             .and(path("/wiki/api/v2/pages/9/labels"))
             .and(query_param_is_missing("cursor"))
@@ -1753,6 +1870,54 @@ mod tests {
         let result = get_labels("9", &client).await.unwrap();
         assert_eq!(result["items"].as_array().unwrap().len(), 2);
         assert_eq!(result["items"][1]["name"], "b");
+    }
+
+    #[tokio::test]
+    async fn integ_list_bails_when_only_the_discarded_prefix_advances() {
+        let server = MockServer::start().await;
+        // Same resolved path every time, dressed in a different host. The
+        // request never advances, so the guard must catch it — which it only
+        // can because it keys on the path rather than on the raw link.
+        let mut hosts = ["https://a.invalid", "https://b.invalid"].iter().cycle();
+        for _ in 0..2 {
+            let next = format!(
+                "{}/wiki/api/v2/pages/9/labels?cursor=P2",
+                hosts.next().unwrap()
+            );
+            Mock::given(method("GET"))
+                .and(path("/wiki/api/v2/pages/9/labels"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "results": [{ "name": "a" }],
+                    "_links": { "next": next }
+                })))
+                .up_to_n_times(1)
+                .mount(&server)
+                .await;
+        }
+
+        let client = mock_client(server.uri());
+        let err = get_labels("9", &client).await.unwrap_err().to_string();
+        assert!(err.contains("did not advance"), "unexpected error: {err}");
+    }
+
+    #[tokio::test]
+    async fn integ_list_bails_on_a_pathless_next_instead_of_truncating() {
+        let server = MockServer::start().await;
+        // A `next` that carries no path is schema drift. Returning the first
+        // page as if it were the whole collection is the failure this helper
+        // exists to prevent, so it must surface as an error.
+        Mock::given(method("GET"))
+            .and(path("/wiki/api/v2/pages/9/labels"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{ "name": "a" }],
+                "_links": { "next": "https://elsewhere.invalid" }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = get_labels("9", &client).await.unwrap_err().to_string();
+        assert!(err.contains("no path"), "unexpected error: {err}");
     }
 
     #[tokio::test]

@@ -79,23 +79,16 @@ pub(crate) fn extract_path_and_query(url: &str) -> Option<&str> {
 /// oauth) — the format is dictated by Atlassian, so the same builder serves
 /// every variant.
 pub(crate) fn proxy_url(service: Service, cloud_id: &str, path: &str) -> String {
+    // As in `BasicStrategy::build_url`, the separator before `path` is written
+    // explicitly so the argument can only ever land in the path, never extend
+    // the authority.
     format!(
-        "{}/ex/{}/{}{}",
+        "{}/ex/{}/{}/{}",
         ATLASSIAN_PROXY_BASE,
         service.path_segment(),
         cloud_id,
-        path
+        path.trim_start_matches('/')
     )
-}
-
-/// Rewrite an externally-supplied absolute URL through the Atlassian proxy.
-/// Preserves the path+query+fragment of the original; returns the input
-/// unchanged when it has no path-like suffix.
-pub(crate) fn rewrite_via_proxy(service: Service, cloud_id: &str, external_url: &str) -> String {
-    match extract_path_and_query(external_url) {
-        Some(suffix) => proxy_url(service, cloud_id, suffix),
-        None => external_url.to_string(),
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -198,12 +191,6 @@ impl ApiClient {
         Ok(self.http.delete(&url).header("Authorization", header))
     }
 
-    /// GET for an already-absolute URL (e.g. Confluence pagination `next`).
-    pub async fn get_absolute(&self, url: &str) -> Result<reqwest::RequestBuilder> {
-        let header = self.strategy.authorization(&self.http).await?;
-        Ok(self.http.get(url).header("Authorization", header))
-    }
-
     /// Send a prepared request, retrying rate-limited attempts and converting
     /// any non-2xx response into a typed [`ApiError`] named after `operation`.
     ///
@@ -278,12 +265,6 @@ impl ApiClient {
                  through the api.atlassian.com gateway (oauth or service_account method)",
             )
     }
-
-    /// Rewrite an external absolute URL through the strategy
-    /// (e.g. service_account swaps the host to the Atlassian proxy).
-    pub fn rewrite_url(&self, service: Service, external_url: &str) -> String {
-        self.strategy.rewrite_url(service, external_url)
-    }
 }
 
 #[cfg(test)]
@@ -311,6 +292,11 @@ mod tests {
         assert_eq!(
             extract_path_and_query("https://user@host.com/path"),
             Some("/path")
+        );
+        // Path-like text inside the query must not shift the host boundary.
+        assert_eq!(
+            extract_path_and_query("https://host.com/rest/api/3/issue/K-1?redirect=/wiki/foo"),
+            Some("/rest/api/3/issue/K-1?redirect=/wiki/foo")
         );
     }
 

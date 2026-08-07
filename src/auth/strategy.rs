@@ -23,7 +23,9 @@ pub struct Identity {
 ///
 /// All three obligations live here:
 /// 1. Produce the `Authorization` header (refreshing tokens transparently).
-/// 2. Build / rewrite URLs (direct domain vs. `api.atlassian.com/ex/...` proxy).
+/// 2. Build request URLs (direct domain vs. `api.atlassian.com/ex/...` proxy).
+///    `build_url` is the only place a request host is decided, so a host can
+///    never arrive from a server response.
 /// 3. Probe and label the principal (for diagnostics / `auth status`).
 #[async_trait]
 pub trait AuthStrategy: Send + Sync + std::fmt::Debug {
@@ -35,13 +37,6 @@ pub trait AuthStrategy: Send + Sync + std::fmt::Debug {
 
     /// Build the request URL for a service-relative path.
     fn build_url(&self, service: Service, path: &str) -> String;
-
-    /// Rewrite an externally-provided absolute URL (e.g. pagination `next`).
-    /// Default: passthrough.
-    fn rewrite_url(&self, service: Service, external_url: &str) -> String {
-        let _ = service;
-        external_url.to_string()
-    }
 
     /// Resolved `cloud_id` for proxy-based methods. `None` for direct-domain auth.
     fn cloud_id(&self) -> Option<&str> {

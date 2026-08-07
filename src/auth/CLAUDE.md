@@ -11,7 +11,6 @@ trait AuthStrategy {
     fn method(&self) -> AuthMethod;
     async fn authorization(&self, http: &reqwest::Client) -> Result<String>;
     fn build_url(&self, service: Service, path: &str) -> String;
-    fn rewrite_url(&self, service: Service, external_url: &str) -> String;
     fn cloud_id(&self) -> Option<&str>;
     async fn probe_identity(&self, &ApiClient) -> Result<Option<Identity>>;
     fn identity_label(&self) -> String;
@@ -48,8 +47,21 @@ error message when it isn't.
 ## URL building is shared
 
 `service_account` and `oauth` both route through `api.atlassian.com/ex/...`,
-so the URL builder lives in `client.rs` as `proxy_url` / `rewrite_via_proxy`.
-Both strategy impls delegate; neither inlines the format string.
+so the URL builder lives in `client.rs` as `proxy_url`. Both strategy impls
+delegate; neither inlines the format string.
+
+`build_url` is the single point where a request host is chosen, and each impl
+derives it from configuration only (`basic` from the validated domain, the
+other two from `ATLASSIAN_PROXY_BASE`). There is deliberately no entry point
+that takes a caller-supplied absolute URL — that is what keeps a pagination
+link from steering a `Basic email:token` header at an arbitrary host.
+
+Every impl writes the `/` separator before `path` and trims any leading ones
+off the argument, so `path` can only land in the path component. Plain
+concatenation is **not** safe here: `https://{domain}` + `@evil/x` parses with
+`evil` as the host and the domain as userinfo. `proxy_url` was already immune
+(its literal `/ex/{service}/{cloud_id}` terminates the authority first) but
+spells the separator the same way so both builders read identically.
 
 ## Secret hygiene
 

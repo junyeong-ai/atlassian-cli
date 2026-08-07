@@ -34,10 +34,19 @@ Reads with `--format markdown` convert `body.storage.value` via `markdown::confl
 
 ## Pagination
 
-Two cursor-following mechanisms, split by API generation:
+Every page request is issued as a **service-relative path** through `client.get(Service::Confluence, …)`. `link_path` normalizes the `_links` value first, so the host always comes from `build_url` (local config) and never from the response — see the root `CLAUDE.md` note on why that matters under basic auth. `build_url` appends the path verbatim, so an embedded cursor query survives intact under both direct-domain and proxy auth.
 
-- **v1 search** (`search_all`): fetches the first page via `client.get(Service::Confluence, "/wiki/rest/api/search")`, then follows `_links.next` (relative) combined with `_links.base`. The combined URL goes through `client.rewrite_url` before `client.get_absolute(...)` — without rewriting, service-account requests hit the wrong host.
-- **v2 lists** (`fetch_all_v2_results`): every v2 list endpoint (`get_comments`, `get_page_children`, `get_labels`, `get_properties`, `get_spaces`, `get_attachments`) funnels through this helper. It follows `_links.next` to exhaustion so a single page is never silently returned as the whole set. A relative `next` (`/wiki/…`) is re-issued via `client.get(Service::Confluence, next)` — `build_url` is plain string concatenation, so the embedded cursor query survives intact under both direct-domain and proxy auth; an absolute `next` takes the `rewrite_url` + `get_absolute` path. The per-call `query` (e.g. `get_comments`'s `body-format=storage`) is sent on the **first** request only — each `next` link already carries it forward. Results are wrapped and filtered once via `v2_list_envelope`.
+`link_path` accepts a link only if it is rooted at the site (`/…`) or absolute (host discarded, path kept), and returns `None` for anything else. Two details are easy to get wrong and are pinned by tests:
+
+- **Test the leading `/` before looking for a scheme.** Confluence does not percent-encode the `cql` it echoes into `next`, so searching for a URL yields a relative link that contains `://`. Classifying on `contains("://")` first mangles that link and drops its cursor.
+- **A scheme-less link is not automatically a path.** `@evil.example/…` has no scheme and no leading `/`; appending it to the configured origin hands the request to `evil.example`. Reject rather than pass through.
+
+A link that satisfies neither shape is schema drift — both call sites bail, matching the module's refusal to return a truncated list.
+
+The two API generations disagree on what `next` is relative to, which is the only reason there are two mechanisms:
+
+- **v1 search** (`search_all`): `_links.base` is `…/wiki` and `_links.next` is `/rest/api/search?…` — relative to the *base path*. `v1_next_path` joins the base's path onto it. Resolving `next` as host-root-relative (what a standards-conformant URL join does) would drop `/wiki` and 404.
+- **v2 lists** (`fetch_all_v2_results`): `_links.next` is already rooted at the site (`/wiki/api/v2/…`), so it is used as-is. Joining it onto `base` would duplicate `/wiki`. Every v2 list endpoint (`get_comments`, `get_page_children`, `get_labels`, `get_properties`, `get_spaces`, `get_attachments`) funnels through this helper, which follows `next` to exhaustion so a single page is never silently returned as the whole set. The per-call `query` (e.g. `get_comments`'s `body-format=storage`) is sent on the **first** request only — each `next` link already carries it forward. Results are wrapped and filtered once via `v2_list_envelope`.
 
 Do not re-inline a one-page GET for any v2 list — silent truncation past the first page is exactly what this helper exists to prevent.
 
@@ -63,6 +72,6 @@ Every site that interpolates `page_id` (or any other user-controllable
 identifier) into a `/wiki/...` path goes through
 `http_utils::encode_path_segment`. The encoder is RFC 3986 strict
 (brackets, `:`, `@`, slash, etc. are all percent-encoded). Server-side
-identifiers returned by the API — including the `_links.base` host in
-pagination responses — must NOT be encoded; they pass through
-`client.rewrite_url` unchanged.
+identifiers returned by the API — including the cursor query inside a
+pagination `_links.next` — must NOT be encoded; encoding them would corrupt
+the cursor. They reach `build_url` as an already-formed path via `link_path`.

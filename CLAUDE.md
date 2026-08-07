@@ -23,7 +23,11 @@ Three auth methods, selected **explicitly** via `ATLASSIAN_AUTH_METHOD=basic|ser
 | `service_account` | non-human SA | `https://api.atlassian.com/ex/{jira,confluence}/{cloud_id}/rest/...` | `client_id`, `client_secret`; `cloud_id` auto-discovered if omitted | in-memory only |
 | `oauth` | user (interactive) | `https://api.atlassian.com/ex/{jira,confluence}/{cloud_id}/rest/...` | `client_id`, `client_secret`, `redirect_port` (default 8976), `scopes` | OS keychain → 0600 file fallback |
 
-Runtime dispatch is via `trait auth::AuthStrategy` — each method is one module under `src/auth/`. `ApiClient` holds an `Arc<dyn AuthStrategy>` and never matches on the variant. The two URL columns above (direct domain vs proxy) are the reason `ApiClient` exists: API functions take service-relative paths only, never absolute URLs. Confluence pagination returns absolute URLs from the API; `ApiClient::rewrite_url` reroutes them under proxy-based methods.
+Runtime dispatch is via `trait auth::AuthStrategy` — each method is one module under `src/auth/`. `ApiClient` holds an `Arc<dyn AuthStrategy>` and never matches on the variant. The two URL columns above (direct domain vs proxy) are the reason `ApiClient` exists: API functions take service-relative paths only, never absolute URLs.
+
+`AuthStrategy::build_url` is the **only** place a request host is decided, and it reads that host from local configuration alone. It also writes the `/` before the path itself rather than assuming the argument carries one — otherwise a path like `@host/x` extends the authority instead of the path, and `https://site` + `@host/x` resolves with `@host` as the host.
+
+Pagination links from the API reach `build_url` only through `confluence::api::link_path`, which accepts exactly two shapes — already rooted at the site (`/…`), or absolute, in which case the path is kept and the host discarded — and rejects everything else instead of guessing. Both halves are load-bearing under basic auth, where every request carries a reusable `email:token` credential.
 
 Trait surface, secret handling, OAuth specifics, blank-value policy, and the single-source-of-truth constants are documented in `src/auth/CLAUDE.md` and load on demand when Claude reads files in that module.
 
