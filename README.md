@@ -3,11 +3,11 @@
 [![CI](https://github.com/junyeong-ai/atlassian-cli/workflows/CI/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/ci.yml)
 [![Security](https://github.com/junyeong-ai/atlassian-cli/workflows/Security/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/security.yml)
 [![Rust](https://img.shields.io/badge/rust-1.97.1%2B%20(2024%20edition)-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.8.1-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
+[![Version](https://img.shields.io/badge/version-0.9.0-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
 
 > **🌐 한국어** | **[English](README.en.md)**
 
-Atlassian Cloud CLI — Jira + Confluence. 단일 Rust 바이너리. OAuth 2.0 (3LO, ⭐ 권장), Service Account, Basic (API token) 세 가지 인증 방식 지원.
+Atlassian Cloud CLI — Jira + Confluence. 단일 Rust 바이너리. OAuth 2.0 (3LO, ⭐ 권장), Service Account, Scoped API token, Basic (classic API token) 네 가지 인증 방식 지원.
 
 ---
 
@@ -20,7 +20,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scri
 # 2. 설정 초기화
 atlassian-cli config init --global
 
-# 3. 설정 편집 — 아래 "인증" 섹션에서 oauth / service_account / basic 중 선택
+# 3. 설정 편집 — 아래 "인증" 섹션에서 oauth / service_account / scoped_token / basic 중 선택
 atlassian-cli config edit --global
 
 # 4. (oauth 인 경우만) 브라우저로 로그인
@@ -108,7 +108,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scri
 
 ```bash
 # 특정 릴리스 설치
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.8.1 bash
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.9.0 bash
 
 # 제거 (비대화형 기본값은 바이너리만 제거하고 skill/config는 보존)
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/uninstall.sh | bash
@@ -132,13 +132,16 @@ cp target/release/atlassian-cli ~/.local/bin/
 
 ## 인증
 
-세 가지 방식을 **명시적**으로 선택해야 합니다 (자동 판별 없음):
+네 가지 방식을 **명시적**으로 선택해야 합니다 (자동 판별 없음):
 
-| 방식 | 행위자 | 특징 |
-|---|---|---|
-| `basic` | 본인 (API token 발급자) | 가장 단순. **classic (unscoped) 토큰 전용** — scoped 토큰은 사이트 URL에서 401 (게이트웨이 전용) |
-| `service_account` | 비인간 service account | 자동화·CI 용. 별도 principal |
-| `oauth` | 본인 (대화형 로그인) | 사용자 권한 그대로 + refresh token 자동 관리 |
+| 방식 | 행위자 | 요청 호스트 | 특징 |
+|---|---|---|---|
+| `basic` | 본인 (API token 발급자) | `{domain}` | 가장 단순. **classic (unscoped) 토큰 전용** |
+| `scoped_token` | 본인 (API token 발급자) | `api.atlassian.com` | **scope 가 붙은 토큰 전용**. 토큰에 부여한 scope 로 권한 제한 |
+| `service_account` | 비인간 service account | `api.atlassian.com` | 자동화·CI 용. 별도 principal |
+| `oauth` | 본인 (대화형 로그인) | `api.atlassian.com` | 사용자 권한 그대로 + refresh token 자동 관리 |
+
+두 토큰 방식은 서로의 토큰을 받지 않습니다. 사이트 호스트는 scope 가 붙은 토큰을 조용히 무시해 401 을 돌려주고, 게이트웨이는 classic 토큰을 거부합니다. 401 이 나면 CLI 가 `hint` 필드로 반대쪽 method 를 알려줍니다.
 
 ### OAuth 2.0 (3LO — 본인 계정으로 로그인) ⭐ 권장
 
@@ -197,7 +200,7 @@ client_secret = "..."
 # cloud_id = "..."   # optional
 ```
 
-### Basic (API token)
+### Basic (classic API token)
 
 ```bash
 export ATLASSIAN_AUTH_METHOD=basic
@@ -218,6 +221,34 @@ token = "..."
 ```
 
 API token 발급: <https://id.atlassian.com/manage-profile/security/api-tokens>
+
+### Scoped API token (scope 가 붙은 토큰)
+
+Atlassian 은 classic 토큰을 단계적으로 폐지하고 있습니다 — 2024-12-15 이전에 발급된 토큰은 2026-03-14 ~ 05-12 사이에 만료되었고, 새로 발급하는 토큰은 scope 를 선택합니다. scope 가 붙은 토큰은 사이트 URL 이 아니라 `api.atlassian.com` 게이트웨이로만 통합니다.
+
+```bash
+export ATLASSIAN_AUTH_METHOD=scoped_token
+export ATLASSIAN_DOMAIN=company.atlassian.net   # cloud_id 를 여기서 자동 해석
+export ATLASSIAN_EMAIL=user@example.com
+export ATLASSIAN_API_TOKEN=...
+# export ATLASSIAN_CLOUD_ID=...   # 직접 고정하면 domain 불필요
+```
+
+또는:
+```toml
+[default]
+domain = "company.atlassian.net"
+
+[default.auth]
+method = "scoped_token"
+email = "user@example.com"
+token = "..."
+# cloud_id = "..."   # 생략 시 domain 으로부터 해석
+```
+
+`cloud_id` 는 `https://{domain}/_edge/tenant_info` 로 해석합니다 (인증 불필요). 이 조회는 이 method 에서 사이트 호스트를 건드리는 유일한 부분이라, 매 실행마다 왕복이 한 번 발생합니다 — `cloud_id` 를 직접 지정하면 사이트 호스트를 아예 거치지 않습니다. 값은 <https://admin.atlassian.com> 의 사이트 URL 에서도 확인할 수 있습니다.
+
+`config validate` 는 `/myself` 로 신원을 확인하므로 토큰에 Jira 읽기 scope 가 필요합니다. Confluence 전용 scope 토큰이면 이 명령은 401 로 실패하지만 토큰 자체는 정상입니다 — `confluence space list` 같은 가벼운 읽기로 확인하세요.
 
 ### 다중 프로파일
 
@@ -274,6 +305,10 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 ---
 
 ## 문제 해결
+
+**401 Unauthorized (basic / scoped_token)** — 토큰 종류와 method 가 어긋난 경우입니다. scope 가 붙은 토큰은 `scoped_token`, classic 토큰은 `basic` 이어야 합니다. 에러의 `hint` 필드가 바꿔야 할 method 를 알려줍니다.
+
+**Failed to resolve cloud_id from ...** — `_edge/tenant_info` 조회가 실패했습니다. 이 네트워크에서 사이트 호스트가 응답하지 않는 경우이니 `cloud_id` 를 직접 지정하세요 (`ATLASSIAN_CLOUD_ID` 또는 `[auth].cloud_id`).
 
 **API 토큰 관리자 차단 (403)** — OAuth 2.0 service account로 전환. 관리자에게 OAuth 2.0 client credentials 요청.
 

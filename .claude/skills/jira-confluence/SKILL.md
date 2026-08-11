@@ -1,6 +1,6 @@
 ---
 name: jira-confluence
-version: 0.7.0
+version: 0.9.0
 description: Run Jira/Confluence operations through atlassian-cli — JQL/CQL search, issue CRUD, comments, transitions, issue links, worklogs, watchers, sprint/board/epic moves; Confluence page CRUD, footer comments, labels, content properties, spaces, and attachment upload, with ADF/HTML body editing. Also handles OAuth sign-in flows (`auth login/status/refresh`) when the user reports an auth problem or asks to switch accounts.
 when_to_use: Trigger on Jira tickets, Confluence pages, sprint planning, time logging, "내 이슈", "위키 검색", auth trouble or account switching, or any Atlassian workspace request.
 allowed-tools: Bash
@@ -176,7 +176,7 @@ Failures print a single-line JSON object to **stderr**; stdout stays results-onl
 {"error":{"message":"Failed to get issue (404 Not Found): ...","operation":"get issue","status":404}}
 ```
 
-Parse `status`/`operation` instead of regexing the message; `hint` (present only when a known remediation exists, e.g. a 401 under basic auth) is the remediation to relay to the user. Exit codes: `0` ok, `1` generic, `2` usage, `3` auth (401/403), `4` not found, `5` rate limited (429 — already retried 3× with `Retry-After`; back off before rerunning), `6` server error (5xx).
+Parse `status`/`operation` instead of regexing the message; `hint` (present only when a known remediation exists, e.g. a 401 from an API token sent to the host that refuses its shape) is the remediation to relay to the user. Exit codes: `0` ok, `1` generic, `2` usage, `3` auth (401/403), `4` not found, `5` rate limited (429 — already retried 3× with `Retry-After`; back off before rerunning), `6` server error (5xx).
 
 ## Authentication
 
@@ -187,10 +187,13 @@ The active profile dictates what identity the call runs as:
 | profile method | who calls Atlassian |
 |---|---|
 | `oauth` | the signed-in human (token in OS keychain, auto-refreshed) |
-| `basic` | the API-token owner (classic/unscoped token only — a scoped token 401s at the site URL; the error carries a `hint`) |
+| `scoped_token` | the API-token owner, limited to the scopes on the token (API token **with** scopes) |
+| `basic` | the API-token owner, with their full permissions (classic/**unscoped** token) |
 | `service_account` | a non-human service principal |
 
-Run `atlassian-cli config validate` first when a request will write or fetch many pages — it prints the resolved identity and fails fast on bad credentials. Caveat: the identity probe hits a Jira endpoint, so on a Confluence-only-scoped profile it returns a 401 "scope does not match" even when the profile works — treat that specific failure as expected and confirm with a cheap read (e.g. `space list`) instead.
+`basic` and `scoped_token` differ only in which host the token goes to, and each host accepts exactly one token shape. A 401 on either carries a `hint` naming the other — relay it; the fix is a config change, not a retry.
+
+Run `atlassian-cli config validate` first when a request will write or fetch many pages — it prints the resolved identity and fails fast on bad credentials. Caveat: the identity probe hits a Jira endpoint, so on any Confluence-only-scoped profile (`oauth` or `scoped_token`) it returns a 401 "scope does not match" even when the profile works — treat that specific failure as expected and confirm with a cheap read (e.g. `space list`) instead.
 
 When the user reports auth trouble or asks to switch accounts:
 

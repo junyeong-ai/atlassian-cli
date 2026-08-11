@@ -15,19 +15,24 @@ CI also runs `cargo-deny` (advisories/bans/licenses/sources) on `Cargo.toml`/`Ca
 
 ## Auth model (non-obvious)
 
-Three auth methods, selected **explicitly** via `ATLASSIAN_AUTH_METHOD=basic|service_account|oauth` or the `method` field inside `[default.auth]`. No heuristic detection.
+Four auth methods, selected **explicitly** via `ATLASSIAN_AUTH_METHOD=basic|scoped_token|service_account|oauth` or the `method` field inside `[default.auth]`. No heuristic detection.
 
 | Method | Principal | Base URL | Required fields | Token storage |
 |---|---|---|---|---|
-| `basic` | user (token owner) | `https://{domain}/rest/...` | `domain`, `email`, `token` (classic/unscoped only — scoped API tokens 401 at the site URL; `execute` attaches a hint) | config.toml |
+| `basic` | user (token owner) | `https://{domain}/rest/...` | `domain`, `email`, `token` (classic/unscoped only) | config.toml |
+| `scoped_token` | user (token owner) | `https://api.atlassian.com/ex/{jira,confluence}/{cloud_id}/rest/...` | `email`, `token` (must carry scopes); `cloud_id`, else `domain` to resolve it from | config.toml |
 | `service_account` | non-human SA | `https://api.atlassian.com/ex/{jira,confluence}/{cloud_id}/rest/...` | `client_id`, `client_secret`; `cloud_id` auto-discovered if omitted | in-memory only |
 | `oauth` | user (interactive) | `https://api.atlassian.com/ex/{jira,confluence}/{cloud_id}/rest/...` | `client_id`, `client_secret`, `redirect_port` (default 8976), `scopes` | OS keychain → 0600 file fallback |
+
+`basic` and `scoped_token` carry the identical `Basic email:token` credential and differ only in host, because Atlassian accepts each token shape at exactly one of them: the site host ignores a scoped token (anonymous 401), the gateway rejects a classic one. They are two methods rather than one with a routing switch because the host is not a preference — it is a property of the credential the user holds. `execute` attaches a `hint` naming the other method on any 401. Classic tokens are being retired (everything issued before 2024-12-15 expired by 2026-05-12), so `scoped_token` is the forward path.
+
+`scoped_token` resolves an omitted `cloud_id` from the unauthenticated `https://{domain}/_edge/tenant_info`, the first method in Atlassian's own cloud-ID guide; `accessible-resources` is not usable here because it wants a bearer token. That lookup is the one part of this method that touches the site host, so the failure says to pin `cloud_id` instead — which also makes `domain` unnecessary, the gateway host being a constant.
 
 Runtime dispatch is via `trait auth::AuthStrategy` — each method is one module under `src/auth/`. `ApiClient` holds an `Arc<dyn AuthStrategy>` and never matches on the variant. The two URL columns above (direct domain vs proxy) are the reason `ApiClient` exists: API functions take service-relative paths only, never absolute URLs.
 
 `AuthStrategy::build_url` is the **only** place a request host is decided, and it reads that host from local configuration alone. It also writes the `/` before the path itself rather than assuming the argument carries one — otherwise a path like `@host/x` extends the authority instead of the path, and `https://site` + `@host/x` resolves with `@host` as the host.
 
-Pagination links from the API reach `build_url` only through `confluence::api::link_path`, which accepts exactly two shapes — already rooted at the site (`/…`), or absolute, in which case the path is kept and the host discarded — and rejects everything else instead of guessing. Both halves are load-bearing under basic auth, where every request carries a reusable `email:token` credential.
+Pagination links from the API reach `build_url` only through `confluence::api::link_path`, which accepts exactly two shapes — already rooted at the site (`/…`), or absolute, in which case the path is kept and the host discarded — and rejects everything else instead of guessing. Both halves are load-bearing under either token method, where every request carries a reusable `email:token` credential.
 
 Trait surface, secret handling, OAuth specifics, blank-value policy, and the single-source-of-truth constants are documented in `src/auth/CLAUDE.md` and load on demand when Claude reads files in that module.
 
@@ -104,7 +109,7 @@ Multi-operation domains (`comment`, `transition`, `link`, `worklog`, `watcher`, 
 ## Security invariants
 
 - Domain validation goes through `config::validate_atlassian_domain` (shared by `Config::validate` and `BasicStrategy::new`). It strips the scheme/trailing slash, rejects any byte outside `[A-Za-z0-9.-]` — which blocks path (`/`), query (`?`), fragment (`#`), userinfo (`@`), and port (`:`) spoofs like `https://evil.com/foo.atlassian.net` — then requires a non-empty label before `.atlassian.net`. A bare suffix check is **not** sufficient: the path-prefixed form would otherwise send Basic credentials to the attacker host.
-- A `cloud_id` is validated by `config::validate_cloud_id` (rejects anything outside `[A-Za-z0-9-]`) before it is interpolated into the `/ex/{service}/{cloud_id}` proxy path. Validation runs at **strategy construction** (`ServiceAccountStrategy::connect`, `OAuthStrategy::resume`), not only in `Config::validate` — so a pinned value reaching the proxy via an `auth` subcommand (which uses `load_without_validation`) or a tampered `credentials.json` is still caught. Auto-discovered IDs come from the API and pass trivially.
+- A `cloud_id` is validated by `config::validate_cloud_id` (rejects anything outside `[A-Za-z0-9-]`) before it is interpolated into the `/ex/{service}/{cloud_id}` proxy path. Validation runs at **strategy construction** (`ScopedTokenStrategy::connect`, `ServiceAccountStrategy::connect`, `OAuthStrategy::resume`), not only in `Config::validate` — so a pinned value reaching the proxy via an `auth` subcommand (which uses `load_without_validation`) or a tampered `credentials.json` is still caught. A discovered id is validated on the same path rather than trusted for having come from an API: `scoped_token` reads it from the site host, so an unchecked one would let that response steer the proxy path.
 - Secrets are `#[serde(skip_serializing)]` on `AuthConfig`, and the `config show` output masks them to first-4 + `***`. Don't print resolved tokens anywhere else.
 - Config files at 0600 are recommended; the loader warns (does not bail) on looser permissions.
 - OAuth tokens in memory are wrapped in `secrecy::SecretString` — `Debug`/`Display` redact automatically. Use `ExposeSecret` at the smallest scope possible.

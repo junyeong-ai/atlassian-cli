@@ -8,6 +8,8 @@ use crate::auth::AuthMethod;
 use crate::client::Service;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use secrecy::SecretString;
 
 /// Identity discovered by probing `/rest/api/3/myself`. Surfaced by
 /// `auth status` / `config validate`. `None` means "this method cannot
@@ -58,9 +60,16 @@ pub trait AuthStrategy: Send + Sync + std::fmt::Debug {
     fn identity_label(&self) -> String;
 }
 
+/// Encode an `email:api_token` pair into the credential half of a `Basic`
+/// header. Shared by the two API-token strategies (basic, scoped_token),
+/// which carry the same credential and differ only in the host it is sent to.
+pub(crate) fn encode_basic_credential(email: &str, token: &str) -> SecretString {
+    SecretString::new(STANDARD.encode(format!("{email}:{token}")).into())
+}
+
 /// Shared `/rest/api/3/myself` probe used by every user-delegated strategy
-/// (basic, oauth). Lives here — at the trait level — so neither strategy
-/// reaches into the other's module to share this helper.
+/// (basic, scoped_token, oauth). Lives here — at the trait level — so no
+/// strategy reaches into another's module to share this helper.
 pub(crate) async fn probe_myself(client: &crate::ApiClient) -> Result<Identity> {
     let request = client
         .get(Service::Jira, "/rest/api/3/myself")

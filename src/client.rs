@@ -84,9 +84,9 @@ pub(crate) fn extract_path_and_query(url: &str) -> Option<&str> {
 }
 
 /// Build a request URL through the Atlassian proxy host. Shared by every
-/// auth method that routes through `api.atlassian.com/ex/...` (service_account,
-/// oauth) — the format is dictated by Atlassian, so the same builder serves
-/// every variant.
+/// auth method that routes through `api.atlassian.com/ex/...` (scoped_token,
+/// service_account, oauth) — the format is dictated by Atlassian, so the same
+/// builder serves every variant.
 pub(crate) fn proxy_url(service: Service, cloud_id: &str, path: &str) -> String {
     // Separator written here for the same reason as `BasicStrategy::build_url`:
     // `path` may only land in the path, never reach the authority.
@@ -260,18 +260,27 @@ impl ApiClient {
     }
 
     /// Remediation hint for failures whose cause the server response does not
-    /// explain. Currently: a 401 under basic auth — commonly a wrong or
-    /// expired token, but also what a scoped API token produces when used
-    /// against the site URL (scoped tokens only work through the
-    /// `api.atlassian.com` gateway), which nothing in the server response
-    /// reveals.
+    /// explain. An API token rejected for the wrong host produces a bare 401
+    /// naming neither the token shape nor the host, and each of the two
+    /// token-based methods accepts exactly the shape the other refuses.
     fn error_hint(&self, status: StatusCode) -> Option<&'static str> {
-        (status == StatusCode::UNAUTHORIZED && self.strategy.method() == AuthMethod::Basic)
-            .then_some(
+        if status != StatusCode::UNAUTHORIZED {
+            return None;
+        }
+        match self.strategy.method() {
+            AuthMethod::Basic => Some(
                 "the token was rejected — verify it is valid and not expired, and note that \
-                 basic auth needs a classic (unscoped) API token: scoped tokens only work \
-                 through the api.atlassian.com gateway (oauth or service_account method)",
-            )
+                 the site host accepts only a classic (unscoped) API token: a token carrying \
+                 scopes needs method = \"scoped_token\"",
+            ),
+            AuthMethod::ScopedToken => Some(
+                "the token was rejected — the gateway answers 401 for an expired token, for a \
+                 classic (unscoped) one (which needs method = \"basic\"), and for a token whose \
+                 scopes do not cover this endpoint; a token missing only a scope still works \
+                 elsewhere, so check its scopes before replacing it",
+            ),
+            AuthMethod::ServiceAccount | AuthMethod::OAuth => None,
+        }
     }
 }
 
@@ -539,7 +548,41 @@ mod tests {
         let api_err = err.downcast_ref::<ApiError>().expect("typed ApiError");
         assert_eq!(api_err.status, StatusCode::UNAUTHORIZED);
         let hint = api_err.hint.expect("401 under basic auth carries a hint");
-        assert!(hint.contains("classic"));
+        assert!(hint.contains("scoped_token"));
+    }
+
+    /// Each token method's 401 hint must point at the other one, and the
+    /// methods that carry no token must not claim a token problem.
+    #[tokio::test]
+    async fn execute_hints_per_method_on_401() {
+        use crate::test_utils::mock_client_with_method;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        for (auth_method, expected) in [
+            (AuthMethod::ScopedToken, Some("scopes")),
+            (AuthMethod::ServiceAccount, None),
+            (AuthMethod::OAuth, None),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/probe"))
+                .respond_with(ResponseTemplate::new(401))
+                .mount(&server)
+                .await;
+
+            let client = mock_client_with_method(server.uri(), auth_method);
+            let request = client.get(Service::Jira, "/probe").await.unwrap();
+            let err = client.execute("probe", request).await.unwrap_err();
+            let api_err = err.downcast_ref::<ApiError>().expect("typed ApiError");
+            match expected {
+                Some(needle) => assert!(
+                    api_err.hint.expect("expected a hint").contains(needle),
+                    "{auth_method} hint missing {needle:?}"
+                ),
+                None => assert!(api_err.hint.is_none(), "{auth_method} must carry no hint"),
+            }
+        }
     }
 
     #[tokio::test]

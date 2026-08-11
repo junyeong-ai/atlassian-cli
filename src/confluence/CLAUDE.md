@@ -34,7 +34,7 @@ Reads with `--format markdown` convert `body.storage.value` via `markdown::confl
 
 ## Pagination
 
-Every page request is issued as a **service-relative path** through `client.get(Service::Confluence, …)`. `link_path` normalizes the `_links` value first, so the host always comes from `build_url` (local config) and never from the response — see the root `CLAUDE.md` note on why that matters under basic auth. `build_url` appends the path verbatim, so an embedded cursor query survives intact under both direct-domain and proxy auth.
+Every page request is issued as a **service-relative path** through `client.get(Service::Confluence, …)`. `link_path` normalizes the `_links` value first, so the host always comes from `build_url` (local config) and never from the response — see the root `CLAUDE.md` note on why that matters under the token methods. `build_url` appends the path verbatim, so an embedded cursor query survives intact under both direct-domain and proxy auth.
 
 `link_path` accepts a link only if it is rooted at the site (`/…`) or absolute (host discarded, path kept), and returns `None` for anything else. Two details are easy to get wrong and are pinned by tests:
 

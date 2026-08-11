@@ -21,8 +21,15 @@ trait AuthStrategy {
 identity to probe" (service_account) — it is **not** a credential failure.
 `config validate` renders the label instead of bailing.
 
-The shared `/myself` probe lives in `strategy::probe_myself` so neither
-`basic` nor `oauth` reaches into the other module to share it.
+Every user-delegated method (basic, scoped_token, oauth) probes and reports
+the failure as-is. Do not add a status-based escape hatch for a token scoped
+away from Jira: the gateway answers insufficient scope with the same 401 it
+uses for a bad credential, so nothing here can tell them apart, and mapping a
+status to `Ok(None)` on a guess would hide real credential failures.
+
+The shared `/myself` probe lives in `strategy::probe_myself`, and
+`strategy::encode_basic_credential` holds the one copy of the `email:token`
+base64 encoding, so no strategy reaches into another module to share either.
 
 ## Single source of truth
 
@@ -46,15 +53,16 @@ error message when it isn't.
 
 ## URL building is shared
 
-`service_account` and `oauth` both route through `api.atlassian.com/ex/...`,
-so the URL builder lives in `client.rs` as `proxy_url`. Both strategy impls
-delegate; neither inlines the format string.
+`scoped_token`, `service_account` and `oauth` all route through
+`api.atlassian.com/ex/...`, so the URL builder lives in `client.rs` as
+`proxy_url`. Every strategy impl delegates; none inlines the format string.
 
 `build_url` is the single point where a request host is chosen, and each impl
 derives it from configuration only (`basic` from the validated domain, the
-other two from `ATLASSIAN_PROXY_BASE`). There is deliberately no entry point
+other three from `ATLASSIAN_PROXY_BASE`). There is deliberately no entry point
 that takes a caller-supplied absolute URL — that is what keeps a pagination
-link from steering a `Basic email:token` header at an arbitrary host.
+link from steering a `Basic email:token` header at an arbitrary host. Both
+token methods send a reusable credential, so this matters twice over.
 
 Every impl writes the `/` separator before `path` and trims any leading ones
 off the argument, so `path` can only land in the path component. Plain
@@ -110,6 +118,19 @@ spells the separator the same way so both builders read identically.
 - `OAuthStrategy::login` returns `LoginOutcome` only. The runtime
   `profile` (storage key) is a separate argument so `OAuthParams` holds
   pure config data.
+
+## Scoped-token specifics
+
+- The credential is `basic`'s, the routing is `service_account`'s. What is
+  unique is where `cloud_id` comes from: `_edge/tenant_info` on the site host,
+  sent **without** an `Authorization` header. The site host is precisely where
+  a scoped token is ignored, so attaching one would spend a credential on a
+  request that does not want it.
+- `validate_cloud_id` runs at strategy construction, as it does for the other
+  proxy methods — an id reaching the path from a config file that skipped
+  `Config::validate` is still caught.
+- A pinned `cloud_id` short-circuits discovery entirely, which is the
+  documented answer for networks where the site host is unreachable.
 
 ## Service-account specifics
 

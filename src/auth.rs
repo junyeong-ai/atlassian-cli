@@ -2,23 +2,26 @@
 //!
 //! Two complementary layers:
 //!
-//! - [`AuthConfig`] mirrors the on-disk TOML. Three variants: [`Basic`](AuthConfig::Basic)
-//!   (personal API token), [`ServiceAccount`](AuthConfig::ServiceAccount)
-//!   (OAuth 2.0 client_credentials, non-human principal), and
-//!   [`OAuth`](AuthConfig::OAuth) (3LO Authorization Code + PKCE, user-delegated).
+//! - [`AuthConfig`] mirrors the on-disk TOML. Four variants: [`Basic`](AuthConfig::Basic)
+//!   (classic API token, sent to the site host), [`ScopedToken`](AuthConfig::ScopedToken)
+//!   (API token with scopes, sent through the gateway),
+//!   [`ServiceAccount`](AuthConfig::ServiceAccount) (OAuth 2.0 client_credentials,
+//!   non-human principal), and [`OAuth`](AuthConfig::OAuth) (3LO Authorization
+//!   Code + PKCE, user-delegated).
 //! - [`AuthStrategy`] is the runtime contract — each variant resolves to a
 //!   `Box<dyn AuthStrategy>` that produces auth headers, builds URLs, and
 //!   probes identity. `ApiClient` holds an `Arc<dyn AuthStrategy>` and never
 //!   matches on the variant.
 //!
-//! Adding a fourth method is one module + one enum variant — no `ApiClient`
-//! or call-site changes.
+//! Adding a method is one module + one enum variant — no `ApiClient` or
+//! call-site changes.
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 mod basic;
 pub mod oauth;
+mod scoped_token;
 mod service_account;
 mod strategy;
 
@@ -27,6 +30,7 @@ pub use oauth::{
     LoadedTokens, LoginOutcome, OAuthParams, OAuthStrategy, SiteInfo, TokenStorageBackend,
     TokenStore,
 };
+pub use scoped_token::ScopedTokenStrategy;
 pub use service_account::ServiceAccountStrategy;
 pub use strategy::{AuthStrategy, Identity};
 
@@ -81,6 +85,7 @@ pub(crate) const DEFAULT_TOKEN_LIFETIME_SECS: u64 = 3600;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AuthMethod {
     Basic,
+    ScopedToken,
     ServiceAccount,
     OAuth,
 }
@@ -89,6 +94,7 @@ impl AuthMethod {
     pub fn as_str(self) -> &'static str {
         match self {
             AuthMethod::Basic => "basic",
+            AuthMethod::ScopedToken => "scoped_token",
             AuthMethod::ServiceAccount => "service_account",
             AuthMethod::OAuth => "oauth",
         }
@@ -97,10 +103,11 @@ impl AuthMethod {
     pub fn parse(s: &str) -> Result<Self> {
         match s.trim().to_lowercase().as_str() {
             "basic" => Ok(AuthMethod::Basic),
+            "scoped_token" => Ok(AuthMethod::ScopedToken),
             "service_account" => Ok(AuthMethod::ServiceAccount),
             "oauth" => Ok(AuthMethod::OAuth),
             other => anyhow::bail!(
-                "Unknown auth method '{}'. Use 'basic', 'service_account', or 'oauth'",
+                "Unknown auth method '{}'. Use 'basic', 'scoped_token', 'service_account', or 'oauth'",
                 other
             ),
         }
@@ -126,7 +133,13 @@ impl std::fmt::Display for AuthMethod {
 /// [default.auth]
 /// method = "basic"
 /// email = "user@example.com"
-/// token = "api-token"
+/// token = "classic-api-token"
+///
+/// [default.auth]
+/// method = "scoped_token"
+/// email = "user@example.com"
+/// token = "api-token-with-scopes"
+/// # cloud_id resolves from the site domain when omitted
 ///
 /// [default.auth]
 /// method = "service_account"
@@ -147,6 +160,17 @@ pub enum AuthConfig {
         email: String,
         #[serde(default, skip_serializing)]
         token: String,
+    },
+    /// API token carrying scopes. Same credential shape as `Basic`, but the
+    /// gateway is the only host that honours it, so it needs a `cloud_id`.
+    #[serde(rename = "scoped_token")]
+    ScopedToken {
+        #[serde(default)]
+        email: String,
+        #[serde(default, skip_serializing)]
+        token: String,
+        /// Resolved from the site domain when None.
+        cloud_id: Option<String>,
     },
     #[serde(rename = "service_account")]
     ServiceAccount {
@@ -190,6 +214,14 @@ impl std::fmt::Debug for AuthConfig {
                 .field("email", email)
                 .field("token", &REDACTED)
                 .finish(),
+            AuthConfig::ScopedToken {
+                email, cloud_id, ..
+            } => f
+                .debug_struct("ScopedToken")
+                .field("email", email)
+                .field("token", &REDACTED)
+                .field("cloud_id", cloud_id)
+                .finish(),
             AuthConfig::ServiceAccount {
                 client_id,
                 cloud_id,
@@ -223,6 +255,7 @@ impl AuthConfig {
     pub fn method(&self) -> AuthMethod {
         match self {
             AuthConfig::Basic { .. } => AuthMethod::Basic,
+            AuthConfig::ScopedToken { .. } => AuthMethod::ScopedToken,
             AuthConfig::ServiceAccount { .. } => AuthMethod::ServiceAccount,
             AuthConfig::OAuth { .. } => AuthMethod::OAuth,
         }
@@ -279,6 +312,13 @@ impl AuthConfig {
             AuthConfig::Basic { email, token } => {
                 Ok(Box::new(BasicStrategy::new(domain, email, token)?))
             }
+            AuthConfig::ScopedToken {
+                email,
+                token,
+                cloud_id,
+            } => Ok(Box::new(
+                ScopedTokenStrategy::connect(domain, email, token, cloud_id, http).await?,
+            )),
             AuthConfig::ServiceAccount {
                 client_id,
                 client_secret,
@@ -301,10 +341,18 @@ impl AuthConfig {
         match self {
             AuthConfig::Basic { email, token } => {
                 out.push(format!("email = {:?}", email));
-                if token.is_empty() {
-                    out.push("# token = (not set — provide via ATLASSIAN_API_TOKEN)".into());
-                } else {
-                    out.push(format!("token = \"{}\"", mask_secret(token)));
+                push_secret(&mut out, "token", token, "ATLASSIAN_API_TOKEN");
+            }
+            AuthConfig::ScopedToken {
+                email,
+                token,
+                cloud_id,
+            } => {
+                out.push(format!("email = {:?}", email));
+                push_secret(&mut out, "token", token, "ATLASSIAN_API_TOKEN");
+                match cloud_id {
+                    Some(cid) => out.push(format!("cloud_id = {:?}", cid)),
+                    None => out.push("# cloud_id = (will be resolved from the site domain)".into()),
                 }
             }
             AuthConfig::ServiceAccount {
@@ -313,7 +361,12 @@ impl AuthConfig {
                 cloud_id,
             } => {
                 out.push(format!("client_id = {:?}", client_id));
-                push_secret(&mut out, "client_secret", client_secret);
+                push_secret(
+                    &mut out,
+                    "client_secret",
+                    client_secret,
+                    "ATLASSIAN_CLIENT_SECRET",
+                );
                 match cloud_id {
                     Some(cid) => out.push(format!("cloud_id = {:?}", cid)),
                     None => out.push("# cloud_id = (will be auto-discovered)".into()),
@@ -327,7 +380,12 @@ impl AuthConfig {
                 cloud_id,
             } => {
                 out.push(format!("client_id = {:?}", client_id));
-                push_secret(&mut out, "client_secret", client_secret);
+                push_secret(
+                    &mut out,
+                    "client_secret",
+                    client_secret,
+                    "ATLASSIAN_CLIENT_SECRET",
+                );
                 out.push(format!("redirect_port = {}", redirect_port));
                 out.push(format!("scopes = {:?}", scopes));
                 match cloud_id {
@@ -340,11 +398,9 @@ impl AuthConfig {
     }
 }
 
-fn push_secret(out: &mut Vec<String>, key: &str, value: &str) {
+fn push_secret(out: &mut Vec<String>, key: &str, value: &str, env: &str) {
     if value.is_empty() {
-        out.push(format!(
-            "# {key} = (not set — provide via ATLASSIAN_CLIENT_SECRET)"
-        ));
+        out.push(format!("# {key} = (not set — provide via {env})"));
     } else {
         out.push(format!("{key} = \"{}\"", mask_secret(value)));
     }
@@ -367,6 +423,7 @@ mod tests {
     fn auth_method_round_trip() {
         for m in [
             AuthMethod::Basic,
+            AuthMethod::ScopedToken,
             AuthMethod::ServiceAccount,
             AuthMethod::OAuth,
         ] {
@@ -387,6 +444,7 @@ mod tests {
     fn auth_method_parse_rejects_unknown() {
         let err = AuthMethod::parse("saml").unwrap_err().to_string();
         assert!(err.contains("basic"));
+        assert!(err.contains("scoped_token"));
         assert!(err.contains("service_account"));
         assert!(err.contains("oauth"));
     }
@@ -409,9 +467,68 @@ mod tests {
             scopes: vec![],
             cloud_id: None,
         };
+        let t = AuthConfig::ScopedToken {
+            email: "a".into(),
+            token: "b".into(),
+            cloud_id: None,
+        };
         assert_eq!(b.method(), AuthMethod::Basic);
+        assert_eq!(t.method(), AuthMethod::ScopedToken);
         assert_eq!(s.method(), AuthMethod::ServiceAccount);
         assert_eq!(o.method(), AuthMethod::OAuth);
+    }
+
+    #[test]
+    fn scoped_token_deserialization() {
+        let auth: AuthConfig = toml::from_str(
+            r#"
+            method = "scoped_token"
+            email = "user@example.com"
+            token = "scoped"
+            cloud_id = "abc"
+        "#,
+        )
+        .unwrap();
+        let AuthConfig::ScopedToken {
+            email,
+            token,
+            cloud_id,
+        } = auth
+        else {
+            panic!("expected ScopedToken")
+        };
+        assert_eq!(email, "user@example.com");
+        assert_eq!(token, "scoped");
+        assert_eq!(cloud_id.as_deref(), Some("abc"));
+    }
+
+    /// `cloud_id` is what separates the two token methods; `deny_unknown_fields`
+    /// must keep it from being set on the one that has no use for it.
+    #[test]
+    fn basic_rejects_a_cloud_id_field() {
+        let r: Result<AuthConfig, _> = toml::from_str(
+            r#"
+            method = "basic"
+            email = "user@example.com"
+            token = "classic"
+            cloud_id = "abc"
+        "#,
+        );
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn display_lines_scoped_token_masks_token_and_notes_resolution() {
+        let c = AuthConfig::ScopedToken {
+            email: "u@x.com".into(),
+            token: "ATATT-very-long-token".into(),
+            cloud_id: None,
+        };
+        let lines = c.display_lines();
+        assert_eq!(lines[0], "method = \"scoped_token\"");
+        assert!(lines.iter().any(|l| l.contains("ATAT***")));
+        assert!(!lines.iter().any(|l| l.contains("very-long-token")));
+        assert!(lines.iter().any(|l| l.contains("cloud_id")));
     }
 
     #[test]
@@ -508,6 +625,11 @@ mod tests {
                 email: "u".into(),
                 token: "very-secret-token".into(),
             },
+            AuthConfig::ScopedToken {
+                email: "u".into(),
+                token: "very-secret-scoped".into(),
+                cloud_id: None,
+            },
             AuthConfig::ServiceAccount {
                 client_id: "c".into(),
                 client_secret: "very-secret-sa".into(),
@@ -579,6 +701,11 @@ mod tests {
             AuthConfig::Basic {
                 email: "u@x".into(),
                 token: "MY-BASIC-SECRET".into(),
+            },
+            AuthConfig::ScopedToken {
+                email: "u@x".into(),
+                token: "MY-SCOPED-SECRET".into(),
+                cloud_id: Some("cloud-1".into()),
             },
             AuthConfig::ServiceAccount {
                 client_id: "cid".into(),

@@ -3,7 +3,7 @@
 [![CI](https://github.com/junyeong-ai/atlassian-cli/workflows/CI/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/ci.yml)
 [![Security](https://github.com/junyeong-ai/atlassian-cli/workflows/Security/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/security.yml)
 [![Rust](https://img.shields.io/badge/rust-1.97.1%2B%20(2024%20edition)-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.8.1-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
+[![Version](https://img.shields.io/badge/version-0.9.0-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
 [![DeepWiki](https://img.shields.io/badge/DeepWiki-junyeong--ai%2Fatlassian--cli-blue.svg?logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACwAAAAyCAYAAAAnWDnqAAAAAXNSR0IArs4c6QAAA05JREFUaEPtmUtyEzEQhtWTQyQLHNak2AB7ZnyXZMEjXMGeK/AIi+QuHrMnbChYY7MIh8g01fJoopFb0uhhEqqcbWTp06/uv1saEDv4O3n3dV60RfP947Mm9/SQc0ICFQgzfc4CYZoTPAswgSJCCUJUnAAoRHOAUOcATwbmVLWdGoH//PB8mnKqScAhsD0kYP3j/Yt5LPQe2KvcXmGvRHcDnpxfL2zOYJ1mFwrryWTz0advv1Ut4CJgf5uhDuDj5eUcAUoahrdY/56ebRWeraTjMt/00Sh3UDtjgHtQNHwcRGOC98BJEAEymycmYcWwOprTgcB6VZ5JK5TAJ+fXGLBm3FDAmn6oPPjR4rKCAoJCal2eAiQp2x0vxTPB3ALO2CRkwmDy5WohzBDwSEFKRwPbknEggCPB/imwrycgxX2NzoMCHhPkDwqYMr9tRcP5qNrMZHkVnOjRMWwLCcr8ohBVb1OMjxLwGCvjTikrsBOiA6fNyCrm8V1rP93iVPpwaE+gO0SsWmPiXB+jikdf6SizrT5qKasx5j8ABbHpFTx+vFXp9EnYQmLx02h1QTTrl6eDqxLnGjporxl3NL3agEvXdT0WmEost648sQOYAeJS9Q7bfUVoMGnjo4AZdUMQku50McDcMWcBPvr0SzbTAFDfvJqwLzgxwATnCgnp4wDl6Aa+Ax283gghmj+vj7feE2KBBRMW3FzOpLOADl0Isb5587h/U4gGvkt5v60Z1VLG8BhYjbzRwyQZemwAd6cCR5/XFWLYZRIMpX39AR0tjaGGiGzLVyhse5C9RKC6ai42ppWPKiBagOvaYk8lO7DajerabOZP46Lby5wKjw1HCRx7p9sVMOWGzb/vA1hwiWc6jm3MvQDTogQkiqIhJV0nBQBTU+3okKCFDy9WwferkHjtxib7t3xIUQtHxnIwtx4mpg26/HfwVNVDb4oI9RHmx5WGelRVlrtiw43zboCLaxv46AZeB3IlTkwouebTr1y2NjSpHz68WNFjHvupy3q8TFn3Hos2IAk4Ju5dCo8B3wP7VPr/FGaKiG+T+v+TQqIrOqMTL1VdWV1DdmcbO8KXBz6esmYWYKPwDL5b5FA1a0hwapHiom0r/cKaoqr+27/XcrS5UwSMbQAAAABJRU5ErkJggg==)](https://deepwiki.com/junyeong-ai/atlassian-cli)
 
 > **🌐 [한국어](README.md)** | **English**
@@ -29,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scri
 # 2. Initialize config
 atlassian-cli config init --global
 
-# 3. Edit config (pick oauth / service_account / basic — see Authentication)
+# 3. Edit config (pick oauth / service_account / scoped_token / basic — see Authentication)
 atlassian-cli config edit --global
 
 # 4. (oauth only) Sign in once via the browser
@@ -139,7 +139,7 @@ Installs the latest prebuilt binary and can install the `jira-confluence` Claude
 
 ```bash
 # Install a specific release
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.8.1 bash
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.9.0 bash
 
 # Uninstall (non-interactive defaults keep skill/config)
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/uninstall.sh | bash
@@ -186,11 +186,17 @@ The installer uses the local skill definition when run inside a checkout. With `
 
 Pick one explicitly (no auto-detection):
 
-| Method | Principal | Notes |
-|---|---|---|
-| `oauth` ⭐ | the signed-in user | 3LO + PKCE; tokens stored in OS keychain, auto-refreshed |
-| `service_account` | non-human SA | OAuth 2.0 client_credentials; for CI / automation |
-| `basic` | API-token owner | **classic (unscoped) token only** — scoped API tokens only work through the `api.atlassian.com` gateway and get 401 at the site URL; create a classic token at <https://id.atlassian.com/manage-profile/security/api-tokens> or use `oauth`/`service_account` |
+| Method | Principal | Request host | Notes |
+|---|---|---|---|
+| `oauth` ⭐ | the signed-in user | `api.atlassian.com` | 3LO + PKCE; tokens stored in OS keychain, auto-refreshed |
+| `service_account` | non-human SA | `api.atlassian.com` | OAuth 2.0 client_credentials; for CI / automation |
+| `scoped_token` | API-token owner | `api.atlassian.com` | **API token with scopes only**; permissions limited to the scopes granted to the token |
+| `basic` | API-token owner | `{domain}` | **classic (unscoped) token only** |
+
+The two token methods do not accept each other's tokens: the site host silently
+ignores a token carrying scopes and answers 401, and the gateway rejects a
+classic one. On a 401 the CLI's `hint` field names the other method. Issue
+either kind at <https://id.atlassian.com/manage-profile/security/api-tokens>.
 
 ### OAuth 2.0 (3LO) — recommended
 
@@ -230,7 +236,7 @@ Prereqs at <https://developer.atlassian.com/console/myapps/>:
 3. Grant the scopes you list in config — unscoped scopes are rejected at consent.
 4. Copy `client_id` / `client_secret` from Settings.
 
-### Service Account / Basic — environment variables
+### Service Account / API tokens — environment variables
 
 ```bash
 # Service account (CI / automation)
@@ -239,12 +245,29 @@ export ATLASSIAN_CLIENT_ID="..."
 export ATLASSIAN_CLIENT_SECRET="..."
 # ATLASSIAN_CLOUD_ID is optional when the credential accesses exactly one site
 
-# Basic (personal API token)
+# Scoped API token (token created with scopes)
+export ATLASSIAN_AUTH_METHOD=scoped_token
+export ATLASSIAN_DOMAIN="company.atlassian.net"   # resolves cloud_id
+export ATLASSIAN_EMAIL="user@example.com"
+export ATLASSIAN_API_TOKEN="..."
+# ATLASSIAN_CLOUD_ID pins the site directly; the domain is then unnecessary
+
+# Basic (classic, unscoped API token)
 export ATLASSIAN_AUTH_METHOD=basic
 export ATLASSIAN_DOMAIN="company.atlassian.net"
 export ATLASSIAN_EMAIL="user@example.com"
 export ATLASSIAN_API_TOKEN="..."
 ```
+
+Atlassian is retiring classic tokens — every token issued before 2024-12-15
+expired between 2026-03-14 and 2026-05-12, and newly issued tokens carry
+scopes. Prefer `scoped_token` for anything created from now on.
+
+`scoped_token` resolves `cloud_id` from `https://{domain}/_edge/tenant_info`,
+which needs no credentials. That lookup is the only part of this method that
+touches the site host, and it runs once per invocation — pin `cloud_id` to skip
+it entirely, or when the site host does not answer from your network. The value
+also appears in the site URL at <https://admin.atlassian.com>.
 
 Blank env vars are treated as **absent** — `export VAR=""` no longer shadows
 the config-file value.
@@ -257,7 +280,7 @@ the config-file value.
 - Global: `~/.config/atlassian-cli/config.toml`
 
 Generate a starter with `atlassian-cli config init --global`. The template
-ships all three auth methods as commented examples.
+ships all four auth methods as commented examples.
 
 ### Field optimization (optional env)
 
@@ -301,6 +324,15 @@ atlassian-cli config init --global
 - [ ] Domain format: `company.atlassian.net` (without https://)
 - [ ] Email format valid
 - [ ] Token correct (watch for copy/paste spaces)
+- [ ] Token shape matches the method — a token with scopes needs `scoped_token`,
+      a classic one needs `basic`. On a 401 the error's `hint` names the method
+      to switch to.
+
+### `Failed to resolve cloud_id from ...`
+
+`scoped_token` reads the cloud ID from `https://{domain}/_edge/tenant_info`.
+When that host is unreachable from your network, pin the value instead via
+`ATLASSIAN_CLOUD_ID` or `[auth].cloud_id`; the domain is then unnecessary.
 
 ### Field Filtering Not Working
 
@@ -410,7 +442,8 @@ only, so `| jq` pipelines never see partial output):
 ```
 
 API failures include `status` and `operation`; a `hint` field appears when a
-known remediation exists (e.g. a scoped token used with `basic` auth). Rate
+known remediation exists (e.g. an API token sent to the host that refuses its
+shape). Rate
 limits (429) are retried automatically up to 3 times, honoring `Retry-After`.
 
 | Exit code | Meaning |
@@ -451,7 +484,7 @@ Supported: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 
 **🌐 [한국어](README.md)** | **English**
 
-**Version 0.8.1** • Rust 2024 Edition
+**Version 0.9.0** • Rust 2024 Edition
 
 Made with ❤️ for productivity
 

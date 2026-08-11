@@ -57,6 +57,7 @@ impl AuthResolver<'_> {
 
         Ok(Some(match method {
             AuthMethod::Basic => self.resolve_basic(file_for_method)?,
+            AuthMethod::ScopedToken => self.resolve_scoped_token(file_for_method)?,
             AuthMethod::ServiceAccount => self.resolve_service_account(file_for_method)?,
             AuthMethod::OAuth => self.resolve_oauth(file_for_method)?,
         }))
@@ -83,6 +84,41 @@ impl AuthResolver<'_> {
             .with_context(|| {
                 format!("API token required (set via --token, {ENV_API_TOKEN}, or config)")
             })?,
+        })
+    }
+
+    fn resolve_scoped_token(&self, file: Option<&AuthConfig>) -> Result<AuthConfig> {
+        Ok(AuthConfig::ScopedToken {
+            email: pick(self.cli.email.as_deref(), ENV_EMAIL, file, |a| match a {
+                AuthConfig::ScopedToken { email, .. } => Some(email.as_str()),
+                _ => None,
+            })
+            .with_context(|| {
+                format!(
+                    "email required for scoped_token auth (set via --email, {ENV_EMAIL}, or config)"
+                )
+            })?,
+            token: pick(
+                self.cli.token.as_deref(),
+                ENV_API_TOKEN,
+                file,
+                |a| match a {
+                    AuthConfig::ScopedToken { token, .. } => Some(token.as_str()),
+                    _ => None,
+                },
+            )
+            .with_context(|| {
+                format!("API token required (set via --token, {ENV_API_TOKEN}, or config)")
+            })?,
+            cloud_id: pick(
+                self.cli.cloud_id.as_deref(),
+                ENV_CLOUD_ID,
+                file,
+                |a| match a {
+                    AuthConfig::ScopedToken { cloud_id, .. } => cloud_id.as_deref(),
+                    _ => None,
+                },
+            ),
         })
     }
 
@@ -248,10 +284,12 @@ pub struct Config {
     pub profile: String,
 
     /// Site domain (e.g. "company.atlassian.net").
-    /// Required for Basic auth. Ignored for Service account (cloud_id is used instead).
+    /// Required for Basic auth, and for Scoped token auth unless `cloud_id` is
+    /// pinned. Ignored for Service account and OAuth, which address the site
+    /// by `cloud_id`.
     pub domain: Option<String>,
 
-    /// Authentication configuration (Basic, Service account, or OAuth).
+    /// Authentication configuration (Basic, Scoped token, Service account, or OAuth).
     #[serde(default)]
     pub auth: Option<AuthConfig>,
 
@@ -399,12 +437,16 @@ pub(crate) fn validate_atlassian_domain(raw: &str) -> Result<String> {
     Ok(host.to_string())
 }
 
-/// Validate a user-pinned `cloud_id` before it is interpolated into a proxy
-/// path (`/ex/{service}/{cloud_id}{path}`). Rejecting anything outside
-/// `[A-Za-z0-9-]` prevents a configured value containing `/`, `?`, or `#`
-/// from rewriting the proxy path or query on `api.atlassian.com`.
-/// Auto-discovered cloud IDs come from the API and are trusted; only values
-/// the user supplies via CLI/env/config flow through here.
+/// Validate a `cloud_id` before it is interpolated into a proxy path
+/// (`/ex/{service}/{cloud_id}{path}`). Rejecting anything outside
+/// `[A-Za-z0-9-]` prevents a value containing `/`, `?`, or `#` from rewriting
+/// the proxy path or query on `api.atlassian.com`.
+///
+/// **Every** cloud_id passes through here — pinned by the user or discovered
+/// over the network. A discovered one is not exempt merely because it came
+/// from an API: `scoped_token` reads it from the site host, so trusting it
+/// would let that response steer the proxy path. Do not drop the validation
+/// on the discovery branch as redundant; a test pins it.
 pub(crate) fn validate_cloud_id(raw: &str) -> Result<()> {
     if raw.is_empty() {
         bail!("cloud_id is empty");
@@ -678,6 +720,34 @@ impl Config {
                     bail!("API token is empty");
                 }
             }
+            AuthConfig::ScopedToken {
+                email,
+                token,
+                cloud_id,
+            } => {
+                if !email.contains('@') {
+                    bail!("Invalid email format: {}", email);
+                }
+                if token.is_empty() {
+                    bail!("API token is empty");
+                }
+                // The gateway path carries the cloud_id, so one must exist by
+                // the time a request is built. Either it is pinned here — and
+                // must not carry URL structure — or it is resolved from the
+                // site host, which then has to be a real one.
+                match cloud_id.as_deref() {
+                    Some(cloud_id) => validate_cloud_id(cloud_id)?,
+                    None => {
+                        let domain = self.domain.as_ref().context(
+                            "scoped_token auth needs a cloud_id, or a domain to resolve one from. Set via:\n\
+                             1. --cloud-id flag or ATLASSIAN_CLOUD_ID env var\n\
+                             2. --domain flag or ATLASSIAN_DOMAIN env var\n\
+                             3. Config file: atlassian-cli config init",
+                        )?;
+                        validate_atlassian_domain(domain)?;
+                    }
+                }
+            }
             AuthConfig::ServiceAccount {
                 client_id,
                 client_secret,
@@ -778,14 +848,24 @@ impl Config {
         let template = r#"[default]
 # domain = "company.atlassian.net"  # Required for basic auth
 
-# === Method 1: Basic auth (personal API token) ===
+# === Method 1: Basic auth (classic, unscoped API token) ===
 # Identity: yourself. Audit logs show your name.
+# Requests go to the site host, which accepts only an unscoped token.
 # [default.auth]
 # method = "basic"
 # email = "user@example.com"
 # token = "..."  # Prefer ATLASSIAN_API_TOKEN env var
 
-# === Method 2: Service account (OAuth 2.0 client_credentials) ===
+# === Method 2: Scoped API token (token with scopes) ===
+# Identity: yourself, limited to the scopes granted to the token.
+# Requests go through api.atlassian.com, the only host that honours scopes.
+# [default.auth]
+# method = "scoped_token"
+# email = "user@example.com"
+# token = "..."  # Prefer ATLASSIAN_API_TOKEN env var
+# cloud_id = "..."  # Optional, resolved from the domain above if omitted
+
+# === Method 3: Service account (OAuth 2.0 client_credentials) ===
 # Identity: a non-human service account principal.
 # [default.auth]
 # method = "service_account"
@@ -793,7 +873,7 @@ impl Config {
 # client_secret = "..."  # Prefer ATLASSIAN_CLIENT_SECRET env var
 # cloud_id = "..."  # Optional, auto-discovered if omitted
 
-# === Method 3: OAuth 2.0 (3LO — user-delegated) ===
+# === Method 4: OAuth 2.0 (3LO — user-delegated) ===
 # Identity: yourself (via interactive browser sign-in).
 # Tokens stored in OS keychain (file fallback) and refreshed transparently.
 # After configuring, run: atlassian-cli auth login
@@ -1556,6 +1636,102 @@ domain = "x.atlassian.net"
             ..Default::default()
         };
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_spoofed_cloud_id_for_scoped_token() {
+        let config = Config {
+            domain: None,
+            auth: Some(AuthConfig::ScopedToken {
+                email: "u@x.com".to_string(),
+                token: "tk".to_string(),
+                cloud_id: Some("abc/evil?x=1".to_string()),
+            }),
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    /// Without a cloud_id there is nothing to build a gateway path from, so
+    /// the domain it would be resolved from has to be present and real.
+    #[test]
+    fn validate_scoped_token_needs_a_cloud_id_or_a_domain() {
+        let bare = Config {
+            domain: None,
+            auth: Some(AuthConfig::ScopedToken {
+                email: "u@x.com".to_string(),
+                token: "tk".to_string(),
+                cloud_id: None,
+            }),
+            ..Default::default()
+        };
+        let err = bare.validate().unwrap_err().to_string();
+        assert!(err.contains("cloud_id"), "{err}");
+
+        let spoofed = Config {
+            domain: Some("https://evil.com/foo.atlassian.net".to_string()),
+            ..bare.clone()
+        };
+        assert!(spoofed.validate().is_err());
+
+        let resolvable = Config {
+            domain: Some("test.atlassian.net".to_string()),
+            ..bare
+        };
+        assert!(resolvable.validate().is_ok());
+    }
+
+    /// A pinned cloud_id is self-sufficient: the gateway host is a constant,
+    /// so no site domain is involved in any request.
+    #[test]
+    fn validate_scoped_token_with_a_pinned_cloud_id_needs_no_domain() {
+        let config = Config {
+            domain: None,
+            auth: Some(AuthConfig::ScopedToken {
+                email: "u@x.com".to_string(),
+                token: "tk".to_string(),
+                cloud_id: Some("11111111-2222-3333-4444-555555555555".to_string()),
+            }),
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_resolver_scoped_token_method_switch_drops_file_fields() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_auth_env();
+        unsafe { std::env::set_var(ENV_AUTH_METHOD, "scoped_token") };
+        unsafe { std::env::set_var(ENV_CLOUD_ID, "env-cloud") };
+        let file = AuthConfig::Basic {
+            email: "file@x.com".into(),
+            token: "file-tk".into(),
+        };
+        let overrides = CliOverrides {
+            email: Some("new@user.com".into()),
+            token: Some("new-tk".into()),
+            ..Default::default()
+        };
+        let result = AuthResolver {
+            file_auth: Some(&file),
+            cli: &overrides,
+        }
+        .resolve()
+        .unwrap()
+        .unwrap();
+        clear_auth_env();
+        match result {
+            AuthConfig::ScopedToken {
+                email,
+                token,
+                cloud_id,
+            } => {
+                assert_eq!(email, "new@user.com");
+                assert_eq!(token, "new-tk");
+                assert_eq!(cloud_id.as_deref(), Some("env-cloud"));
+            }
+            _ => panic!("method switch should yield ScopedToken"),
+        }
     }
 
     #[test]

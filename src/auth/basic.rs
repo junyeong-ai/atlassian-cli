@@ -1,13 +1,14 @@
-use super::strategy::{AuthStrategy, Identity, probe_myself};
+use super::strategy::{AuthStrategy, Identity, encode_basic_credential, probe_myself};
 use crate::auth::AuthMethod;
 use crate::client::Service;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use secrecy::{ExposeSecret, SecretString};
 
-/// Basic HTTP auth with `email:api_token`. Routes directly to the user's
-/// `{domain}.atlassian.net` host; the principal is the token owner.
+/// Basic HTTP auth with `email:api_token`, sent to the site host itself.
+/// The principal is the token owner. The site host accepts only a classic
+/// (unscoped) token — a token carrying scopes is honoured solely by the
+/// `api.atlassian.com` gateway, which is what `scoped_token` targets.
 pub struct BasicStrategy {
     domain: String,
     email: String,
@@ -32,7 +33,7 @@ impl BasicStrategy {
         // real `*.atlassian.net` host even if construction is reached without
         // going through `Config::validate` first.
         let clean = crate::config::validate_atlassian_domain(domain)?;
-        let encoded = SecretString::new(STANDARD.encode(format!("{}:{}", email, token)).into());
+        let encoded = encode_basic_credential(&email, &token);
         Ok(Self {
             domain: clean,
             email,

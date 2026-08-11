@@ -76,13 +76,21 @@ pub fn create_test_config_with_filters(projects: Vec<String>, spaces: Vec<String
 #[derive(Debug)]
 pub struct MockAuthStrategy {
     base_url: String,
+    method: AuthMethod,
 }
 
 #[cfg(test)]
 impl MockAuthStrategy {
     pub fn new(base_url: impl Into<String>) -> Self {
+        Self::with_method(base_url, AuthMethod::Basic)
+    }
+
+    /// Report a specific method, for the behaviour that branches on it — the
+    /// 401 remediation hint is per-method.
+    pub fn with_method(base_url: impl Into<String>, method: AuthMethod) -> Self {
         Self {
             base_url: base_url.into(),
+            method,
         }
     }
 }
@@ -91,7 +99,7 @@ impl MockAuthStrategy {
 #[async_trait]
 impl AuthStrategy for MockAuthStrategy {
     fn method(&self) -> AuthMethod {
-        AuthMethod::Basic
+        self.method
     }
 
     async fn authorization(&self, _http: &reqwest::Client) -> Result<String> {
@@ -111,6 +119,13 @@ impl AuthStrategy for MockAuthStrategy {
 #[cfg(test)]
 pub fn mock_client(base_url: impl Into<String>) -> ApiClient {
     let strategy: Arc<dyn AuthStrategy> = Arc::new(MockAuthStrategy::new(base_url));
+    ApiClient::new_with_strategy(strategy, create_test_config())
+}
+
+/// `mock_client` for a caller that needs the client to report a given method.
+#[cfg(test)]
+pub fn mock_client_with_method(base_url: impl Into<String>, method: AuthMethod) -> ApiClient {
+    let strategy: Arc<dyn AuthStrategy> = Arc::new(MockAuthStrategy::with_method(base_url, method));
     ApiClient::new_with_strategy(strategy, create_test_config())
 }
 
