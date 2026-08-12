@@ -23,9 +23,12 @@ identity to probe" (service_account) — it is **not** a credential failure.
 
 Every user-delegated method (basic, scoped_token, oauth) probes and reports
 the failure as-is. Do not add a status-based escape hatch for a token scoped
-away from Jira: the gateway answers insufficient scope with the same 401 it
-uses for a bad credential, so nothing here can tell them apart, and mapping a
-status to `Ok(None)` on a guess would hide real credential failures.
+away from Jira: the gateway answers insufficient scope with the same 401
+*status* it uses for a bad credential — only the body differs (`Unauthorized;
+scope does not match` against a bare `Unauthorized`) — so a status cannot tell
+them apart, and mapping one to `Ok(None)` would hide real credential failures.
+Reading the body instead would hang the decision on server prose, which is the
+trade this codebase refuses everywhere else.
 
 The shared `/myself` probe lives in `strategy::probe_myself`, and
 `strategy::encode_basic_credential` holds the one copy of the `email:token`
