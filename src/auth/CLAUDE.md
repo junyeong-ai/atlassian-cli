@@ -131,7 +131,11 @@ spells the separator the same way so both builders read identically.
   saved from a desktop session is exactly what would be left behind by a quiet
   success. Cleared means the entry went, was not there, this build carries no
   store, or the opt-out forbade the look — every outcome but "it would not
-  answer".
+  answer". It is a statement about this call, not about the keychain: under the
+  opt-out a session stored before the flag stays where it is, which is why that
+  case is spelled out above. `auth logout` therefore reads only to name the
+  backend it found, never to decide whether to clear — a read falls back to the
+  file, so finding nothing there says nothing about the keychain.
 - **The search spec is the store's, not the service's.** `stored_profiles` asks
   the keychain which profiles it holds, and each store defines the vocabulary
   that question is asked in: Apple and Secret Service match attributes

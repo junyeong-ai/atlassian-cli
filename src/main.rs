@@ -1968,18 +1968,18 @@ async fn handle_auth(
                 overrides,
             )?;
             let store = TokenStore::new(&config.profile)?;
-            match store.load().await? {
-                Some(loaded) => {
-                    store.delete().await?;
-                    println!(
-                        "✓ OAuth session cleared for profile '{}' ({})",
-                        config.profile, loaded.backend
-                    );
-                }
-                None => println!(
-                    "No stored session for profile '{}' — nothing to clear.",
-                    config.profile
+            // Read to name the backend, never to decide whether to clear: a
+            // read falls back to the file when the keychain will not answer,
+            // so finding nothing there says nothing about what the keychain
+            // still holds. `delete` clears both and reports one that refused.
+            let found = store.load().await?;
+            store.delete().await?;
+            match found {
+                Some(loaded) => println!(
+                    "✓ OAuth session cleared for profile '{}' ({})",
+                    config.profile, loaded.backend
                 ),
+                None => println!("No readable session for profile '{}'.", config.profile),
             }
             Ok(())
         }
