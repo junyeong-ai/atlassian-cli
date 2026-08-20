@@ -1077,7 +1077,15 @@ async fn self_uninstall(
             // out as a clean uninstall.
             match std::fs::remove_dir(&dir) {
                 Ok(()) => record(&mut removed, "config", display_path(&dir)),
-                Err(e) if e.kind() == std::io::ErrorKind::DirectoryNotEmpty => {
+                // Not emptied, and not a plain directory this tool made, are
+                // both definite answers about a directory that stays. Anything
+                // else is a failure to remove it.
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::DirectoryNotEmpty | std::io::ErrorKind::NotADirectory
+                    ) =>
+                {
                     kept.push("config-directory");
                 }
                 Err(e) => {
@@ -2207,6 +2215,36 @@ mod tests {
 
         assert!(!installation.config_dir().unwrap().exists());
         assert!(!kept(&report).contains(&"config-directory"));
+    }
+
+    /// A config directory the user redirected is as definite a "stays" as a
+    /// full one: `remove_dir` answers `NotADirectory` there, and reading that
+    /// as a failure stops the uninstall after the tokens and the skill are
+    /// already gone.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn purge_config_keeps_a_directory_the_user_redirected() {
+        let home = tempfile::tempdir().unwrap();
+        let installation = installation(home.path());
+        let real = home.path().join("dotfiles");
+        std::fs::create_dir_all(&real).unwrap();
+        let dir = installation.config_dir().unwrap();
+        std::fs::create_dir_all(dir.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&real, &dir).unwrap();
+        std::fs::write(dir.join("config.toml"), "[default]\n").unwrap();
+
+        let report = self_uninstall(&installation, true, true, true)
+            .await
+            .unwrap();
+
+        assert!(kept(&report).contains(&"config-directory"));
+        assert!(!installation.binary().exists());
+        assert!(
+            std::fs::symlink_metadata(&dir)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 
     /// A file this tool did not write keeps the directory alive; deleting it
