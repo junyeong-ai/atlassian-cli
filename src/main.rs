@@ -1995,3 +1995,164 @@ async fn handle_auth(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use atlassian_cli::dist::{Installation, skill};
+
+    /// An installation whose every path lands under a temporary home, so the
+    /// removal steps can run for real without touching the machine.
+    fn installation(home: &std::path::Path) -> Installation {
+        let binary = home.join("bin").join("atlassian-cli");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, "#!/bin/sh\nexit 0\n").unwrap();
+        Installation::at(binary, Some(home.to_path_buf()))
+    }
+
+    fn write_config(installation: &Installation) {
+        let dir = installation.config_dir().unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(installation.config_file().unwrap(), "[default.auth]\n").unwrap();
+    }
+
+    fn kinds(report: &serde_json::Value) -> Vec<&str> {
+        report["removed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["kind"].as_str().unwrap())
+            .collect()
+    }
+
+    fn kept(report: &serde_json::Value) -> Vec<&str> {
+        report["kept"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry.as_str().unwrap())
+            .collect()
+    }
+
+    /// `--keep-credentials` is what keeps the keychain out of these tests: it
+    /// is the one step whose backend belongs to the machine.
+    #[tokio::test]
+    async fn uninstall_removes_the_skill_and_the_binary_and_keeps_the_config() {
+        let home = tempfile::tempdir().unwrap();
+        let installation = installation(home.path());
+        write_config(&installation);
+        skill::deploy(&installation.skill_dir().unwrap()).unwrap();
+
+        let report = self_uninstall(&installation, false, true, false)
+            .await
+            .unwrap();
+
+        assert_eq!(kinds(&report), vec!["skill", "binary"]);
+        assert_eq!(kept(&report), vec!["credentials", "config"]);
+        assert!(!installation.binary().exists());
+        assert!(!installation.skill_dir().unwrap().exists());
+        assert!(installation.config_file().unwrap().is_file());
+    }
+
+    #[tokio::test]
+    async fn keep_skill_leaves_it_and_says_so() {
+        let home = tempfile::tempdir().unwrap();
+        let installation = installation(home.path());
+        skill::deploy(&installation.skill_dir().unwrap()).unwrap();
+
+        let report = self_uninstall(&installation, true, true, false)
+            .await
+            .unwrap();
+
+        assert_eq!(kinds(&report), vec!["binary"]);
+        assert!(kept(&report).contains(&"skill"));
+        assert!(installation.skill_dir().unwrap().is_dir());
+    }
+
+    /// `credentials.json` sits in the directory `--purge-config` removes, so a
+    /// whole-directory delete would take it whatever `--keep-credentials` said.
+    #[tokio::test]
+    async fn purge_config_leaves_the_credentials_file_alone() {
+        let home = tempfile::tempdir().unwrap();
+        let installation = installation(home.path());
+        write_config(&installation);
+        let credentials = installation.credentials_file().unwrap();
+        std::fs::write(&credentials, "{}").unwrap();
+
+        let report = self_uninstall(&installation, true, true, true)
+            .await
+            .unwrap();
+
+        assert!(credentials.is_file(), "the token file was purged anyway");
+        assert!(!installation.config_file().unwrap().exists());
+        // The directory still holds the token file, so it stays — and says so
+        // rather than going unmentioned.
+        assert!(installation.config_dir().unwrap().is_dir());
+        assert!(kept(&report).contains(&"config-directory"));
+    }
+
+    #[tokio::test]
+    async fn purge_config_removes_a_directory_it_empties() {
+        let home = tempfile::tempdir().unwrap();
+        let installation = installation(home.path());
+        write_config(&installation);
+
+        let report = self_uninstall(&installation, true, true, true)
+            .await
+            .unwrap();
+
+        assert!(!installation.config_dir().unwrap().exists());
+        assert!(!kept(&report).contains(&"config-directory"));
+    }
+
+    /// A file this tool did not write keeps the directory alive; deleting it
+    /// would be taking something that is not ours.
+    #[tokio::test]
+    async fn purge_config_spares_a_file_this_tool_did_not_write() {
+        let home = tempfile::tempdir().unwrap();
+        let installation = installation(home.path());
+        write_config(&installation);
+        let stray = installation.config_dir().unwrap().join("notes.txt");
+        std::fs::write(&stray, "mine").unwrap();
+
+        self_uninstall(&installation, true, true, true)
+            .await
+            .unwrap();
+
+        assert!(stray.is_file());
+    }
+
+    /// Each step is irreversible, so a failure has to name what it already did.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_binary_that_cannot_be_removed_reports_what_already_went() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let installation = installation(home.path());
+        let skill_dir = installation.skill_dir().unwrap();
+        skill::deploy(&skill_dir).unwrap();
+
+        let bin_dir = installation.binary().parent().unwrap().to_path_buf();
+        std::fs::set_permissions(&bin_dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let err = self_uninstall(&installation, false, true, false)
+            .await
+            .unwrap_err();
+        std::fs::set_permissions(&bin_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let message = format!("{err:#}");
+        assert!(message.contains("already removed"), "{message}");
+        assert!(
+            message.contains(&skill_dir.display().to_string()),
+            "the skill it had already removed is not named: {message}"
+        );
+    }
+
+    #[test]
+    fn an_error_with_nothing_removed_behind_it_is_left_as_it_is() {
+        let error = anyhow::anyhow!("could not remove the binary");
+        assert_eq!(
+            format!("{:#}", already_removed(error, &[])),
+            "could not remove the binary"
+        );
+    }
+}

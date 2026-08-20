@@ -525,11 +525,14 @@ fn install_store() -> std::result::Result<(), KeyringError> {
     ))
 }
 
+/// The name of the fallback token file inside the global config directory.
+pub const CREDENTIALS_FILE: &str = "credentials.json";
+
 /// The fallback token file, beside the global config it belongs with.
 fn default_file_path() -> Result<PathBuf> {
     let dir =
         crate::config::Config::global_config_dir().context("Failed to determine home directory")?;
-    Ok(dir.join("credentials.json"))
+    Ok(dir.join(CREDENTIALS_FILE))
 }
 
 /// Where the fallback token file lives, for a caller that reports on or removes

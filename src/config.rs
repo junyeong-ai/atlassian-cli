@@ -813,12 +813,21 @@ impl Config {
     /// Every path under it is derived from here rather than reassembled, so a
     /// caller cannot end up reading one directory while another writes a
     /// different one.
+    /// The name of the global config inside [`global_config_dir`](Self::global_config_dir).
+    pub const GLOBAL_CONFIG_FILE: &'static str = "config.toml";
+
     pub fn global_config_dir() -> Option<PathBuf> {
-        dirs::home_dir().map(|home| home.join(".config").join("atlassian-cli"))
+        dirs::home_dir().map(|home| Self::global_config_dir_in(&home))
+    }
+
+    /// The same directory relative to a given home, so a caller holding one can
+    /// derive it without reassembling the layout.
+    pub fn global_config_dir_in(home: &Path) -> PathBuf {
+        home.join(".config").join("atlassian-cli")
     }
 
     pub fn global_config_path() -> Option<PathBuf> {
-        Self::global_config_dir().map(|dir| dir.join("config.toml"))
+        Self::global_config_dir().map(|dir| dir.join(Self::GLOBAL_CONFIG_FILE))
     }
 
     pub fn project_config_path() -> Option<PathBuf> {

@@ -38,7 +38,9 @@ Every target publishes a `.tar.gz`, Windows included, so there is one extraction
 
 ## Paths come from their owners
 
-`layout.rs` calls `Config::global_config_dir()` and `auth::credentials_file()`. It does not reassemble `~/.config/atlassian-cli` — a second derivation is how a command ends up reporting on one directory while another writes a different one. Only the skill directory is owned here.
+`layout.rs` composes: the directory from `Config::global_config_dir_in`, the file names from `Config::GLOBAL_CONFIG_FILE` and `auth::CREDENTIALS_FILE`. It does not reassemble `~/.config/atlassian-cli` — a second derivation is how a command ends up reporting on one directory while another writes a different one. Only the skill directory is owned here.
+
+Every path hangs off the one `home` the `Installation` holds, which is also what makes `Installation::at` useful: the uninstall steps are exercised against a temporary home in `src/main.rs`'s tests rather than read for correctness.
 
 ## Uninstall enumerates rather than guesses
 

@@ -31,6 +31,12 @@ impl Installation {
         })
     }
 
+    /// An installation at explicit paths, so a caller can be exercised against
+    /// temporary directories instead of the machine it is running on.
+    pub fn at(binary: PathBuf, home: Option<PathBuf>) -> Self {
+        Self { binary, home }
+    }
+
     pub fn binary(&self) -> &Path {
         &self.binary
     }
@@ -48,15 +54,15 @@ impl Installation {
     }
 
     pub fn config_dir(&self) -> Option<PathBuf> {
-        Config::global_config_dir()
+        Some(Config::global_config_dir_in(self.home.as_ref()?))
     }
 
     pub fn config_file(&self) -> Option<PathBuf> {
-        Config::global_config_path()
+        Some(self.config_dir()?.join(Config::GLOBAL_CONFIG_FILE))
     }
 
     pub fn credentials_file(&self) -> Option<PathBuf> {
-        crate::auth::credentials_file()
+        Some(self.config_dir()?.join(crate::auth::CREDENTIALS_FILE))
     }
 }
 
