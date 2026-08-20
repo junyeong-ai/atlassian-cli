@@ -2357,6 +2357,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn integ_a_reply_id_from_the_server_cannot_steer_the_request_path() {
+        let server = MockServer::start().await;
+        // A page id is user input, but a comment id reaches the path from a
+        // RESPONSE — and the walk asks that path for the comment's children.
+        // Left raw, the `..` segments below resolve away and the next request
+        // lands on `/wiki/pages/999/children`, a path the walk never chose.
+        mount_comments(
+            &server,
+            "/wiki/api/v2/pages/5/footer-comments",
+            json!([{ "id": "../../../pages/999" }]),
+        )
+        .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "results": [] })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        get_comments("5", &[CommentFamily::Footer], true, false, &client)
+            .await
+            .unwrap();
+
+        let requested: Vec<String> = server
+            .received_requests()
+            .await
+            .expect("the mock server recorded its requests")
+            .iter()
+            .map(|request| request.url.path().to_string())
+            .collect();
+        assert_eq!(
+            requested,
+            vec![
+                "/wiki/api/v2/pages/5/footer-comments".to_string(),
+                "/wiki/api/v2/footer-comments/..%2F..%2F..%2Fpages%2F999/children".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn integ_thread_walk_bails_when_a_comment_answers_itself() {
         let server = MockServer::start().await;
         // A tree cannot reach a comment twice, so this is drift — and a walk

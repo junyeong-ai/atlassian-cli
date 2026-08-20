@@ -1844,6 +1844,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn integ_get_comments_accepts_a_total_that_shrank_mid_walk() {
+        let server = MockServer::start().await;
+        // Comments deleted while the walk is in flight lower the count the
+        // server reports. The walk has everything that still exists, so this is
+        // the end of the collection — not the server withholding items.
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/ABC-1/comment"))
+            .and(query_param("startAt", "0"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "total": 5,
+                "comments": [{ "id": "1" }, { "id": "2" }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/ABC-1/comment"))
+            .and(query_param("startAt", "2"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "total": 2, "comments": [] })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let result = get_comments("ABC-1", false, &client).await.unwrap();
+        assert_eq!(result["items"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
     async fn integ_get_comments_bails_without_a_total() {
         let server = MockServer::start().await;
         // A 2xx that omits the count cannot say whether more comments exist.

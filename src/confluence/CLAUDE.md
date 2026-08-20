@@ -37,6 +37,8 @@ Each emitted comment carries four fields the **walk** determined, never the resp
 
 Comment collections send `limit=250` (`COMMENT_PAGE_SIZE`) — the spec's maximum against a default of 25. Completeness comes from following `_links.next` either way, so the larger page is purely fewer round trips.
 
+**`children_path` percent-encodes its comment id, which the root `CLAUDE.md` rule about server-side identifiers otherwise says not to do.** That rule protects cursors, which encoding would corrupt. A comment id is different: it arrives in a *response* and is then interpolated into the path of the next request, so it is the one place where a response can choose where the walk goes next. Raw, an id of `../../../pages/999` resolves away and lands the request on `/wiki/pages/999/children`; a test pins the encoded form. Comment ids are numeric, so encoding is a no-op on real ones.
+
 ## Content properties = structured JSON metadata
 
 `set_property` is a **key-scoped upsert**: it looks the key up via `fetch_property_by_key` (a `?key=` query on the collection), then `PUT`s with the bumped version when present or `POST`s when absent. `delete_property` resolves key→id the same way and errors on a missing key rather than silently succeeding. The CLI parses the `value` arg as **strict JSON** (no string-vs-JSON sniffing) — callers quote bare strings. `value` is arbitrary JSON, which is what makes properties a clean store for machine-read page state.
