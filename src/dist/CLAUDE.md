@@ -67,6 +67,6 @@ Nothing here uses `Path::exists` to decide whether something is there; `present`
 
 Paths reach a report through `display_path`. `json!` serializes a `Path` by unwrapping, so a path the platform allows and UTF-8 cannot spell would answer with a panic instead of the single-line error object the CLI contract promises.
 
-`--purge-config` removes the config file this tool writes and then the directory only if that leaves it empty; a directory that survives is reported as kept rather than passed over in silence.
+`--purge-config` removes the config file this tool writes and then the directory only if that leaves it empty. Not emptied is the expected refusal and is reported as kept; any other failure to remove it is a failure, because reading one as "kept" is how a directory nobody could remove goes out as a clean uninstall.
 
 The binary goes last and through `self_replace::self_delete_at`: Windows refuses to unlink a running executable, so a plain `remove_file` would fail there after everything else had already gone. A failure at that point names what was already removed, because "Permission denied" alone reads as "nothing happened".
