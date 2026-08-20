@@ -233,19 +233,22 @@ impl TokenStore {
     /// reporting it as success is how `auth logout` and `self uninstall` came
     /// to say a token was gone while it was still there.
     pub async fn delete(&self) -> Result<()> {
-        match self.keyring_op(|e| e.delete_credential()).await {
+        let keyring = self.keyring_op(|e| e.delete_credential()).await;
+        // The file is this tool's to remove whatever the keychain did. Skipping
+        // it because the keychain failed would leave a token behind on exactly
+        // the machines that keep tokens there.
+        self.file_delete()?;
+
+        match keyring {
             Ok(())
             | Err(KeyringError::NoEntry)
             | Err(KeyringError::NoDefaultStore)
-            | Err(KeyringError::NotSupportedByStore(_)) => {}
-            Err(e) => {
-                return Err(anyhow::anyhow!(e).context(format!(
-                    "Failed to clear the keychain entry for '{}'",
-                    self.profile
-                )));
-            }
+            | Err(KeyringError::NotSupportedByStore(_)) => Ok(()),
+            Err(e) => Err(anyhow::anyhow!(
+                "Failed to clear the keychain entry for '{}': {e}",
+                self.profile
+            )),
         }
-        self.file_delete()
     }
 
     /// Run a keyring operation off the async runtime. Native stores expose
@@ -646,6 +649,38 @@ mod tests {
         store.file_delete().unwrap();
         assert!(store.file_load().unwrap().is_none());
         assert!(!path.exists());
+    }
+
+    /// A keychain that refuses must not take the file store down with it: the
+    /// machines that keep tokens in the file are exactly the ones where the
+    /// keychain is unreachable, and a logout there was leaving the token behind.
+    #[tokio::test]
+    async fn a_refusing_keychain_still_leaves_the_file_cleared() {
+        set_default_store(keyring_core::mock::Store::new().unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        let store = TokenStore::with_paths("refusing-keychain", path.clone());
+
+        store
+            .file_save(&serde_json::to_string(&OnDisk::from(&fixture_tokens())).unwrap())
+            .unwrap();
+        assert!(path.exists());
+
+        let entry = Entry::new(KEYRING_SERVICE, "refusing-keychain").unwrap();
+        entry
+            .as_any()
+            .downcast_ref::<keyring_core::mock::Cred>()
+            .expect("the mock store hands out mock credentials")
+            .set_error(KeyringError::NoStorageAccess(Box::new(
+                std::io::Error::other("the keychain is locked"),
+            )));
+
+        let err = store.delete().await.unwrap_err().to_string();
+        assert!(err.contains("Failed to clear the keychain entry"), "{err}");
+        assert!(
+            !path.exists(),
+            "the file token survived a failed keychain delete"
+        );
     }
 
     /// End-to-end exercise of the keyring path via `keyring_core::mock`.
