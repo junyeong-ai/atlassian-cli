@@ -145,7 +145,7 @@ atlassian-cli self uninstall --yes [--keep-skill] [--keep-credentials] [--purge-
 
 - skill 은 바이너리에 컴파일되어 들어갑니다. 버전이 어긋날 수 없고, `self status` 는 배포본을 **바이트 비교**로 판정하므로 직접 수정한 사본도 `stale` 로 잡힙니다.
 - `self update` 는 내려받은 바이너리를 **교체 전에** 실행해 버전을 확인합니다. 이 기계에서 돌지 않는 바이너리는 아무것도 건드리지 않고 실패합니다.
-- `self uninstall` 은 OS 키체인에 남은 OAuth 토큰까지 지웁니다 (`--keep-credentials` 로 보존). 키체인이 있는데 읽을 수 없으면(잠김, 또는 `ATLASSIAN_NO_KEYCHAIN` 로 열람 금지) **거부**합니다 — 토큰을 남긴 채 바이너리만 사라지는 게 최악이기 때문입니다. 키체인이 응답하지 않는 환경에서는 두 번에 나눠 끝납니다 — 첫 실행이 `credentials.json` 을 지우고 지운 것을 밝히며 거부하고, `--keep-credentials` 로 두 번째 실행이 완료합니다. `auth logout` 도 **응답하지 않는** 키체인에 대해서는 같은 이유로 0이 아닌 코드로 끝납니다 — 모든 릴리스 타깃이 키체인을 포함하므로 "닿지 못함"을 "없음"으로 읽을 수 없습니다. `ATLASSIAN_NO_KEYCHAIN` 이 켜져 있을 때는 0으로 끝나고 키체인을 건드리지 않았다고 알립니다 — 물어본 적이 없기 때문이며, 거기 있는 것을 지우려면 플래그를 한 번 꺼고 실행하면 됩니다. `--purge-config` 는 이 도구가 쓴 설정 파일을 지우고 디렉터리는 비었을 때만 지우므로, `--keep-credentials` 와 함께 써도 `credentials.json` 은 남습니다. 프로젝트 로컬 설정(`.atlassian.toml`)은 건드리지 않습니다.
+- `self uninstall` 은 OS 키체인에 남은 OAuth 토큰까지 지웁니다 (`--keep-credentials` 로 보존). 키체인이 있는데 읽을 수 없으면(잠김, 또는 `ATLASSIAN_NO_KEYCHAIN` 로 열람 금지) **거부**합니다 — 토큰을 남긴 채 바이너리만 사라지는 게 최악이기 때문입니다. 키체인이 응답하지 않는 환경에서는 두 번에 나눠 끝납니다 — 첫 실행이 `credentials.json` 을 지우고 지운 것을 밝히며 거부하고, `--keep-credentials` 로 두 번째 실행이 완료합니다. `auth logout` 도 **응답하지 않는** 키체인에 대해서는 같은 이유로 0이 아닌 코드로 끝납니다 — 모든 릴리스 타깃이 키체인을 포함하므로 "닿지 못함"을 "없음"으로 읽을 수 없습니다. `ATLASSIAN_NO_KEYCHAIN` 이 켜져 있을 때는 0으로 끝나고 키체인을 건드리지 않았다고 알립니다 — 물어본 적이 없기 때문이며, 거기 있는 것을 지우려면 플래그를 한 번 끄고 실행하면 됩니다. `--purge-config` 는 이 도구가 쓴 설정 파일을 지우고 디렉터리는 비었을 때만 지우므로, `--keep-credentials` 와 함께 써도 `credentials.json` 은 남습니다. 프로젝트 로컬 설정(`.atlassian.toml`)은 건드리지 않습니다.
 **Requirement**: Rust 1.97.1+ (소스 빌드 시).
 
 ---
@@ -446,9 +446,9 @@ atlassian-cli completions bash > /etc/bash_completion.d/atlassian-cli
 
 아키텍처, auth 모델, API 버전 믹스의 이유, 새 명령 추가 워크플로는 [CLAUDE.md](CLAUDE.md) 참고.
 
-## Claude Code Skill (선택)
+## Claude Code Skill
 
-설치 스크립트가 `jira-confluence` 스킬을 사용자 레벨(`~/.claude/skills/jira-confluence`)로 선택 설치할 수 있습니다. 스킬은 바이너리에 컴파일되어 들어 있고 배포는 `self skill install` 이 합니다 — 어디서 실행하든 배포된 사본은 정의상 그 바이너리의 것입니다.
+설치 스크립트는 `jira-confluence` 스킬을 사용자 레벨(`~/.claude/skills/jira-confluence`)에 배포합니다. 스킬은 바이너리에 컴파일되어 들어 있고 배포는 `self skill install` 이 합니다 — 어디서 실행하든 배포된 사본은 정의상 그 바이너리의 것입니다.
 
 ---
 

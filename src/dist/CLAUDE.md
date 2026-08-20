@@ -20,6 +20,8 @@ Writing has the same reach as deleting and needs the same guard: `fs::write` ope
 
 Deliberately absent: fetching the skill from a git ref, and detecting a source checkout to prefer. Both existed in the shell installer and were the mechanism by which the skill and binary drifted.
 
+The decision of *whether* to redeploy is made by the binary being replaced, since that is the process running `self update`; only the deploy itself runs through the successor. So a change to what `state` answers reaches an affected installation on the update after the one that ships it, or through `self skill install` by hand.
+
 ## Update order: verify before replacing
 
 `self update` runs download → checksum → extract → **run the staged binary and compare the version it prints** → replace. The version check happens before anything is touched, so a download that will not run on this machine (wrong architecture, failed code signing, truncated archive) ends with the installation untouched.
@@ -69,6 +71,6 @@ Nothing here uses `Path::exists` to decide whether something is there; `present`
 
 Paths reach a report through `display_path`. `json!` serializes a `Path` by unwrapping, so a path the platform allows and UTF-8 cannot spell would answer with a panic instead of the single-line error object the CLI contract promises.
 
-`--purge-config` removes the config file this tool writes and then the directory only if that leaves it empty. Not emptied is the expected refusal and is reported as kept; any other failure to remove it is a failure, because reading one as "kept" is how a directory nobody could remove goes out as a clean uninstall.
+`--purge-config` removes the config file this tool writes and then the directory only if that leaves it empty. Not emptied, and not a plain directory — a `~/.config/atlassian-cli` the user redirected answers `NotADirectory` — are both definite answers about a directory that stays, and are reported as kept. Any other failure to remove it is a failure, because reading one as "kept" is how a directory nobody could remove goes out as a clean uninstall.
 
 The binary goes last and through `self_replace::self_delete_at`: Windows refuses to unlink a running executable, so a plain `remove_file` would fail there after everything else had already gone. A failure at that point names what was already removed, because "Permission denied" alone reads as "nothing happened".
