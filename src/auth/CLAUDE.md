@@ -142,9 +142,10 @@ spells the separator the same way so both builders read identically.
 - An unparseable `credentials.json` is never written over, because it still
   holds whatever sessions it names. That leaves no in-tool repair, so the parse
   error names the one there is: remove the file.
-- `TokenStore::delete` clears both backends independently and reports a keychain
-  that would not answer as a failure. The file goes first, so nothing is lost
-  when the keychain is unreachable — but `auth logout` does exit non-zero there,
+- `TokenStore::delete` clears both backends independently — neither half is
+  conditional on the other, because whichever one fails, the other is still
+  holding a token — and reports a keychain that would not answer as a failure.
+  Nothing is lost when the keychain is unreachable — but `auth logout` does exit non-zero there,
   and that is deliberate: every released target has a keychain compiled in, so
   "could not reach it" cannot be read as "there was nothing in it", and a token
   saved from a desktop session is exactly what would be left behind by a quiet

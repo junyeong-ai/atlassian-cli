@@ -383,20 +383,24 @@ impl TokenStore {
     /// success is how `auth logout` and `self uninstall` came to say a token
     /// was gone while it was still there.
     pub async fn delete(&self) -> Result<()> {
-        // The file goes first, and literally: it is this tool's to remove
-        // whatever the keychain did, and skipping it because the keychain
-        // failed would leave a token behind on exactly the machines that keep
-        // tokens there. Going first also means a path this store will not
-        // rewrite is refused before either backend changes.
-        self.file_delete()?;
-        let keyring = self.keyring_op(|e| e.delete_credential()).await;
-
-        match keyring {
+        // Both, and neither conditional on the other: whichever half fails, the
+        // other still holds a token, and skipping it leaves that one behind on
+        // exactly the machines where the first half is the broken one. The file
+        // still refuses a path it will not rewrite — it just no longer takes
+        // the keychain with it.
+        let file = self.file_delete();
+        let keyring = match self.keyring_op(|e| e.delete_credential()).await {
             Keychain::Done(()) | Keychain::Empty | Keychain::Forbidden | Keychain::Absent => Ok(()),
             Keychain::Unreachable(reason) => Err(anyhow::anyhow!(
                 "Failed to clear the keychain entry for '{}': {reason}",
                 self.profile
             )),
+        };
+
+        match (file, keyring) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(e), Ok(())) | (Ok(()), Err(e)) => Err(e),
+            (Err(file), Err(keyring)) => Err(anyhow::anyhow!("{file:#}; and {keyring:#}")),
         }
     }
 
@@ -435,7 +439,9 @@ impl TokenStore {
         let buf = serde_json::to_vec_pretty(&all).context("Failed to serialize credentials")?;
         tmp.write_all(&buf)
             .context("Failed to write credentials tmpfile")?;
-        tmp.as_file().sync_all().ok();
+        tmp.as_file()
+            .sync_all()
+            .context("Failed to flush credentials tmpfile")?;
 
         #[cfg(unix)]
         {
@@ -939,6 +945,37 @@ mod tests {
             .to_string();
 
         assert!(err.contains("Failed to read credentials file"), "{err}");
+    }
+
+    /// The mirror of the test below: a file half that refuses must not take the
+    /// keychain down with it either. Whichever one fails, the other is still
+    /// holding a token.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_refusing_file_store_still_leaves_the_keychain_cleared() {
+        mock_keychain();
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("credentials.json");
+        std::os::unix::fs::symlink(dir.path().join("elsewhere.json"), &link).unwrap();
+        let store = TokenStore::at("refusing-file", link);
+
+        Entry::new(KEYRING_SERVICE, "refusing-file")
+            .unwrap()
+            .set_password("{}")
+            .unwrap();
+
+        let err = store.delete().await.unwrap_err().to_string();
+
+        assert!(err.contains("not a regular file"), "{err}");
+        assert!(
+            matches!(
+                Entry::new(KEYRING_SERVICE, "refusing-file")
+                    .unwrap()
+                    .get_password(),
+                Err(KeyringError::NoEntry)
+            ),
+            "the keychain token survived a refused file delete"
+        );
     }
 
     /// A keychain that refuses must not take the file store down with it: the
