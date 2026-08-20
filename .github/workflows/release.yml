@@ -63,7 +63,6 @@ jobs:
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package artifact
-        id: pkg
         shell: bash
         run: |
           set -euo pipefail
@@ -71,39 +70,36 @@ jobs:
           target="${{ matrix.target }}"
           stem="${BIN_NAME}-${tag}-${target}" # e.g. atlassian-cli-v0.2.0-x86_64-unknown-linux-gnu
           mkdir -p dist staging
+          bin="${BIN_NAME}"
+          [[ "$RUNNER_OS" == "Windows" ]] && bin="${BIN_NAME}.exe"
+          cp "target/${target}/release/${bin}" "staging/${bin}"
+          # Every target publishes a .tar.gz so `self update` reads one archive
+          # format everywhere; the Windows .zip is published alongside it for
+          # downloading by hand.
+          tar -C staging -czf "dist/${stem}.tar.gz" "${bin}"
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            bin="${BIN_NAME}.exe"
-            cp "target/${target}/release/${bin}" "staging/${bin}"
             (cd staging && 7z a -bd "../dist/${stem}.zip" "${bin}" >/dev/null)
-            asset="dist/${stem}.zip"
-          else
-            bin="${BIN_NAME}"
-            cp "target/${target}/release/${bin}" "staging/${bin}"
-            tar -C staging -czf "dist/${stem}.tar.gz" "${bin}"
-            asset="dist/${stem}.tar.gz"
-          fi
-          echo "asset=${asset}" >> "$GITHUB_OUTPUT"
-          echo "stem=${stem}"   >> "$GITHUB_OUTPUT"
-
-      - name: SHA-256 checksum
-        shell: bash
-        run: |
-          set -euo pipefail
-          asset="${{ steps.pkg.outputs.asset }}"
-          dir="$(dirname "$asset")"
-          base="$(basename "$asset")"
-          # Run from the asset's directory so the checksum file records the bare
-          # filename (no "dist/" prefix); install.sh downloads to a flat temp dir.
-          if command -v sha256sum >/dev/null; then
-            (cd "$dir" && sha256sum "$base" > "${base}.sha256")
-          else
-            (cd "$dir" && shasum -a 256 "$base" > "${base}.sha256")
           fi
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: ${{ steps.pkg.outputs.asset }}
+          subject-path: dist/*
+
+      - name: SHA-256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Run from the asset directory so each checksum records the bare
+          # filename; downloads land in a flat directory.
+          cd dist
+          for asset in *; do
+            if command -v sha256sum >/dev/null; then
+              sha256sum "$asset" > "${asset}.sha256"
+            else
+              shasum -a 256 "$asset" > "${asset}.sha256"
+            fi
+          done
 
       - name: Upload artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

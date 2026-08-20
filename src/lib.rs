@@ -2,6 +2,7 @@ pub mod auth;
 pub mod client;
 pub mod config;
 pub mod confluence;
+pub mod dist;
 pub mod filter;
 pub(crate) mod http_utils;
 pub mod jira;

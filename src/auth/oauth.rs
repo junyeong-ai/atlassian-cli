@@ -18,5 +18,8 @@ mod store;
 mod strategy;
 
 pub use flow::{LoginOutcome, SiteInfo};
-pub use store::{LoadedTokens, TokenSet, TokenStorageBackend, TokenStore};
+pub use store::{
+    KeyringEnumeration, LoadedTokens, StoredProfiles, TokenSet, TokenStorageBackend, TokenStore,
+    credentials_file, stored_profiles,
+};
 pub use strategy::{OAuthParams, OAuthStrategy};

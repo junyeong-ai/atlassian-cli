@@ -27,8 +27,8 @@ mod strategy;
 
 pub use basic::BasicStrategy;
 pub use oauth::{
-    LoadedTokens, LoginOutcome, OAuthParams, OAuthStrategy, SiteInfo, TokenStorageBackend,
-    TokenStore,
+    KeyringEnumeration, LoadedTokens, LoginOutcome, OAuthParams, OAuthStrategy, SiteInfo,
+    StoredProfiles, TokenStorageBackend, TokenStore, credentials_file, stored_profiles,
 };
 pub use scoped_token::ScopedTokenStrategy;
 pub use service_account::ServiceAccountStrategy;

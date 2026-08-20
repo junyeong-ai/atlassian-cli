@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use keyring_core::{Entry, Error as KeyringError, get_default_store, set_default_store};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -340,29 +340,119 @@ impl TokenStore {
     }
 
     fn file_read_all(&self) -> Result<HashMap<String, OnDisk>> {
-        if !self.file_path.exists() {
-            return Ok(HashMap::new());
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Ok(meta) = fs::metadata(&self.file_path) {
-                let mode = meta.permissions().mode();
-                if mode & 0o077 != 0 {
-                    tracing::warn!(
-                        "Credentials file {:?} has too-permissive mode {:o}; recommend chmod 600",
-                        self.file_path,
-                        mode
-                    );
-                }
+        read_all_from(&self.file_path)
+    }
+}
+
+fn read_all_from(file_path: &std::path::Path) -> Result<HashMap<String, OnDisk>> {
+    if !file_path.exists() {
+        return Ok(HashMap::new());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = fs::metadata(file_path) {
+            let mode = meta.permissions().mode();
+            if mode & 0o077 != 0 {
+                tracing::warn!(
+                    "Credentials file {:?} has too-permissive mode {:o}; recommend chmod 600",
+                    file_path,
+                    mode
+                );
             }
         }
-        let raw = fs::read_to_string(&self.file_path)
-            .with_context(|| format!("Failed to read credentials file {:?}", self.file_path))?;
-        let parsed: HashMap<String, OnDisk> = serde_json::from_str(&raw)
-            .with_context(|| format!("Failed to parse credentials file {:?}", self.file_path))?;
-        Ok(parsed)
     }
+    let raw = fs::read_to_string(file_path)
+        .with_context(|| format!("Failed to read credentials file {file_path:?}"))?;
+    serde_json::from_str(&raw)
+        .with_context(|| format!("Failed to parse credentials file {file_path:?}"))
+}
+
+/// How completely the keychain could say which profiles it holds tokens for.
+///
+/// Carried rather than collapsed into the list, because "these are the profiles
+/// with tokens" is a claim only one of these variants supports. A caller that
+/// reports the list as exhaustive on any other is telling the user their
+/// credentials are gone when they may not be.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyringEnumeration {
+    /// The store listed its entries, so its side of the answer is complete.
+    Listed,
+    /// `ATLASSIAN_NO_KEYCHAIN` forbids touching the keychain at all.
+    Skipped,
+    /// This platform's store provides no search, so anything it holds for a
+    /// profile nobody names is unreachable from here.
+    Unsupported,
+    Failed(String),
+}
+
+impl KeyringEnumeration {
+    /// Why the keychain could not be listed, where it said.
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            KeyringEnumeration::Failed(reason) => Some(reason),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            KeyringEnumeration::Listed => "listed",
+            KeyringEnumeration::Skipped => "skipped",
+            KeyringEnumeration::Unsupported => "unsupported",
+            KeyringEnumeration::Failed(_) => "failed",
+        }
+    }
+}
+
+/// The profiles this machine holds OAuth tokens for.
+#[derive(Debug)]
+pub struct StoredProfiles {
+    pub profiles: BTreeSet<String>,
+    pub keyring: KeyringEnumeration,
+}
+
+/// Ask both backends which profiles they hold tokens for.
+///
+/// The file store is a profile-keyed map, so its keys are its whole answer. The
+/// keychain answers completely only where it implements search, which is why
+/// the outcome comes back beside the list instead of folded into it.
+pub async fn stored_profiles() -> StoredProfiles {
+    let mut profiles = BTreeSet::new();
+    if let Ok(path) = default_file_path()
+        && let Ok(all) = read_all_from(&path)
+    {
+        profiles.extend(all.into_keys());
+    }
+
+    if keychain_disabled() {
+        return StoredProfiles {
+            profiles,
+            keyring: KeyringEnumeration::Skipped,
+        };
+    }
+
+    let found = tokio::task::spawn_blocking(|| {
+        ensure_store_installed()?;
+        Entry::search(&HashMap::from([("service", KEYRING_SERVICE)]))
+    })
+    .await
+    .unwrap_or_else(|join_err| Err(KeyringError::PlatformFailure(Box::new(join_err))));
+
+    let keyring = match found {
+        Ok(entries) => {
+            profiles.extend(
+                entries
+                    .iter()
+                    .filter_map(|entry| entry.get_specifiers().map(|(_, user)| user)),
+            );
+            KeyringEnumeration::Listed
+        }
+        Err(KeyringError::NotSupportedByStore(_)) => KeyringEnumeration::Unsupported,
+        Err(e) => KeyringEnumeration::Failed(e.to_string()),
+    };
+
+    StoredProfiles { profiles, keyring }
 }
 
 /// Install the platform-native credential store as the keyring-core default,
@@ -423,12 +513,17 @@ fn install_store() -> std::result::Result<(), KeyringError> {
     ))
 }
 
+/// The fallback token file, beside the global config it belongs with.
 fn default_file_path() -> Result<PathBuf> {
-    let mut p = dirs::home_dir().context("Failed to determine home directory")?;
-    p.push(".config");
-    p.push("atlassian-cli");
-    p.push("credentials.json");
-    Ok(p)
+    let dir =
+        crate::config::Config::global_config_dir().context("Failed to determine home directory")?;
+    Ok(dir.join("credentials.json"))
+}
+
+/// Where the fallback token file lives, for a caller that reports on or removes
+/// it rather than reading tokens out of it.
+pub fn credentials_file() -> Option<PathBuf> {
+    default_file_path().ok()
 }
 
 #[cfg(test)]

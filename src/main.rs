@@ -65,10 +65,68 @@ enum Command {
     Confluence(ConfluenceCommand),
     Config(ConfigCommand),
     Auth(AuthCommand),
+    #[command(name = "self", about = "Inspect, update, or remove this installation")]
+    Selfcmd(SelfCommand),
     #[command(about = "Generate a shell completion script on stdout")]
     Completions {
         #[arg(value_enum, help = "Target shell")]
         shell: clap_complete::Shell,
+    },
+}
+
+#[derive(Parser)]
+struct SelfCommand {
+    #[command(subcommand)]
+    subcommand: SelfSubcommand,
+}
+
+#[derive(Subcommand)]
+enum SelfSubcommand {
+    /// Report what this installation is and where its files are
+    Status,
+    /// Replace this binary with a published release
+    Update {
+        /// Install this version instead of the latest. Named explicitly, so it may go back.
+        #[arg(long, value_name = "VER")]
+        version: Option<String>,
+        /// Replace the binary even when it already reports the target version
+        #[arg(long)]
+        force: bool,
+        /// Additionally hold the archive to the build provenance the release attested
+        #[arg(long)]
+        verify_attestations: bool,
+    },
+    /// Install or remove the Claude Code skill this binary carries
+    Skill {
+        #[command(subcommand)]
+        action: SelfSkillAction,
+    },
+    /// Remove this binary, the skill it deployed, and the tokens it stored
+    Uninstall {
+        /// Confirm the removal
+        #[arg(long)]
+        yes: bool,
+        /// Leave the deployed skill in place
+        #[arg(long)]
+        keep_skill: bool,
+        /// Leave stored OAuth tokens in the keychain and the credentials file
+        #[arg(long)]
+        keep_credentials: bool,
+        /// Also remove the global configuration directory
+        #[arg(long)]
+        purge_config: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum SelfSkillAction {
+    /// Write the skill this binary carries into ~/.claude/skills
+    Install,
+    /// Remove the deployed skill
+    Remove {
+        /// Confirm the removal
+        #[arg(long)]
+        yes: bool,
     },
 }
 
@@ -722,6 +780,11 @@ async fn run(cli: Cli) -> Result<()> {
             output_json(&result, cli.pretty);
             Ok(())
         }
+        Command::Selfcmd(cmd) => {
+            let result = handle_self(cmd).await?;
+            output_json(&result, cli.pretty);
+            Ok(())
+        }
         Command::Completions { shell } => {
             use clap::CommandFactory;
             clap_complete::generate(
@@ -743,6 +806,322 @@ async fn run(cli: Cli) -> Result<()> {
 /// 3 auth (401/403), 4 not found (404), 5 rate limited (429),
 /// 6 server error (5xx). API failures carry `status`/`operation` (and
 /// `hint` when remediation is known) alongside `message`.
+async fn handle_self(cmd: SelfCommand) -> Result<serde_json::Value> {
+    use atlassian_cli::dist;
+
+    let installation = dist::Installation::detect()?;
+    match cmd.subcommand {
+        SelfSubcommand::Status => self_status(&installation).await,
+        SelfSubcommand::Update {
+            version,
+            force,
+            verify_attestations,
+        } => self_update(&installation, version, force, verify_attestations).await,
+        SelfSubcommand::Skill { action } => match action {
+            SelfSkillAction::Install => self_skill_install(&installation),
+            SelfSkillAction::Remove { yes } => {
+                if !yes {
+                    anyhow::bail!("Removing the skill requires --yes");
+                }
+                self_skill_remove(&installation)
+            }
+        },
+        SelfSubcommand::Uninstall {
+            yes,
+            keep_skill,
+            keep_credentials,
+            purge_config,
+        } => {
+            if !yes {
+                anyhow::bail!("Uninstalling requires --yes");
+            }
+            self_uninstall(&installation, keep_skill, keep_credentials, purge_config).await
+        }
+    }
+}
+
+/// The skill directory, or the reason there is none to name.
+fn skill_dir(installation: &atlassian_cli::dist::Installation) -> Result<std::path::PathBuf> {
+    installation
+        .skill_dir()
+        .ok_or_else(|| anyhow::anyhow!("Failed to determine home directory"))
+}
+
+fn skill_report(dir: &std::path::Path) -> serde_json::Value {
+    use atlassian_cli::dist::skill;
+    serde_json::json!({
+        "name": skill::SKILL_NAME,
+        "path": dir,
+        "state": skill::state(dir).as_str(),
+        "version": skill::carried_version(),
+    })
+}
+
+/// Everything this installation is, read from disk alone — no network, so the
+/// command that answers "what have I got" never hangs on a release channel.
+/// "Is there a newer one" is `self update`'s question, and it answers it
+/// without changing anything when the running binary is already current.
+async fn self_status(
+    installation: &atlassian_cli::dist::Installation,
+) -> Result<serde_json::Value> {
+    use atlassian_cli::dist;
+
+    let stored = atlassian_cli::auth::stored_profiles().await;
+    let config_file = installation.config_file();
+
+    Ok(serde_json::json!({
+        "version": dist::current_version().to_string(),
+        "target": dist::ReleaseTarget::current().map(|t| t.triple),
+        "binary": installation.binary(),
+        "skill": skill_dir(installation).ok().as_deref().map(skill_report),
+        "config": {
+            "path": config_file,
+            "exists": config_file.as_deref().is_some_and(std::path::Path::exists),
+        },
+        "credentials": {
+            "file": installation.credentials_file(),
+            "profiles": stored.profiles,
+            "keyring": keyring_report(&stored.keyring),
+        },
+    }))
+}
+
+async fn self_update(
+    installation: &atlassian_cli::dist::Installation,
+    version: Option<String>,
+    force: bool,
+    verify_attestations: bool,
+) -> Result<serde_json::Value> {
+    use atlassian_cli::dist;
+
+    let target = dist::ReleaseTarget::current()
+        .ok_or_else(|| anyhow::anyhow!("{}", dist::ReleaseTarget::unsupported_reason()))?;
+    let running = dist::current_version();
+    let requested = version.as_deref().map(dist::parse_tag).transpose()?;
+
+    let client = dist::ReleaseClient::github()?;
+    // A named version is the answer; asking the channel for another one would
+    // only introduce a way for the two to disagree.
+    let latest = match requested {
+        Some(_) => None,
+        None => Some(client.resolve_latest().await?),
+    };
+    let provenance = latest.as_ref().map(|l| l.provenance.as_str());
+
+    let decision = dist::decide(
+        &running,
+        requested.as_ref(),
+        latest.as_ref().map(|l| &l.version),
+        force,
+    )
+    .ok_or_else(|| anyhow::anyhow!("no version to install"))?;
+
+    let to = match decision {
+        dist::Decision::AlreadyCurrent(version) => {
+            return Ok(serde_json::json!({
+                "action": "already_current",
+                "version": version.to_string(),
+                "latestFrom": provenance,
+            }));
+        }
+        dist::Decision::RefusedDowngrade { running, offered } => anyhow::bail!(
+            "the latest release is {offered}, older than the running {running} — \
+             install it deliberately with `--version {offered}` if that is intended"
+        ),
+        dist::Decision::Replace { to, .. } => to,
+    };
+
+    eprintln!("Downloading {}", target.archive_name(&to));
+    let staging = dist::Staging::new()?;
+    let binary =
+        dist::fetch_verified_binary(&client, target, &to, &staging, verify_attestations).await?;
+    dist::install(&staging.write(target.binary, &binary)?, &to)?;
+    eprintln!("Replaced {}", installation.binary().display());
+
+    Ok(serde_json::json!({
+        "action": if running == to { "reinstalled" } else { "updated" },
+        "from": running.to_string(),
+        "to": to.to_string(),
+        "target": target.triple,
+        "binary": installation.binary(),
+        "latestFrom": provenance,
+        "attestationVerified": verify_attestations,
+        "skill": redeploy_skill(installation),
+    }))
+}
+
+/// Redeploy the skill through the binary that just landed.
+///
+/// This process carries the skill of the version being replaced, so writing it
+/// from here would deploy the predecessor over the successor. Only where a
+/// skill is already deployed: an installation that took none must not acquire
+/// one from an update. Best-effort — the binary is in place and working, so a
+/// skill that could not be written is a follow-up rather than a failed update.
+fn redeploy_skill(installation: &atlassian_cli::dist::Installation) -> &'static str {
+    use atlassian_cli::dist::skill::{self, SkillState};
+
+    let Some(dir) = installation.skill_dir() else {
+        return "skipped";
+    };
+    if skill::state(&dir) == SkillState::Absent {
+        return "absent";
+    }
+    match std::process::Command::new(installation.binary())
+        .args(["self", "skill", "install"])
+        .stdout(std::process::Stdio::null())
+        .status()
+    {
+        Ok(status) if status.success() => "redeployed",
+        _ => {
+            eprintln!(
+                "warning: could not redeploy the skill — run `atlassian-cli self skill install`"
+            );
+            "stale"
+        }
+    }
+}
+
+fn self_skill_install(
+    installation: &atlassian_cli::dist::Installation,
+) -> Result<serde_json::Value> {
+    use atlassian_cli::dist::skill;
+
+    let dir = skill_dir(installation)?;
+    let outcome = skill::deploy(&dir)?;
+    Ok(serde_json::json!({
+        "name": skill::SKILL_NAME,
+        "path": dir,
+        "state": skill::state(&dir).as_str(),
+        "version": skill::carried_version(),
+        "written": outcome.written,
+        "pruned": outcome.pruned,
+    }))
+}
+
+fn self_skill_remove(
+    installation: &atlassian_cli::dist::Installation,
+) -> Result<serde_json::Value> {
+    use atlassian_cli::dist::skill;
+
+    let dir = skill_dir(installation)?;
+    Ok(serde_json::json!({
+        "name": skill::SKILL_NAME,
+        "path": dir,
+        "removed": skill::remove(&dir)?,
+    }))
+}
+
+/// Remove this installation, reporting each thing by name.
+///
+/// The order matters: the tokens go while there is still a binary that knows
+/// where they are, and the binary goes last — on POSIX the running process
+/// keeps its file open after the unlink. Project-level config
+/// (`.atlassian.toml`) is never touched; it lives in the user's own repository.
+async fn self_uninstall(
+    installation: &atlassian_cli::dist::Installation,
+    keep_skill: bool,
+    keep_credentials: bool,
+    purge_config: bool,
+) -> Result<serde_json::Value> {
+    use atlassian_cli::dist::skill;
+
+    let mut removed: Vec<serde_json::Value> = Vec::new();
+    let mut kept: Vec<&str> = Vec::new();
+    let mut record = |kind: &str, target: String| {
+        removed.push(serde_json::json!({ "kind": kind, "target": target }))
+    };
+
+    let credentials = if keep_credentials {
+        kept.push("credentials");
+        serde_json::Value::Null
+    } else {
+        clear_stored_tokens(installation, &mut record).await?
+    };
+
+    if let Some(dir) = installation.skill_dir()
+        && dir.exists()
+    {
+        if keep_skill {
+            kept.push("skill");
+        } else {
+            skill::remove(&dir)?;
+            record("skill", dir.display().to_string());
+        }
+    }
+
+    if let Some(dir) = installation.config_dir()
+        && dir.is_dir()
+    {
+        if purge_config {
+            std::fs::remove_dir_all(&dir)?;
+            record("config", dir.display().to_string());
+        } else {
+            kept.push("config");
+        }
+    }
+
+    let binary = installation.binary();
+    match std::fs::remove_file(binary) {
+        Ok(()) => record("binary", binary.display().to_string()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(
+                anyhow::Error::from(e).context(format!("Failed to remove {}", binary.display()))
+            );
+        }
+    }
+
+    Ok(serde_json::json!({
+        "binary": binary,
+        "removed": removed,
+        "kept": kept,
+        "credentials": credentials,
+    }))
+}
+
+/// Discard every stored token, and the file that holds the fallback copies.
+///
+/// The keychain is enumerated rather than guessed at: every platform store this
+/// binary links implements search, so the entries under this service are the
+/// whole set. Where a store still answers that it cannot search, that is
+/// reported instead of being papered over — tokens may remain, and telling
+/// someone their credentials are gone when they are not is the failure to avoid.
+async fn clear_stored_tokens(
+    installation: &atlassian_cli::dist::Installation,
+    record: &mut impl FnMut(&str, String),
+) -> Result<serde_json::Value> {
+    use atlassian_cli::auth::TokenStore;
+
+    let stored = atlassian_cli::auth::stored_profiles().await;
+    for profile in &stored.profiles {
+        TokenStore::new(profile.clone())?.delete().await?;
+        record("credentials", format!("profile:{profile}"));
+    }
+
+    // The file belongs to this installation, so it goes whether or not its
+    // contents could be read — a corrupt one still holds tokens.
+    if let Some(file) = installation.credentials_file()
+        && file.exists()
+    {
+        std::fs::remove_file(&file)?;
+        record("credentials", file.display().to_string());
+    }
+
+    Ok(serde_json::json!({
+        "keyring": keyring_report(&stored.keyring),
+        "profiles": stored.profiles,
+    }))
+}
+
+/// How completely the keychain could be listed, with the reason only where
+/// there is one.
+fn keyring_report(outcome: &atlassian_cli::auth::KeyringEnumeration) -> serde_json::Value {
+    match outcome.reason() {
+        Some(reason) => serde_json::json!({ "enumeration": outcome.as_str(), "error": reason }),
+        None => serde_json::json!({ "enumeration": outcome.as_str() }),
+    }
+}
+
 fn render_error(err: &anyhow::Error) -> (i32, String) {
     let mut error = serde_json::json!({ "message": format!("{err:#}") });
     let mut code = 1;

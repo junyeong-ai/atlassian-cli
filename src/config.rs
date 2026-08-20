@@ -807,8 +807,18 @@ impl Config {
         Ok(())
     }
 
+    /// The directory holding everything this tool stores for the user — the
+    /// global config and, beside it, the fallback credentials file.
+    ///
+    /// Every path under it is derived from here rather than reassembled, so a
+    /// caller cannot end up reading one directory while another writes a
+    /// different one.
+    pub fn global_config_dir() -> Option<PathBuf> {
+        dirs::home_dir().map(|home| home.join(".config").join("atlassian-cli"))
+    }
+
     pub fn global_config_path() -> Option<PathBuf> {
-        dirs::home_dir().map(|h| h.join(".config/atlassian-cli/config.toml"))
+        Self::global_config_dir().map(|dir| dir.join("config.toml"))
     }
 
     pub fn project_config_path() -> Option<PathBuf> {
