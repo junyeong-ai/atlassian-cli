@@ -451,8 +451,8 @@ pub enum KeyringEnumeration {
     Listed,
     /// `ATLASSIAN_NO_KEYCHAIN` forbids touching the keychain at all.
     Skipped,
-    /// This platform's store provides no search, so anything it holds for a
-    /// profile nobody names is unreachable from here.
+    /// This build carries no credential store, so nothing was ever written to
+    /// one here.
     Unsupported,
     Failed(String),
 }
@@ -481,36 +481,69 @@ impl KeyringEnumeration {
 pub struct StoredProfiles {
     pub profiles: BTreeSet<String>,
     pub keyring: KeyringEnumeration,
+    /// Why the fallback file could not be read, where it could not. Whatever it
+    /// holds is still there and none of it is named in `profiles`.
+    pub file_error: Option<String>,
 }
 
 /// Ask both backends which profiles they hold tokens for.
 ///
-/// The file store is a profile-keyed map, so its keys are its whole answer. The
-/// keychain answers completely only where it implements search, which is why
-/// the outcome comes back beside the list instead of folded into it.
+/// The file store is a profile-keyed map, so its keys are its whole answer when
+/// it can be read at all. The keychain answers through a search whose spec each
+/// store defines for itself, so what comes back is narrowed rather than
+/// trusted: only entries that name this service are kept, and one that will not
+/// name itself makes the listing incomplete. Both halves report how complete
+/// they are beside the list rather than folded into it.
 pub async fn stored_profiles(credentials_file: &std::path::Path) -> StoredProfiles {
     let mut profiles = BTreeSet::new();
-    if let Ok(all) = read_all_from(credentials_file) {
-        profiles.extend(all.into_keys());
-    }
+    let file_error = match read_all_from(credentials_file) {
+        Ok(all) => {
+            profiles.extend(all.into_keys());
+            None
+        }
+        Err(e) => Some(format!("{e:#}")),
+    };
 
-    let keyring =
-        match keychain(|| Entry::search(&HashMap::from([("service", KEYRING_SERVICE)]))).await {
-            Keychain::Done(entries) => {
-                profiles.extend(
-                    entries
-                        .iter()
-                        .filter_map(|entry| entry.get_specifiers().map(|(_, user)| user)),
-                );
-                KeyringEnumeration::Listed
+    let keyring = match keychain(|| {
+        let (key, value) = search_spec();
+        Entry::search(&HashMap::from([(key, value.as_str())]))
+    })
+    .await
+    {
+        Keychain::Done(entries) => {
+            let mut named = BTreeSet::new();
+            let mut unnamed = 0usize;
+            for entry in &entries {
+                match entry.get_specifiers() {
+                    Some((service, user)) if service == KEYRING_SERVICE => {
+                        named.insert(user);
+                    }
+                    // Another service's entry, which a store that searches by
+                    // name rather than by attribute returns alongside ours.
+                    Some(_) => {}
+                    None => unnamed += 1,
+                }
             }
-            Keychain::Empty => KeyringEnumeration::Listed,
-            Keychain::Forbidden => KeyringEnumeration::Skipped,
-            Keychain::Absent => KeyringEnumeration::Unsupported,
-            Keychain::Unreachable(reason) => KeyringEnumeration::Failed(reason),
-        };
+            profiles.extend(named);
+            if unnamed == 0 {
+                KeyringEnumeration::Listed
+            } else {
+                KeyringEnumeration::Failed(format!(
+                    "{unnamed} keychain entries would not say which profile they belong to"
+                ))
+            }
+        }
+        Keychain::Empty => KeyringEnumeration::Listed,
+        Keychain::Forbidden => KeyringEnumeration::Skipped,
+        Keychain::Absent => KeyringEnumeration::Unsupported,
+        Keychain::Unreachable(reason) => KeyringEnumeration::Failed(reason),
+    };
 
-    StoredProfiles { profiles, keyring }
+    StoredProfiles {
+        profiles,
+        keyring,
+        file_error,
+    }
 }
 
 /// Install the platform-native credential store as the keyring-core default,
@@ -567,20 +600,40 @@ fn install_store() -> std::result::Result<(), KeyringError> {
     ))
 }
 
+/// How this tool's entries are addressed to the store's search.
+///
+/// Each store defines its own search vocabulary and rejects a key it does not
+/// know, so the spec is declared here beside the stores rather than at the one
+/// call site, where it would be one platform's spelling standing in for all of
+/// them. It only narrows what comes back: `stored_profiles` keeps the entries
+/// whose own specifiers name this service, so a store that matches more
+/// loosely, or not at all, still yields the same answer.
+#[cfg(target_os = "windows")]
+fn search_spec() -> (&'static str, String) {
+    // The Credential Manager has no attributes to match on, so the store
+    // searches target names by regex and composes them as `{user}.{service}`.
+    ("pattern", format!(r"\.{KEYRING_SERVICE}$"))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn search_spec() -> (&'static str, String) {
+    ("service", KEYRING_SERVICE.to_string())
+}
+
 /// The name of the fallback token file inside the global config directory.
 pub const CREDENTIALS_FILE: &str = "credentials.json";
+
+/// Where the fallback token file lives, for a caller that reports on or removes
+/// it rather than reading tokens out of it.
+pub fn credentials_file() -> Option<PathBuf> {
+    default_file_path().ok()
+}
 
 /// The fallback token file, beside the global config it belongs with.
 fn default_file_path() -> Result<PathBuf> {
     let dir =
         crate::config::Config::global_config_dir().context("Failed to determine home directory")?;
     Ok(dir.join(CREDENTIALS_FILE))
-}
-
-/// Where the fallback token file lives, for a caller that reports on or removes
-/// it rather than reading tokens out of it.
-pub fn credentials_file() -> Option<PathBuf> {
-    default_file_path().ok()
 }
 
 #[cfg(test)]
@@ -727,6 +780,62 @@ mod tests {
         assert!(
             !path.exists(),
             "the file token survived a failed keychain delete"
+        );
+    }
+
+    /// The Windows spec interpolates the service name into a regex, so the name
+    /// has to mean itself there. A gate rather than a note: the spec is
+    /// compiled out on every other target, and a metacharacter would silently
+    /// widen what an uninstall thinks it has to clear.
+    #[test]
+    fn the_service_name_carries_no_regex_meaning() {
+        assert!(
+            KEYRING_SERVICE
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+            "{KEYRING_SERVICE} would not be a literal in the Windows search pattern"
+        );
+    }
+
+    /// A store searches by its own spelling, so what comes back can be wider
+    /// than what was asked for. The service each entry names is what decides.
+    #[tokio::test]
+    async fn an_entry_belonging_to_another_service_is_not_one_of_these_profiles() {
+        set_default_store(keyring_core::mock::Store::new().unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+
+        TokenStore::at("ours", path.clone())
+            .save(&fixture_tokens())
+            .await
+            .unwrap();
+        Entry::new(&format!("{KEYRING_SERVICE}-extra"), "theirs")
+            .unwrap()
+            .set_password("x")
+            .unwrap();
+
+        let stored = stored_profiles(&path).await;
+        assert_eq!(stored.keyring, KeyringEnumeration::Listed);
+        assert!(stored.profiles.contains("ours"), "{:?}", stored.profiles);
+        assert!(!stored.profiles.contains("theirs"), "{:?}", stored.profiles);
+    }
+
+    /// A file that will not parse still holds whatever is in it. Reporting no
+    /// profiles is the answer that makes an uninstall believe there is nothing
+    /// left to name.
+    #[tokio::test]
+    async fn a_credentials_file_that_cannot_be_read_says_so() {
+        set_default_store(keyring_core::mock::Store::new().unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        fs::write(&path, "{ not json").unwrap();
+
+        let stored = stored_profiles(&path).await;
+        assert!(
+            stored
+                .file_error
+                .is_some_and(|reason| reason.contains("credentials")),
+            "an unreadable file passed for an empty one"
         );
     }
 

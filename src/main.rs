@@ -851,7 +851,7 @@ fn skill_report(dir: &std::path::Path) -> serde_json::Value {
     use atlassian_cli::dist::skill;
     serde_json::json!({
         "name": skill::SKILL_NAME,
-        "path": dir,
+        "path": dir.display().to_string(),
         "state": skill::state(dir).as_str(),
         "version": skill::carried_version(),
     })
@@ -873,17 +873,13 @@ async fn self_status(
     Ok(serde_json::json!({
         "version": dist::current_version().to_string(),
         "target": dist::ReleaseTarget::current().map(|t| t.triple),
-        "binary": installation.binary(),
+        "binary": installation.binary().display().to_string(),
         "skill": skill_dir(installation).ok().as_deref().map(skill_report),
         "config": {
-            "path": config_file,
+            "path": config_file.as_deref().map(display_path),
             "exists": config_file.as_deref().is_some_and(std::path::Path::exists),
         },
-        "credentials": {
-            "file": credentials_file,
-            "profiles": stored.profiles,
-            "keyring": keyring_report(&stored.keyring),
-        },
+        "credentials": credentials_report(&stored, credentials_file.as_deref()),
     }))
 }
 
@@ -944,7 +940,7 @@ async fn self_update(
         "from": running.to_string(),
         "to": to.to_string(),
         "target": target.triple,
-        "binary": installation.binary(),
+        "binary": installation.binary().display().to_string(),
         "latestFrom": provenance,
         "attestationVerified": verify_attestations,
         "skill": redeploy_skill(installation),
@@ -991,7 +987,7 @@ fn self_skill_install(
     let outcome = skill::deploy(&dir)?;
     Ok(serde_json::json!({
         "name": skill::SKILL_NAME,
-        "path": dir,
+        "path": dir.display().to_string(),
         "state": skill::state(&dir).as_str(),
         "version": skill::carried_version(),
         "written": outcome.written,
@@ -1007,7 +1003,7 @@ fn self_skill_remove(
     let dir = skill_dir(installation)?;
     Ok(serde_json::json!({
         "name": skill::SKILL_NAME,
-        "path": dir,
+        "path": dir.display().to_string(),
         "removed": skill::remove(&dir)?,
     }))
 }
@@ -1093,7 +1089,7 @@ async fn self_uninstall(
     }
 
     Ok(serde_json::json!({
-        "binary": binary,
+        "binary": binary.display().to_string(),
         "removed": removed,
         "kept": kept,
         "credentials": credentials,
@@ -1166,10 +1162,10 @@ async fn clear_stored_tokens(
         record(removed, "credentials", format!("profile:{profile}"));
     }
 
-    Ok(serde_json::json!({
-        "keyring": keyring_report(&stored.keyring),
-        "profiles": stored.profiles,
-    }))
+    Ok(credentials_report(
+        &stored,
+        installation.credentials_file().as_deref(),
+    ))
 }
 
 /// Why the keychain half cannot be claimed, or `None` where it can.
@@ -1216,6 +1212,26 @@ fn token_store(
         .credentials_file()
         .ok_or_else(|| anyhow::anyhow!("Failed to determine home directory"))?;
     Ok(atlassian_cli::auth::TokenStore::at(profile, file))
+}
+
+/// A path as JSON. `Path` serializes only when it is UTF-8 and `json!` panics
+/// on the rest, which would answer with a crash instead of the single-line
+/// error object every failure here is contracted to print.
+fn display_path(path: &std::path::Path) -> String {
+    path.display().to_string()
+}
+
+/// What the two token backends hold, and how completely each of them said so.
+fn credentials_report(
+    stored: &atlassian_cli::auth::StoredProfiles,
+    file: Option<&std::path::Path>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "file": file.map(display_path),
+        "fileError": stored.file_error,
+        "profiles": stored.profiles,
+        "keyring": keyring_report(&stored.keyring),
+    })
 }
 
 /// How completely the keychain could be listed, with the reason only where
@@ -2275,6 +2291,28 @@ mod tests {
             clear_stored_tokens_refusal(&atlassian_cli::auth::KeyringEnumeration::Listed).is_none()
         );
         assert!(installation.binary().exists());
+    }
+
+    /// A path the platform accepts and JSON cannot spell. `json!` serializes a
+    /// `Path` by unwrapping, so a report built from one would panic instead of
+    /// printing the single-line error object every failure here promises.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_report_names_a_path_that_is_not_utf8() {
+        use std::os::unix::ffi::OsStringExt;
+        let home = tempfile::tempdir().unwrap();
+        // Not created: filesystems differ on whether they will take the name,
+        // and what is under test is the report, not the removal.
+        let binary = home
+            .path()
+            .join(std::ffi::OsString::from_vec(b"bin\xff".to_vec()));
+        let installation = Installation::at(binary.clone(), Some(home.path().to_path_buf()));
+
+        let report = self_uninstall(&installation, true, true, false)
+            .await
+            .unwrap();
+
+        assert_eq!(report["binary"], binary.display().to_string());
     }
 
     #[test]
