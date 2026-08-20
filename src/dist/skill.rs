@@ -31,10 +31,11 @@ pub enum SkillState {
     /// Deployed, but not what this binary carries — an older release's copy, or
     /// one edited in place.
     Stale,
-    /// The directory could not be read, so none of the above was established.
-    /// Kept apart from `Absent` because that one is acted on: an update skips
-    /// the redeploy on it, and doing that here would leave the predecessor's
-    /// skill against the new binary and call it nothing deployed.
+    /// None of the above could be established — the path would not answer, or
+    /// is not a directory. Kept apart from `Absent` because that one is acted
+    /// on: an update skips the redeploy on it, and doing that here would leave
+    /// the predecessor's skill against the new binary and call it nothing
+    /// deployed.
     Unreadable,
 }
 
@@ -74,7 +75,12 @@ pub fn state(dir: &Path) -> SkillState {
     for (relative, contents) in FILES {
         match std::fs::read(dir.join(relative)) {
             Ok(found) if found == contents.as_bytes() => {}
-            _ => return SkillState::Stale,
+            // Not there, or there and different — either way a deploy makes it
+            // current. A file that would not open is neither: saying it
+            // differs is a claim about bytes nothing read.
+            Ok(_) => return SkillState::Stale,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return SkillState::Stale,
+            Err(_) => return SkillState::Unreadable,
         }
     }
     SkillState::Current
@@ -237,6 +243,23 @@ mod tests {
 
         let found = state(&dir);
         std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert_eq!(found, SkillState::Unreadable);
+    }
+
+    /// The directory opens and its contents do not. Nothing was compared, so
+    /// neither `Current` nor `Stale` has been established.
+    #[cfg(unix)]
+    #[test]
+    fn a_skill_file_that_will_not_open_is_not_reported_stale() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join(SKILL_NAME);
+        deploy(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let found = state(&dir);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
 
         assert_eq!(found, SkillState::Unreadable);
     }
