@@ -2038,7 +2038,17 @@ async fn handle_auth(
                 overrides,
             )?;
             let method = config.auth.as_ref().map(|a| a.method());
-            let session = TokenStore::new(&config.profile)?.load().await?;
+            // Reported, not raised: this command exists to say what the stored
+            // session is, and "the keychain would not answer" is one of the
+            // answers. Only an OAuth profile has a session to look for.
+            let session = match TokenStore::new(&config.profile)?.load().await {
+                Ok(session) => session,
+                Err(e) if method == Some(AuthMethod::OAuth) => {
+                    println!("Session unknown (profile: {}): {e:#}", config.profile);
+                    return Ok(());
+                }
+                Err(_) => None,
+            };
 
             match (method, &session) {
                 (Some(AuthMethod::OAuth), Some(loaded)) => {

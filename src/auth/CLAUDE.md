@@ -171,6 +171,13 @@ spells the separator the same way so both builders read identically.
   reads absence from `NotFound` alone, as `read_all_from` does: a path that
   cannot be stat'd is not an empty one, and taking it for one is what let an
   uninstall report a profile cleared without having read it.
+- `load` reads the keychain, then the file. Where both come up empty the answer
+  depends on which kind of empty the keychain gave: "no entry" is an absence,
+  "would not answer" is not, and returning `None` there is what turned a locked
+  keychain into "no session stored — run `auth login`" — advice that replaces
+  the session instead of reaching the one that is there. It errors, naming the
+  keychain's reason. The opt-out is not that case: it was asked to look at the
+  file alone, and does.
 - **Nothing store-shaped leaves `keychain`.** A `keyring_core::Entry` looks like
   data and is not: on Linux, reading one blocks on the session bus through
   zbus's private tokio runtime, and `Runtime::block_on` panics on a thread that

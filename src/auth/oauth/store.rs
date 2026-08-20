@@ -314,24 +314,37 @@ impl TokenStore {
     /// tokens tagged with the backend they came from, or `Ok(None)` if not
     /// present in either backend.
     pub async fn load(&self) -> Result<Option<LoadedTokens>> {
-        match self.keyring_op(|e| e.get_password()).await {
-            Keychain::Done(json) => {
-                let on_disk: OnDisk = serde_json::from_str(&json)
-                    .context("Corrupted token entry in keyring (re-run `auth login`)")?;
-                Ok(Some(LoadedTokens {
-                    tokens: on_disk.into(),
-                    backend: TokenStorageBackend::Keyring,
-                }))
-            }
-            outcome => {
-                if !matches!(outcome, Keychain::Empty) {
-                    tracing::debug!("Keyring read unavailable ({outcome}), trying the file");
-                }
-                Ok(self.file_load()?.map(|tokens| LoadedTokens {
-                    tokens,
-                    backend: TokenStorageBackend::File,
-                }))
-            }
+        let outcome = self.keyring_op(|e| e.get_password()).await;
+        if let Keychain::Done(json) = &outcome {
+            let on_disk: OnDisk = serde_json::from_str(json)
+                .context("Corrupted token entry in keyring (re-run `auth login`)")?;
+            return Ok(Some(LoadedTokens {
+                tokens: on_disk.into(),
+                backend: TokenStorageBackend::Keyring,
+            }));
+        }
+        if !matches!(outcome, Keychain::Empty) {
+            tracing::debug!("Keyring read unavailable ({outcome}), trying the file");
+        }
+        if let Some(tokens) = self.file_load()? {
+            return Ok(Some(LoadedTokens {
+                tokens,
+                backend: TokenStorageBackend::File,
+            }));
+        }
+        // The file holds nothing. Whether that is the whole answer is the
+        // keychain's to say: a locked one has not reported an absence, and
+        // answering `None` here is what turns it into "no session stored —
+        // run `auth login`", advice that replaces a session rather than
+        // reaching the one that is there.
+        match outcome {
+            Keychain::Unreachable(reason) => Err(anyhow::anyhow!(
+                "The keychain would not answer for profile '{}' ({reason}), so whether a session \
+                 is stored there is unknown. Unlock it and retry, or set ATLASSIAN_NO_KEYCHAIN=1 \
+                 to use the file store alone.",
+                self.profile
+            )),
+            _ => Ok(None),
         }
     }
 
@@ -841,6 +854,32 @@ mod tests {
         store.file_delete().unwrap();
         assert!(store.file_load().unwrap().is_none());
         assert!(!path.exists());
+    }
+
+    /// A keychain that would not answer has not reported an absence. Reading
+    /// it as one is what turns a locked keychain into "no session stored — run
+    /// `auth login`", which replaces the session instead of reaching it.
+    #[tokio::test]
+    async fn a_refusing_keychain_is_not_an_absent_session() {
+        mock_keychain();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        let store = TokenStore::at("locked-read", path);
+
+        let entry = Entry::new(KEYRING_SERVICE, "locked-read").unwrap();
+        entry.set_password("{}").unwrap();
+        entry
+            .as_any()
+            .downcast_ref::<keyring_core::mock::Cred>()
+            .expect("the mock store hands out mock credentials")
+            .set_error(KeyringError::NoStorageAccess(Box::new(
+                std::io::Error::other("the keychain is locked"),
+            )));
+
+        let err = store.load().await.unwrap_err().to_string();
+
+        assert!(err.contains("would not answer"), "{err}");
+        assert!(err.contains("locked"), "{err}");
     }
 
     /// A keychain that refuses must not take the file store down with it: the
