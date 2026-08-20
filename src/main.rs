@@ -851,7 +851,7 @@ fn skill_report(dir: &std::path::Path) -> serde_json::Value {
     use atlassian_cli::dist::skill;
     serde_json::json!({
         "name": skill::SKILL_NAME,
-        "path": dir.display().to_string(),
+        "path": display_path(dir),
         "state": skill::state(dir).as_str(),
         "version": skill::carried_version(),
     })
@@ -873,7 +873,7 @@ async fn self_status(
     Ok(serde_json::json!({
         "version": dist::current_version().to_string(),
         "target": dist::ReleaseTarget::current().map(|t| t.triple),
-        "binary": installation.binary().display().to_string(),
+        "binary": display_path(installation.binary()),
         "skill": skill_dir(installation).ok().as_deref().map(skill_report),
         "config": {
             "path": config_file.as_deref().map(display_path),
@@ -940,7 +940,7 @@ async fn self_update(
         "from": running.to_string(),
         "to": to.to_string(),
         "target": target.triple,
-        "binary": installation.binary().display().to_string(),
+        "binary": display_path(installation.binary()),
         "latestFrom": provenance,
         "attestationVerified": verify_attestations,
         "skill": redeploy_skill(installation),
@@ -987,7 +987,7 @@ fn self_skill_install(
     let outcome = skill::deploy(&dir)?;
     Ok(serde_json::json!({
         "name": skill::SKILL_NAME,
-        "path": dir.display().to_string(),
+        "path": display_path(&dir),
         "state": skill::state(&dir).as_str(),
         "version": skill::carried_version(),
         "written": outcome.written,
@@ -1003,7 +1003,7 @@ fn self_skill_remove(
     let dir = skill_dir(installation)?;
     Ok(serde_json::json!({
         "name": skill::SKILL_NAME,
-        "path": dir.display().to_string(),
+        "path": display_path(&dir),
         "removed": skill::remove(&dir)?,
     }))
 }
@@ -1043,7 +1043,7 @@ async fn self_uninstall(
         if keep_skill {
             kept.push("skill");
         } else if skill::remove(&dir).map_err(|e| already_removed(e.into(), &removed))? {
-            record(&mut removed, "skill", dir.display().to_string());
+            record(&mut removed, "skill", display_path(&dir));
         }
     }
 
@@ -1059,12 +1059,12 @@ async fn self_uninstall(
                 && present(&file).map_err(|e| already_removed(e, &removed))?
             {
                 std::fs::remove_file(&file).map_err(|e| already_removed(e.into(), &removed))?;
-                record(&mut removed, "config", file.display().to_string());
+                record(&mut removed, "config", display_path(&file));
             }
             // Only when empty — anything else there is not this tool's. Saying
             // so keeps a directory that survived from going unmentioned.
             if std::fs::remove_dir(&dir).is_ok() {
-                record(&mut removed, "config", dir.display().to_string());
+                record(&mut removed, "config", display_path(&dir));
             } else {
                 kept.push("config-directory");
             }
@@ -1084,11 +1084,11 @@ async fn self_uninstall(
                 &removed,
             ));
         }
-        record(&mut removed, "binary", binary.display().to_string());
+        record(&mut removed, "binary", display_path(binary));
     }
 
     Ok(serde_json::json!({
-        "binary": binary.display().to_string(),
+        "binary": display_path(binary),
         "removed": removed,
         "kept": kept,
         "credentials": credentials,
@@ -1124,8 +1124,8 @@ fn already_removed(error: anyhow::Error, removed: &[serde_json::Value]) -> anyho
 /// a keychain that cannot be reached is no reason to leave it — and a corrupt
 /// one still holds tokens whether or not its contents parsed.
 ///
-/// The keychain is then enumerated rather than guessed at; every platform store
-/// this binary links implements search. Which answers refuse is the question of
+/// The keychain is then enumerated rather than guessed at, each store in the
+/// spelling its own search takes. Which answers refuse is the question of
 /// whether a token could still be there afterwards:
 ///
 /// - `Unsupported` — no store could be installed, so this binary never wrote a
@@ -1148,7 +1148,7 @@ async fn clear_stored_tokens(
     if let Some(file) = installation.credentials_file()
         && atlassian_cli::auth::remove_credentials_file(&file)?
     {
-        record(removed, "credentials", file.display().to_string());
+        record(removed, "credentials", display_path(&file));
     }
 
     if let Some(refusal) = clear_stored_tokens_refusal(&stored.keyring) {

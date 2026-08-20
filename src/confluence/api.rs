@@ -406,8 +406,9 @@ fn comment_query() -> [(&'static str, &'static str); 2] {
 struct ThreadWalk<'a> {
     client: &'a ApiClient,
     family: CommentFamily,
-    /// Stamped onto every reply. `None` where the walk began at a comment
-    /// rather than a page, and the container is therefore not known here.
+    /// Stamped onto every comment in the listing. `None` where the walk began
+    /// at a comment rather than a page, and the container is therefore not
+    /// known here.
     page_id: Option<&'a str>,
     include_replies: bool,
     seen: HashSet<String>,
