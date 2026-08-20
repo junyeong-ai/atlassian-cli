@@ -112,13 +112,13 @@ pub async fn fetch_verified_binary(
 
     let archive = client.fetch(&url).await?;
     let sidecar = client.fetch_text(&format!("{url}.sha256")).await?;
-    super::verify_sidecar(&archive, &sidecar, &archive_name)?;
+    super::verify::verify_sidecar(&archive, &sidecar, &archive_name)?;
 
     if verify_attestations {
-        super::verify_attestation(&staging.write(&archive_name, &archive)?)?;
+        super::verify::verify_attestation(&staging.write(&archive_name, &archive)?)?;
     }
 
-    super::read_from_tar_gz(&archive, target.binary)?
+    super::archive::read_from_tar_gz(&archive, target.binary)?
         .ok_or_else(|| DistError::Integrity(format!("{archive_name} holds no {}", target.binary)))
 }
 
@@ -372,9 +372,9 @@ mod tests {
     async fn serve_release(member: &str, digest_of: Option<&[u8]>) -> (MockServer, Vec<u8>) {
         let server = MockServer::start().await;
         let archive = tar_gz(member, b"the released binary");
-        let digest = super::super::sha256_hex(digest_of.unwrap_or(&archive));
+        let digest = super::super::verify::sha256_hex(digest_of.unwrap_or(&archive));
         let name = TARGET.archive_name(&Version::new(0, 10, 0));
-        let base = format!("/{}/releases/download/v0.10.0", super::super::REPO);
+        let base = format!("/{}/releases/download/v0.10.0", super::super::release::REPO);
 
         Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path(format!("{base}/{name}")))

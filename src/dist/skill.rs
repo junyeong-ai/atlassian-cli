@@ -167,11 +167,6 @@ fn reconcilable_files(dir: &Path) -> Option<BTreeSet<OsString>> {
     )
 }
 
-/// Everything this binary carries, for a caller that reports rather than writes.
-pub fn carried_files() -> Vec<&'static str> {
-    FILES.iter().map(|(relative, _)| *relative).collect()
-}
-
 /// The version the carried skill declares, read from its YAML frontmatter.
 pub fn carried_version() -> Option<&'static str> {
     let (_, skill_md) = FILES.iter().find(|(relative, _)| *relative == "SKILL.md")?;
@@ -207,18 +202,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_skill_carries_the_file_an_agent_loads() {
-        assert!(carried_files().contains(&"SKILL.md"));
-    }
-
-    /// `deployed_files` reads one directory level and compares file names, and
-    /// it is the set `deploy` deletes from. A carried file addressed into a
+    /// `reconcilable_files` reads one directory level and compares file names,
+    /// and it is the set `deploy` deletes from. A carried file addressed into a
     /// subdirectory would never match, so every deploy would delete it and
     /// write it back.
     #[test]
     fn every_carried_file_sits_directly_in_the_skill_directory() {
-        for name in carried_files() {
+        assert!(FILES.iter().any(|(name, _)| *name == "SKILL.md"));
+        for (name, _) in FILES {
             assert!(!name.contains('/'), "`{name}` is not a direct child");
         }
     }

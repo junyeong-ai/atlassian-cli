@@ -16,13 +16,10 @@ pub mod target;
 pub mod update;
 pub mod verify;
 
-pub use archive::read_from_tar_gz;
 pub use layout::Installation;
-pub use release::{Latest, Provenance, REPO, ReleaseClient, parse_tag};
-pub use skill::{SKILL_NAME, SkillState};
+pub use release::{ReleaseClient, parse_tag};
 pub use target::ReleaseTarget;
-pub use update::{Decision, Staging, decide, fetch_verified_binary, install, version_of};
-pub use verify::{sha256_hex, verify_attestation, verify_sidecar};
+pub use update::{Decision, Staging, decide, fetch_verified_binary, install};
 
 use semver::Version;
 

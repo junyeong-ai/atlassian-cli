@@ -28,10 +28,6 @@ pub enum Provenance {
 }
 
 impl Provenance {
-    pub fn is_authoritative(self) -> bool {
-        matches!(self, Provenance::Api)
-    }
-
     pub fn as_str(self) -> &'static str {
         match self {
             Provenance::Api => "api",
@@ -253,7 +249,6 @@ mod tests {
         // The caller has to be able to say the answer came from the source that
         // trails, because that is the one that can be wrong.
         assert_eq!(latest.provenance, Provenance::WebRedirect);
-        assert!(!latest.provenance.is_authoritative());
     }
 
     #[tokio::test]
