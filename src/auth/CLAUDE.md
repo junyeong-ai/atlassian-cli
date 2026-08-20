@@ -113,6 +113,22 @@ spells the separator the same way so both builders read identically.
   in with the keychain, run `auth logout` **without** the flag once to clear it
   before adopting the opt-out. This is inherent to "never touch the keychain" —
   not a bug to patch by re-introducing the blocking keychain call.
+- **One classification, `Keychain<T>`, produced only in `store.rs`'s `keychain`.**
+  `keyring_core::Error` says what went wrong; the three consumers each ask a
+  different question of it — should I use the file instead, did clearing this
+  entry work, may I conclude nothing is stored. Reading the foreign enum at each
+  site meant one shared meaning, and narrowing it to suit one consumer kept
+  changing what another was entitled to assume. The variants are the answers
+  instead: `Done`, `Empty`, `Forbidden` (the opt-out), `Absent` (this build
+  carries no store — the only outcome absence may be concluded from), and
+  `Unreachable`. Add a consumer and the compiler names every case.
+- `TokenStore::delete` clears both backends independently and reports a keychain
+  that would not answer as a failure. The file goes first, so nothing is lost
+  when the keychain is unreachable — but `auth logout` does exit non-zero there,
+  and that is deliberate: every released target has a keychain compiled in, so
+  "could not reach it" cannot be read as "there was nothing in it", and a token
+  saved from a desktop session is exactly what would be left behind by a quiet
+  success. Only "no entry" and "this build carries no store" count as cleared.
 - `strategy.rs` holds the `OAuthStrategy`. `tokens: Mutex<TokenSet>` so
   concurrent callers serialize on refresh — at most one token-endpoint
   round trip when the cache is stale. Refresh tokens **rotate** on every

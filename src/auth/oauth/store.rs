@@ -42,6 +42,73 @@ fn keychain_disabled_from(value: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
+/// What the keychain did, in the terms this tool reasons about.
+///
+/// `keyring_core::Error` describes what went wrong; the three places that
+/// consult the keychain each ask a different question of it — "should I use the
+/// file instead", "did clearing this entry work", "may I conclude nothing is
+/// stored". Answering those from the foreign enum meant one shared reading, and
+/// narrowing it for one caller kept changing what another was entitled to
+/// assume. These variants are the answers instead, produced in one place, so a
+/// caller matches its own question and the compiler enumerates the rest.
+enum Keychain<T> {
+    Done(T),
+    /// The store holds nothing for this profile.
+    Empty,
+    /// Not consulted: `ATLASSIAN_NO_KEYCHAIN` forbids it. A session stored
+    /// before the flag was set may still be in there.
+    Forbidden,
+    /// This build carries no credential store, so nothing was ever written to
+    /// one here — the only outcome from which absence may be concluded.
+    Absent,
+    /// A store exists and did not answer. Says nothing about what it holds.
+    Unreachable(String),
+}
+
+impl<T> std::fmt::Display for Keychain<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Keychain::Done(_) => f.write_str("done"),
+            Keychain::Empty => f.write_str("no entry"),
+            Keychain::Forbidden => f.write_str("ATLASSIAN_NO_KEYCHAIN is set"),
+            Keychain::Absent => f.write_str("no credential store in this build"),
+            Keychain::Unreachable(reason) => f.write_str(reason),
+        }
+    }
+}
+
+/// Run a keychain operation and classify what came back.
+///
+/// The one place `keyring_core::Error` is read. Operations that address a
+/// single entry go through [`TokenStore::keyring_op`]; a search addresses the
+/// service instead, so it comes here directly rather than through an entry it
+/// has no profile for.
+async fn keychain<T, F>(op: F) -> Keychain<T>
+where
+    F: FnOnce() -> std::result::Result<T, KeyringError> + Send + 'static,
+    T: Send + 'static,
+{
+    if keychain_disabled() {
+        return Keychain::Forbidden;
+    }
+    tokio::task::spawn_blocking(move || {
+        if let Err(reason) = ensure_store_installed() {
+            return if HAS_NATIVE_STORE {
+                Keychain::Unreachable(reason)
+            } else {
+                Keychain::Absent
+            };
+        }
+        match op() {
+            Ok(value) => Keychain::Done(value),
+            Err(KeyringError::NoEntry) => Keychain::Empty,
+            Err(e) => Keychain::Unreachable(e.to_string()),
+        }
+    })
+    .await
+    .unwrap_or_else(|join_err| Keychain::Unreachable(join_err.to_string()))
+}
+
 /// Where the persisted tokens for the active profile currently live.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenStorageBackend {
@@ -188,12 +255,12 @@ impl TokenStore {
             .keyring_op(move |e| e.set_password(&keyring_json))
             .await
         {
-            Ok(()) => {
+            Keychain::Done(()) => {
                 let _ = self.file_delete();
                 Ok(TokenStorageBackend::Keyring)
             }
-            Err(e) => {
-                tracing::debug!("Keyring save failed, falling back to file: {}", e);
+            outcome => {
+                tracing::debug!("Keyring save unavailable ({outcome}), using the file store");
                 self.file_save(&json)?;
                 let _ = self.keyring_op(|e| e.delete_credential()).await;
                 Ok(TokenStorageBackend::File)
@@ -206,7 +273,7 @@ impl TokenStore {
     /// present in either backend.
     pub async fn load(&self) -> Result<Option<LoadedTokens>> {
         match self.keyring_op(|e| e.get_password()).await {
-            Ok(json) => {
+            Keychain::Done(json) => {
                 let on_disk: OnDisk = serde_json::from_str(&json)
                     .context("Corrupted token entry in keyring (re-run `auth login`)")?;
                 Ok(Some(LoadedTokens {
@@ -214,9 +281,9 @@ impl TokenStore {
                     backend: TokenStorageBackend::Keyring,
                 }))
             }
-            Err(e) => {
-                if !matches!(e, KeyringError::NoEntry) {
-                    tracing::debug!("Keyring read failed, trying file: {}", e);
+            outcome => {
+                if !matches!(outcome, Keychain::Empty) {
+                    tracing::debug!("Keyring read unavailable ({outcome}), trying the file");
                 }
                 Ok(self.file_load()?.map(|tokens| LoadedTokens {
                     tokens,
@@ -241,12 +308,9 @@ impl TokenStore {
         self.file_delete()?;
 
         match keyring {
-            Ok(())
-            | Err(KeyringError::NoEntry)
-            | Err(KeyringError::NoDefaultStore)
-            | Err(KeyringError::NotSupportedByStore(_)) => Ok(()),
-            Err(e) => Err(anyhow::anyhow!(
-                "Failed to clear the keychain entry for '{}': {e}",
+            Keychain::Done(()) | Keychain::Empty | Keychain::Forbidden | Keychain::Absent => Ok(()),
+            Keychain::Unreachable(reason) => Err(anyhow::anyhow!(
+                "Failed to clear the keychain entry for '{}': {reason}",
                 self.profile
             )),
         }
@@ -256,26 +320,14 @@ impl TokenStore {
     /// a sync API; the Linux backend internally blocks on async I/O.
     /// Isolating each call on a blocking thread keeps the tokio reactor
     /// free to service the spawned futures.
-    async fn keyring_op<T, F>(&self, op: F) -> std::result::Result<T, KeyringError>
+    /// Run one operation against this profile's entry.
+    async fn keyring_op<T, F>(&self, op: F) -> Keychain<T>
     where
         F: FnOnce(&Entry) -> std::result::Result<T, KeyringError> + Send + 'static,
         T: Send + 'static,
     {
-        // Explicit opt-out: skip the keychain so save/load/delete fall through
-        // to the file store via their existing `NoEntry` handling — no GUI
-        // prompt, no blocking, in headless / AI-agent sessions.
-        if keychain_disabled() {
-            return Err(KeyringError::NoEntry);
-        }
-
         let profile = self.profile.clone();
-        tokio::task::spawn_blocking(move || {
-            ensure_store_installed()?;
-            let entry = Entry::new(KEYRING_SERVICE, &profile)?;
-            op(&entry)
-        })
-        .await
-        .unwrap_or_else(|join_err| Err(KeyringError::PlatformFailure(Box::new(join_err))))
+        keychain(move || Entry::new(KEYRING_SERVICE, &profile).and_then(|entry| op(&entry))).await
     }
 
     fn file_save(&self, json_for_profile: &str) -> Result<()> {
@@ -442,32 +494,21 @@ pub async fn stored_profiles(credentials_file: &std::path::Path) -> StoredProfil
         profiles.extend(all.into_keys());
     }
 
-    if keychain_disabled() {
-        return StoredProfiles {
-            profiles,
-            keyring: KeyringEnumeration::Skipped,
+    let keyring =
+        match keychain(|| Entry::search(&HashMap::from([("service", KEYRING_SERVICE)]))).await {
+            Keychain::Done(entries) => {
+                profiles.extend(
+                    entries
+                        .iter()
+                        .filter_map(|entry| entry.get_specifiers().map(|(_, user)| user)),
+                );
+                KeyringEnumeration::Listed
+            }
+            Keychain::Empty => KeyringEnumeration::Listed,
+            Keychain::Forbidden => KeyringEnumeration::Skipped,
+            Keychain::Absent => KeyringEnumeration::Unsupported,
+            Keychain::Unreachable(reason) => KeyringEnumeration::Failed(reason),
         };
-    }
-
-    let found = tokio::task::spawn_blocking(|| {
-        ensure_store_installed()?;
-        Entry::search(&HashMap::from([("service", KEYRING_SERVICE)]))
-    })
-    .await
-    .unwrap_or_else(|join_err| Err(KeyringError::PlatformFailure(Box::new(join_err))));
-
-    let keyring = match found {
-        Ok(entries) => {
-            profiles.extend(
-                entries
-                    .iter()
-                    .filter_map(|entry| entry.get_specifiers().map(|(_, user)| user)),
-            );
-            KeyringEnumeration::Listed
-        }
-        Err(KeyringError::NotSupportedByStore(_)) => KeyringEnumeration::Unsupported,
-        Err(e) => KeyringEnumeration::Failed(e.to_string()),
-    };
 
     StoredProfiles { profiles, keyring }
 }
@@ -476,7 +517,7 @@ pub async fn stored_profiles(credentials_file: &std::path::Path) -> StoredProfil
 /// unless an embedder or test has already configured one. Idempotent: the
 /// first successful call wins; on failure, the same error surfaces on every
 /// subsequent call so the file fallback engages deterministically.
-fn ensure_store_installed() -> std::result::Result<(), KeyringError> {
+fn ensure_store_installed() -> std::result::Result<(), String> {
     static INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
     INIT.get_or_init(|| {
         if get_default_store().is_some() {
@@ -484,23 +525,7 @@ fn ensure_store_installed() -> std::result::Result<(), KeyringError> {
         }
         install_store().map_err(|e| e.to_string())
     })
-    .as_ref()
-    .map(|_| ())
-    // Which failure this was decides whether a caller may conclude the keychain
-    // holds nothing, and only the build can answer that. Every platform arm's
-    // `Store::new` connects eagerly — the Secret Service one opens a D-Bus
-    // session there and then — so an install that failed on a platform that HAS
-    // a store says nothing about whether a token is in it. Caching forces the
-    // error through a `String` (`KeyringError` is not `Clone`), so the variant
-    // is chosen here from the one fact that survives: whether this build has a
-    // store at all.
-    .map_err(|msg| {
-        if HAS_NATIVE_STORE {
-            KeyringError::PlatformFailure(Box::new(CachedInstallError(msg.clone())))
-        } else {
-            KeyringError::NotSupportedByStore(msg.clone())
-        }
-    })
+    .clone()
 }
 
 /// Whether a credential store is compiled into this build. A fact of the
@@ -511,17 +536,6 @@ const HAS_NATIVE_STORE: bool = cfg!(any(
     target_os = "linux",
     target_os = "freebsd"
 ));
-
-#[derive(Debug)]
-struct CachedInstallError(String);
-
-impl std::fmt::Display for CachedInstallError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for CachedInstallError {}
 
 #[cfg(target_os = "macos")]
 fn install_store() -> std::result::Result<(), KeyringError> {

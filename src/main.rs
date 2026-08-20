@@ -1191,8 +1191,8 @@ fn clear_stored_tokens_refusal(
         ),
         KeyringEnumeration::Failed(reason) => Some(format!(
             "the keychain would not be listed ({reason}), so the tokens it holds cannot be \
-             cleared — unlock it and re-run, or pass --keep-credentials to leave stored tokens \
-             alone"
+             cleared — make it reachable and re-run, or pass --keep-credentials to finish \
+             without touching what is stored there"
         )),
     }
 }
