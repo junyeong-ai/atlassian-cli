@@ -67,8 +67,8 @@ that takes a caller-supplied absolute URL — that is what keeps a pagination
 link from steering a `Basic email:token` header at an arbitrary host. Both
 token methods send a reusable credential, so this matters twice over.
 
-Every impl writes the `/` separator before `path` and trims any leading ones
-off the argument, so `path` can only land in the path component. Plain
+Every impl writes the `/` separator before `path` and consumes one leading
+separator off the argument, so `path` can only land in the path component. Plain
 concatenation is **not** safe here: `https://{domain}` + `@evil/x` parses with
 `evil` as the host and the domain as userinfo. `proxy_url` was already immune
 (its literal `/ex/{service}/{cloud_id}` terminates the authority first) but

@@ -156,7 +156,7 @@ atlassian-cli confluence attachment upload 12345 ./icon.svg --content-type image
 ```
 
 - `comment list` returns one flat, depth-first array covering both comment families and every level of every thread. Each entry carries `location` (`footer`/`inline`), `depth`, and `parentCommentId` (`null` at a root), so rebuild the tree from those rather than assuming the array is top-level only.
-- `comment get`/`replies`/`update`/`delete` take the **comment id**; `comment list`/`add` take the **page id**. Passing a comment id to `comment list` is a 400.
+- `comment get`/`replies`/`update`/`delete` take the **comment id**; `comment list`/`add` take the **page id**.
 - `--location` defaults to `footer` on `comment get`/`replies` — an id from an inline thread needs `--location inline`, and every entry `comment list` returns already states which it is. A wrong `--location` is a 404, not a fallback.
 - `property set` values are **strict JSON** — quote bare strings as `'"text"'`, not `text`.
 - `attachment upload` upserts by filename; add `--minor` to suppress watcher notifications on re-upload. The `Content-Type` is mapped from the file extension (so `diagram.png` → `image/png` and renders inline instead of becoming an opaque download); pass `--content-type <mime>` to override. Note: Confluence Cloud often blocks **inline SVG** rendering for security, so embed diagrams as PNG when you need them to display.
