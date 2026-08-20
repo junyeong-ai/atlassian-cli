@@ -84,7 +84,7 @@ atlassian-cli self skill remove --yes
 atlassian-cli self uninstall --yes [--keep-skill] [--keep-credentials] [--purge-config]
 ```
 
-`src/dist/` owns this and does not touch `ApiClient` — it talks to GitHub. The skill is compiled into the binary (`include_str!`), so binary and skill cannot be different versions and a deployed copy is checked byte-for-byte. `self update` proves the downloaded binary runs and reports the expected version **before** replacing anything, so there is no half-installed state to roll back from. `scripts/install.sh` and `scripts/uninstall.sh` delegate here rather than restating what an installation consists of. See `src/dist/CLAUDE.md`.
+`src/dist/` owns this and does not touch `ApiClient` — it talks to GitHub. The skill is compiled into the binary (`include_str!`), so binary and skill cannot be different versions and a deployed copy is checked byte-for-byte. `self update` proves the downloaded binary runs and reports the expected version **before** replacing anything, so a binary that will not run on this machine is never installed and there is nothing to roll back from. `scripts/install.sh` and `scripts/uninstall.sh` delegate here rather than restating what an installation consists of. See `src/dist/CLAUDE.md`.
 
 `self status` deliberately makes no network call; "is there a newer one" is answered by `self update`, which changes nothing when the running binary is already current. `self uninstall` refuses outright when the keychain cannot be listed, rather than removing the binary and leaving tokens behind.
 

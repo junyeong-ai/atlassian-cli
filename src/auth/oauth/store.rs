@@ -77,7 +77,11 @@ impl<T> std::fmt::Display for Keychain<T> {
     }
 }
 
-/// Run a keychain operation and classify what came back.
+/// Run a keychain operation off the async runtime and classify what came back.
+///
+/// Native stores expose a sync API and the Linux backend blocks on async I/O
+/// internally, so each call is isolated on a blocking thread and the tokio
+/// reactor stays free.
 ///
 /// The one place `keyring_core::Error` is read. Operations that address a
 /// single entry go through [`TokenStore::keyring_op`]; a search addresses the
@@ -295,11 +299,12 @@ impl TokenStore {
 
     /// Delete this profile's tokens from both backends.
     ///
-    /// A keychain that holds nothing, or that this build has none of, leaves
-    /// nothing to delete and is success. A keychain that exists and would not
-    /// answer — locked, a prompt denied, a session bus out of reach — is a
-    /// failure, and reporting it as success is how `auth logout` and
-    /// `self uninstall` came to say a token was gone while it was still there.
+    /// A keychain that holds nothing, that this build has none of, or that the
+    /// opt-out forbade looking in leaves nothing this call can delete and is
+    /// success. A keychain that exists and would not answer — locked, a prompt
+    /// denied, a session bus out of reach — is a failure, and reporting it as
+    /// success is how `auth logout` and `self uninstall` came to say a token
+    /// was gone while it was still there.
     pub async fn delete(&self) -> Result<()> {
         let keyring = self.keyring_op(|e| e.delete_credential()).await;
         // The file is this tool's to remove whatever the keychain did. Skipping
@@ -316,10 +321,6 @@ impl TokenStore {
         }
     }
 
-    /// Run a keyring operation off the async runtime. Native stores expose
-    /// a sync API; the Linux backend internally blocks on async I/O.
-    /// Isolating each call on a blocking thread keeps the tokio reactor
-    /// free to service the spawned futures.
     /// Run one operation against this profile's entry.
     async fn keyring_op<T, F>(&self, op: F) -> Keychain<T>
     where

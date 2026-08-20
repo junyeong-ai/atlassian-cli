@@ -101,8 +101,9 @@ spells the separator the same way so both builders read identically.
   `~/.config/atlassian-cli/credentials.json` (0600, atomic via tempfile).
   `load` returns `LoadedTokens { tokens, backend }` so callers report
   provenance without a second store query. Per-profile keyed.
-  `ATLASSIAN_NO_KEYCHAIN` (truthy) bypasses the keychain entirely — `keyring_op`
-  short-circuits to `NoEntry` so all three ops fall through to the file store.
+  `ATLASSIAN_NO_KEYCHAIN` (truthy) bypasses the keychain entirely — `keychain`
+  answers `Forbidden` without touching it, so reads and writes use the file
+  store and a delete reports the file half alone.
   This is for headless / AI-agent sessions on a desktop OS where the keychain
   prompts with a blocking GUI dialog. Explicit opt-out only; no auto-detection.
   **It is a per-environment setting, not a per-call toggle.** Because the flag
@@ -128,7 +129,22 @@ spells the separator the same way so both builders read identically.
   and that is deliberate: every released target has a keychain compiled in, so
   "could not reach it" cannot be read as "there was nothing in it", and a token
   saved from a desktop session is exactly what would be left behind by a quiet
-  success. Only "no entry" and "this build carries no store" count as cleared.
+  success. Cleared means the entry went, was not there, this build carries no
+  store, or the opt-out forbade the look — every outcome but "it would not
+  answer".
+- **The search spec is the store's, not the service's.** `stored_profiles` asks
+  the keychain which profiles it holds, and each store defines the vocabulary
+  that question is asked in: Apple and Secret Service match attributes
+  (`service`), the Windows Credential Manager has none and matches target names
+  by regex (`pattern`), rejecting any other key outright. So `search_spec` sits
+  beside the stores rather than at the call site, and it only narrows — the
+  service each returned entry names is what decides whether it is one of ours,
+  and an entry that will not name itself leaves the listing incomplete rather
+  than shortened.
+- The fallback file is rewritten and removed whole, so `owned_credentials_file`
+  requires it to be the regular file this tool wrote. Through a symlink the
+  rewrite replaces the link and the unlink removes the link, either way leaving
+  every token readable at the far end of a call that reported them cleared.
 - `strategy.rs` holds the `OAuthStrategy`. `tokens: Mutex<TokenSet>` so
   concurrent callers serialize on refresh — at most one token-endpoint
   round trip when the cache is stale. Refresh tokens **rotate** on every

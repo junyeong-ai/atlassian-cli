@@ -20,7 +20,7 @@ Deliberately absent: fetching the skill from a git ref, and detecting a source c
 
 `self update` runs download → checksum → extract → **run the staged binary and compare the version it prints** → replace. The version check happens before anything is touched, so a download that will not run on this machine (wrong architecture, failed code signing, truncated archive) ends with the installation untouched.
 
-There is therefore no rollback path, and that is the point: an installation whose binary does not run has no way left to repair itself, so the design guarantees that state is never created rather than trying to recover from it.
+There is therefore no rollback path, and that is the point: an installation whose binary does not run has no way left to repair itself, so the design guarantees that state is never created rather than trying to recover from it. What the ordering does not make atomic is the replacement itself — on Windows `self_replace` renames the running executable aside before copying the new one in, so an I/O failure between those steps leaves the install path empty. That is the dependency's, not this ordering's, and it is why the version check happens while there is still something to keep.
 
 `fetch_verified_binary` covers download through extraction and is driven by wiremock tests; only the final `install` touches the running binary.
 
@@ -44,7 +44,7 @@ Every path hangs off the one `home` the `Installation` holds, which is also what
 
 ## Uninstall enumerates rather than guesses
 
-Every platform store `keyring-core` links (macOS Keychain, Windows Credential Manager, Secret Service) implements `search`, so `auth::stored_profiles` lists the entries under the `atlassian-cli` service and that is the complete set. Which answers refuse is decided by whether a token could still be there afterwards:
+`auth::stored_profiles` lists what the keychain holds under this tool's service, in the spelling that store's `search` takes — see `src/auth/CLAUDE.md`, and note that "listed" is a claim about the entries this tool could name, not about every entry there is. Which answers refuse is decided by whether a token could still be there afterwards:
 
 | enumeration | meaning | uninstall |
 |---|---|---|
@@ -55,10 +55,15 @@ Every platform store `keyring-core` links (macOS Keychain, Windows Credential Ma
 
 Every target in `target.rs` compiles a store in, so `Unsupported` cannot arise in a released binary; a machine whose keychain is out of reach reports `Failed` and refuses. The row exists for a source build on a platform none of the store crates cover.
 
-
 The line between the middle two rows is drawn by the build, not by the failure: every platform store's constructor connects eagerly, so an install that failed where a store exists says nothing about what is in it. Reading that as absence is how a token saved from a desktop session survives an uninstall run over SSH.
 
-A refusal comes before the skill, the config and the binary, because removing the binary takes away the only thing that knows where those tokens are. The credentials file is cleared first regardless — it belongs to this installation, and a keychain that cannot be reached is no reason to leave it. `TokenStore::delete` clears both backends independently for the same reason: the machines where the keychain refuses are the ones that keep tokens in the file.
+A refusal comes before the skill, the config and the binary, because removing the binary takes away the only thing that knows where those tokens are. So a box whose keychain never answers finishes in two runs: the first clears the credentials file and refuses, naming what it already removed, and `--keep-credentials` completes the second.
+
+The credentials file is cleared first regardless — it belongs to this installation, and a keychain that cannot be reached is no reason to leave it. `TokenStore::delete` clears both backends independently for the same reason: the machines where the keychain refuses are the ones that keep tokens in the file. It goes through `auth::remove_credentials_file`, which requires the path to be the regular file the store wrote: unlinking a symlink clears the name and leaves every token readable at the far end.
+
+Nothing here uses `Path::exists` to decide whether something is there. It resolves the link, so a dangling one reads as absent — which is the state `skill::remove` classifies with `symlink_metadata` in order to clean up, and a guard at the call site would undo that.
+
+Paths reach a report through `display_path`. `json!` serializes a `Path` by unwrapping, so a path the platform allows and UTF-8 cannot spell would answer with a panic instead of the single-line error object the CLI contract promises.
 
 `--purge-config` removes the config file this tool writes and then the directory only if that leaves it empty; a directory that survives is reported as kept rather than passed over in silence.
 

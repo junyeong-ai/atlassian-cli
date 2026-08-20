@@ -807,15 +807,15 @@ impl Config {
         Ok(())
     }
 
+    /// The name of the global config inside [`global_config_dir`](Self::global_config_dir).
+    pub const GLOBAL_CONFIG_FILE: &'static str = "config.toml";
+
     /// The directory holding everything this tool stores for the user — the
     /// global config and, beside it, the fallback credentials file.
     ///
     /// Every path under it is derived from here rather than reassembled, so a
     /// caller cannot end up reading one directory while another writes a
     /// different one.
-    /// The name of the global config inside [`global_config_dir`](Self::global_config_dir).
-    pub const GLOBAL_CONFIG_FILE: &'static str = "config.toml";
-
     pub fn global_config_dir() -> Option<PathBuf> {
         dirs::home_dir().map(|home| Self::global_config_dir_in(&home))
     }
