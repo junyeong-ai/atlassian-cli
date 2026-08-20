@@ -1027,15 +1027,17 @@ async fn self_uninstall(
 
     let mut removed: Vec<serde_json::Value> = Vec::new();
     let mut kept: Vec<&str> = Vec::new();
-    let mut record = |kind: &str, target: String| {
-        removed.push(serde_json::json!({ "kind": kind, "target": target }))
-    };
 
     let credentials = if keep_credentials {
         kept.push("credentials");
         serde_json::Value::Null
     } else {
-        clear_stored_tokens(installation, &mut record).await?
+        // Every step from here can fail partway, and each one is irreversible,
+        // so a failure has to say what it already did — "Permission denied"
+        // alone reads as "nothing happened".
+        clear_stored_tokens(installation, &mut removed)
+            .await
+            .map_err(|e| already_removed(e, &removed))?
     };
 
     if let Some(dir) = installation.skill_dir()
@@ -1044,8 +1046,8 @@ async fn self_uninstall(
         if keep_skill {
             kept.push("skill");
         } else {
-            skill::remove(&dir)?;
-            record("skill", dir.display().to_string());
+            skill::remove(&dir).map_err(|e| already_removed(e.into(), &removed))?;
+            record(&mut removed, "skill", dir.display().to_string());
         }
     }
 
@@ -1060,11 +1062,11 @@ async fn self_uninstall(
             if let Some(file) = installation.config_file()
                 && file.exists()
             {
-                std::fs::remove_file(&file)?;
-                record("config", file.display().to_string());
+                std::fs::remove_file(&file).map_err(|e| already_removed(e.into(), &removed))?;
+                record(&mut removed, "config", file.display().to_string());
             }
             if std::fs::remove_dir(&dir).is_ok() {
-                record("config", dir.display().to_string());
+                record(&mut removed, "config", dir.display().to_string());
             }
         } else {
             kept.push("config");
@@ -1077,13 +1079,12 @@ async fn self_uninstall(
     let binary = installation.binary();
     if binary.exists() {
         if let Err(e) = self_replace::self_delete_at(binary) {
-            return Err(anyhow::Error::from(e).context(format!(
-                "Failed to remove {} — already removed: {}",
-                binary.display(),
-                removed_summary(&removed)
-            )));
+            return Err(already_removed(
+                anyhow::Error::from(e).context(format!("Failed to remove {}", binary.display())),
+                &removed,
+            ));
         }
-        record("binary", binary.display().to_string());
+        record(&mut removed, "binary", binary.display().to_string());
     }
 
     Ok(serde_json::json!({
@@ -1094,20 +1095,27 @@ async fn self_uninstall(
     }))
 }
 
-/// What an uninstall has already done, for an error raised after the fact.
+fn record(removed: &mut Vec<serde_json::Value>, kind: &str, target: String) {
+    removed.push(serde_json::json!({ "kind": kind, "target": target }));
+}
+
+/// Attach what an uninstall already did to an error raised partway through.
 ///
-/// A failure at the last step used to discard the record entirely, so a user
-/// whose install directory was read-only read "Permission denied" and could not
-/// tell that their tokens were already gone.
-fn removed_summary(removed: &[serde_json::Value]) -> String {
+/// Each step is irreversible and the record of them only exists here, so an
+/// error that carries none leaves the user unable to tell whether their tokens
+/// are gone.
+fn already_removed(error: anyhow::Error, removed: &[serde_json::Value]) -> anyhow::Error {
     if removed.is_empty() {
-        return "nothing".to_string();
+        return error;
     }
-    removed
+    let done = removed
         .iter()
         .filter_map(|entry| entry["target"].as_str())
         .collect::<Vec<_>>()
-        .join(", ")
+        .join(", ");
+    // Flattened rather than layered as context, so the failure reads first and
+    // what it did not undo reads last.
+    anyhow::anyhow!("{error:#} (already removed: {done})")
 }
 
 /// Discard every stored token, and the file that holds the fallback copies.
@@ -1119,7 +1127,7 @@ fn removed_summary(removed: &[serde_json::Value]) -> String {
 /// tokens behind along with nothing that knows where they are.
 async fn clear_stored_tokens(
     installation: &atlassian_cli::dist::Installation,
-    record: &mut impl FnMut(&str, String),
+    removed: &mut Vec<serde_json::Value>,
 ) -> Result<serde_json::Value> {
     use atlassian_cli::auth::{KeyringEnumeration, TokenStore};
 
@@ -1143,7 +1151,7 @@ async fn clear_stored_tokens(
     }
     for profile in &stored.profiles {
         TokenStore::new(profile.clone())?.delete().await?;
-        record("credentials", format!("profile:{profile}"));
+        record(removed, "credentials", format!("profile:{profile}"));
     }
 
     // The file belongs to this installation, so it goes whether or not its
@@ -1152,7 +1160,7 @@ async fn clear_stored_tokens(
         && file.exists()
     {
         std::fs::remove_file(&file)?;
-        record("credentials", file.display().to_string());
+        record(removed, "credentials", file.display().to_string());
     }
 
     Ok(serde_json::json!({

@@ -800,11 +800,16 @@ async fn fetch_all_v2_results(
     path: &str,
     query: &[(&str, &str)],
 ) -> Result<Vec<Value>> {
+    // Hard ceiling, matching `paginate`'s `MAX_PAGES` on the Jira side. The
+    // `CursorTrail` below stops a cursor that repeats a page; a server handing
+    // out a genuinely new cursor every time repeats nothing and stalls nothing,
+    // so without this the walk would run until it ran out of memory.
+    const MAX_CURSOR_PAGES: u32 = 10_000;
     let mut results: Vec<Value> = Vec::new();
     let mut next: Option<String> = None;
     let mut trail = CursorTrail::default();
 
-    loop {
+    for _ in 0..MAX_CURSOR_PAGES {
         let request = match next.as_deref() {
             None => client.get(Service::Confluence, path).await?.query(query),
             Some(next_path) => client.get(Service::Confluence, next_path).await?,
@@ -826,11 +831,14 @@ async fn fetch_all_v2_results(
 
         match data["_links"]["next"].as_str() {
             Some(link) if !link.is_empty() => next = Some(trail.step(what, link)?),
-            _ => break,
+            _ => return Ok(results),
         }
     }
 
-    Ok(results)
+    anyhow::bail!(
+        "Failed to {what}: exceeded {MAX_CURSOR_PAGES} pages without reaching the end of the \
+         collection — aborting to avoid an unbounded walk"
+    )
 }
 
 /// Build the standard `{"items": [...]}` envelope from a fully-paginated v2

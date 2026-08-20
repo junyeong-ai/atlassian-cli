@@ -481,19 +481,14 @@ fn ensure_store_installed() -> std::result::Result<(), KeyringError> {
     })
     .as_ref()
     .map(|_| ())
-    .map_err(|msg| KeyringError::PlatformFailure(Box::new(CachedInstallError(msg.clone()))))
+    // `NotSupportedByStore`, whatever the underlying reason: a store that could
+    // not be installed is one this binary never wrote a token to, so callers
+    // that distinguish "the keychain refused" from "there is no keychain here"
+    // get the second answer. The reason travels in the message. Caching forces
+    // the round trip through a string — `KeyringError` is not `Clone` — so the
+    // variant has to be chosen here rather than carried.
+    .map_err(|msg| KeyringError::NotSupportedByStore(msg.clone()))
 }
-
-#[derive(Debug)]
-struct CachedInstallError(String);
-
-impl std::fmt::Display for CachedInstallError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for CachedInstallError {}
 
 #[cfg(target_os = "macos")]
 fn install_store() -> std::result::Result<(), KeyringError> {
