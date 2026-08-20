@@ -2502,6 +2502,31 @@ mod tests {
         ));
     }
 
+    /// A stored entry that will not parse is still an entry to remove, and
+    /// removing it does not need it parsed. Letting the read's failure out
+    /// first leaves the credential exactly where it was.
+    #[tokio::test]
+    async fn logout_clears_an_entry_that_cannot_be_read_back() {
+        mock_keychain();
+        let home = tempfile::tempdir().unwrap();
+        let file = home.path().join("credentials.json");
+        let store = atlassian_cli::auth::TokenStore::at("logout-corrupt", file);
+
+        keyring_core::Entry::new("atlassian-cli", "logout-corrupt")
+            .unwrap()
+            .set_password("not a token document")
+            .unwrap();
+
+        clear_session(&store, "logout-corrupt").await.unwrap();
+
+        assert!(matches!(
+            keyring_core::Entry::new("atlassian-cli", "logout-corrupt")
+                .unwrap()
+                .get_password(),
+            Err(keyring_core::Error::NoEntry)
+        ));
+    }
+
     #[test]
     fn an_error_with_nothing_removed_behind_it_is_left_as_it_is() {
         let error = anyhow::anyhow!("could not remove the binary");
