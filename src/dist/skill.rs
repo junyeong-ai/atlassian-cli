@@ -1,12 +1,9 @@
 //! The Claude Code skill this binary carries and writes out.
 //!
 //! The skill describes the commands this binary exposes, so it is true only of
-//! the version it shipped with. Compiling it in rather than fetching it beside
-//! the binary is what makes "the deployed skill matches the binary" hold by
-//! construction: there is one artifact, and a deploy writes the copy. What is
-//! left to check is whether a deployed copy still equals what this binary
-//! carries, which is a byte comparison rather than a version string — and
-//! therefore has no reading in which it is merely probably right.
+//! the version it shipped with. Compiling it in leaves one artifact, so the two
+//! cannot be different versions and a deployed copy is checked by comparing
+//! bytes rather than a declared version.
 
 use std::collections::BTreeSet;
 use std::path::Path;

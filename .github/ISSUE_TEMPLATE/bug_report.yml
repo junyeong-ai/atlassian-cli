@@ -15,7 +15,7 @@ body:
     attributes:
       label: atlassian-cli version
       description: "Output of `atlassian-cli --version`."
-      placeholder: "0.9.0"
+      placeholder: "0.10.0"
     validations:
       required: true
 

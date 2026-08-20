@@ -469,11 +469,10 @@ impl<'a> ThreadWalk<'a> {
     /// Take one comment into the listing: read its id, refuse one already seen,
     /// and record what the traversal knows about it.
     ///
-    /// `parentCommentId` comes from the collection the comment was read out of
-    /// and `location` from the path that was requested, so both are facts of
-    /// the walk rather than response fields to trust — and `parentCommentId` is
-    /// an explicit `null` at the roots, so "answers nothing" and "not reported"
-    /// stay distinguishable. `depth` counts from the roots of this listing.
+    /// `parentCommentId` is the collection the comment was read out of and
+    /// `location` the path that was requested, so neither is a response field
+    /// to trust. A root gets an explicit `null`, keeping "answers nothing"
+    /// distinct from "not reported". `depth` counts from this listing's roots.
     fn admit(
         &mut self,
         what: &str,
