@@ -978,11 +978,13 @@ fn redeploy_skill(installation: &atlassian_cli::dist::Installation) -> &'static 
         .status()
     {
         Ok(status) if status.success() => "redeployed",
+        // Not "stale": that is a byte comparison, and this is a deploy that
+        // did not happen. The child names why on stderr.
         _ => {
             eprintln!(
                 "warning: could not redeploy the skill — run `atlassian-cli self skill install`"
             );
-            "stale"
+            "failed"
         }
     }
 }
@@ -1072,14 +1074,11 @@ async fn self_uninstall(
             }
             // Only when empty — anything else there is not this tool's. Saying
             // so keeps a directory that survived from going unmentioned. Not
-            // emptied is the expected refusal; anything else is a failure, and
-            // reading it as "kept" is how a directory nobody could remove goes
-            // out as a clean uninstall.
+            // emptied and not a plain directory are both definite answers
+            // about one that stays; reading anything else as "kept" is how a
+            // directory nobody could remove goes out as a clean uninstall.
             match std::fs::remove_dir(&dir) {
                 Ok(()) => record(&mut removed, "config", display_path(&dir)),
-                // Not emptied, and not a plain directory this tool made, are
-                // both definite answers about a directory that stays. Anything
-                // else is a failure to remove it.
                 Err(e)
                     if matches!(
                         e.kind(),
@@ -2255,6 +2254,9 @@ mod tests {
                 .file_type()
                 .is_symlink()
         );
+        // The file this tool wrote goes, through the link: it is at the path
+        // this installation owns whatever the directory points at.
+        assert!(!real.join("config.toml").exists());
     }
 
     /// A file this tool did not write keeps the directory alive; deleting it
