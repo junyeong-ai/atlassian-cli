@@ -168,8 +168,9 @@ impl TokenStore {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn with_paths(profile: impl Into<String>, file_path: PathBuf) -> Self {
+    /// A store whose fallback file is named rather than derived, so a caller
+    /// holding an installation's paths uses those instead of the machine's.
+    pub fn at(profile: impl Into<String>, file_path: PathBuf) -> Self {
         Self {
             profile: profile.into(),
             file_path,
@@ -435,11 +436,9 @@ pub struct StoredProfiles {
 /// The file store is a profile-keyed map, so its keys are its whole answer. The
 /// keychain answers completely only where it implements search, which is why
 /// the outcome comes back beside the list instead of folded into it.
-pub async fn stored_profiles() -> StoredProfiles {
+pub async fn stored_profiles(credentials_file: &std::path::Path) -> StoredProfiles {
     let mut profiles = BTreeSet::new();
-    if let Ok(path) = default_file_path()
-        && let Ok(all) = read_all_from(&path)
-    {
+    if let Ok(all) = read_all_from(credentials_file) {
         profiles.extend(all.into_keys());
     }
 
@@ -652,7 +651,7 @@ mod tests {
     fn file_save_load_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credentials.json");
-        let store = TokenStore::with_paths("default", path.clone());
+        let store = TokenStore::at("default", path.clone());
 
         let on_disk = OnDisk::from(&fixture_tokens());
         let json = serde_json::to_string(&on_disk).unwrap();
@@ -674,7 +673,7 @@ mod tests {
     fn file_delete_clears_entry() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credentials.json");
-        let store = TokenStore::with_paths("default", path.clone());
+        let store = TokenStore::at("default", path.clone());
 
         let json = serde_json::to_string(&OnDisk::from(&fixture_tokens())).unwrap();
         store.file_save(&json).unwrap();
@@ -693,7 +692,7 @@ mod tests {
         set_default_store(keyring_core::mock::Store::new().unwrap());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credentials.json");
-        let store = TokenStore::with_paths("refusing-keychain", path.clone());
+        let store = TokenStore::at("refusing-keychain", path.clone());
 
         store
             .file_save(&serde_json::to_string(&OnDisk::from(&fixture_tokens())).unwrap())
@@ -726,7 +725,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credentials.json");
-        let store = TokenStore::with_paths("keyring-roundtrip", path);
+        let store = TokenStore::at("keyring-roundtrip", path);
 
         let backend = store.save(&fixture_tokens()).await.unwrap();
         assert_eq!(backend, TokenStorageBackend::Keyring);
@@ -748,8 +747,8 @@ mod tests {
     fn file_multi_profile_isolation() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credentials.json");
-        let s1 = TokenStore::with_paths("default", path.clone());
-        let s2 = TokenStore::with_paths("work", path.clone());
+        let s1 = TokenStore::at("default", path.clone());
+        let s2 = TokenStore::at("work", path.clone());
 
         let t1 = fixture_tokens();
         let mut t2 = fixture_tokens();

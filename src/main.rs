@@ -866,7 +866,8 @@ async fn self_status(
 ) -> Result<serde_json::Value> {
     use atlassian_cli::dist;
 
-    let stored = atlassian_cli::auth::stored_profiles().await;
+    let credentials_file = installation.credentials_file();
+    let stored = stored_profiles_of(installation).await;
     let config_file = installation.config_file();
 
     Ok(serde_json::json!({
@@ -879,7 +880,7 @@ async fn self_status(
             "exists": config_file.as_deref().is_some_and(std::path::Path::exists),
         },
         "credentials": {
-            "file": installation.credentials_file(),
+            "file": credentials_file,
             "profiles": stored.profiles,
             "keyring": keyring_report(&stored.keyring),
         },
@@ -1144,7 +1145,10 @@ async fn clear_stored_tokens(
     installation: &atlassian_cli::dist::Installation,
     removed: &mut Vec<serde_json::Value>,
 ) -> Result<serde_json::Value> {
-    use atlassian_cli::auth::{KeyringEnumeration, TokenStore};
+    // Enumerate before removing anything: the file is where the file-backed
+    // profiles are named, so deleting it first would leave them out of the
+    // report even though they were cleared.
+    let stored = stored_profiles_of(installation).await;
 
     if let Some(file) = installation.credentials_file()
         && file.exists()
@@ -1153,23 +1157,12 @@ async fn clear_stored_tokens(
         record(removed, "credentials", file.display().to_string());
     }
 
-    let stored = atlassian_cli::auth::stored_profiles().await;
-    match &stored.keyring {
-        KeyringEnumeration::Skipped => anyhow::bail!(
-            "ATLASSIAN_NO_KEYCHAIN forbids reading the keychain, so any session stored there \
-             before the flag was set cannot be cleared — unset it and re-run, or pass \
-             --keep-credentials to leave stored tokens alone"
-        ),
-        KeyringEnumeration::Failed(reason) => anyhow::bail!(
-            "the keychain would not be listed ({reason}), so the tokens it holds cannot be \
-             cleared — unlock it and re-run, or pass --keep-credentials to leave stored tokens \
-             alone"
-        ),
-        KeyringEnumeration::Listed | KeyringEnumeration::Unsupported => {}
+    if let Some(refusal) = clear_stored_tokens_refusal(&stored.keyring) {
+        anyhow::bail!(refusal);
     }
 
     for profile in &stored.profiles {
-        TokenStore::new(profile.clone())?.delete().await?;
+        token_store(installation, profile)?.delete().await?;
         record(removed, "credentials", format!("profile:{profile}"));
     }
 
@@ -1177,6 +1170,52 @@ async fn clear_stored_tokens(
         "keyring": keyring_report(&stored.keyring),
         "profiles": stored.profiles,
     }))
+}
+
+/// Why the keychain half cannot be claimed, or `None` where it can.
+///
+/// Split out from the work so the decision can be exhausted without a machine's
+/// keychain: it is the one that governs whether the binary comes off while a
+/// token is still somewhere.
+fn clear_stored_tokens_refusal(
+    keyring: &atlassian_cli::auth::KeyringEnumeration,
+) -> Option<String> {
+    use atlassian_cli::auth::KeyringEnumeration;
+    match keyring {
+        KeyringEnumeration::Listed | KeyringEnumeration::Unsupported => None,
+        KeyringEnumeration::Skipped => Some(
+            "ATLASSIAN_NO_KEYCHAIN forbids reading the keychain, so any session stored there \
+             before the flag was set cannot be cleared — unset it and re-run, or pass \
+             --keep-credentials to leave stored tokens alone"
+                .to_string(),
+        ),
+        KeyringEnumeration::Failed(reason) => Some(format!(
+            "the keychain would not be listed ({reason}), so the tokens it holds cannot be \
+             cleared — unlock it and re-run, or pass --keep-credentials to leave stored tokens \
+             alone"
+        )),
+    }
+}
+
+/// The profiles this installation holds tokens for, read from its own paths
+/// rather than the running machine's.
+async fn stored_profiles_of(
+    installation: &atlassian_cli::dist::Installation,
+) -> atlassian_cli::auth::StoredProfiles {
+    let file = installation
+        .credentials_file()
+        .unwrap_or_else(|| std::path::PathBuf::from(atlassian_cli::auth::CREDENTIALS_FILE));
+    atlassian_cli::auth::stored_profiles(&file).await
+}
+
+fn token_store(
+    installation: &atlassian_cli::dist::Installation,
+    profile: &str,
+) -> Result<atlassian_cli::auth::TokenStore> {
+    let file = installation
+        .credentials_file()
+        .ok_or_else(|| anyhow::anyhow!("Failed to determine home directory"))?;
+    Ok(atlassian_cli::auth::TokenStore::at(profile, file))
 }
 
 /// How completely the keychain could be listed, with the reason only where
@@ -2145,6 +2184,97 @@ mod tests {
             message.contains(&skill_dir.display().to_string()),
             "the skill it had already removed is not named: {message}"
         );
+    }
+
+    /// The credential step needs a keychain that answers, and the machine's
+    /// belongs to the machine. A mock store is installed once for the whole bin
+    /// test process; `ensure_store_installed` keeps whichever store is already
+    /// set, so every test below enumerates against this one.
+    fn mock_keychain() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            keyring_core::set_default_store(keyring_core::mock::Store::new().unwrap());
+        });
+    }
+
+    fn write_credentials(installation: &Installation, profiles: &[&str]) {
+        let file = installation.credentials_file().unwrap();
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let body: serde_json::Map<String, serde_json::Value> = profiles
+            .iter()
+            .map(|profile| {
+                (
+                    (*profile).to_string(),
+                    serde_json::json!({
+                        "access_token": "a",
+                        "refresh_token": null,
+                        "expires_at_unix": 0,
+                        "scopes": [],
+                        "cloud_id": null
+                    }),
+                )
+            })
+            .collect();
+        std::fs::write(&file, serde_json::to_vec(&body).unwrap()).unwrap();
+    }
+
+    /// The file names the profiles it holds, so enumerating has to happen
+    /// before it is deleted or those profiles go unreported — which is what the
+    /// whole `removed` record exists to prevent.
+    #[tokio::test]
+    async fn every_file_backed_profile_is_named_in_what_was_removed() {
+        mock_keychain();
+        let home = tempfile::tempdir().unwrap();
+        let installation = installation(home.path());
+        write_credentials(&installation, &["default", "work"]);
+
+        let report = self_uninstall(&installation, true, false, false)
+            .await
+            .unwrap();
+
+        let targets: Vec<&str> = report["removed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["kind"] == "credentials")
+            .map(|entry| entry["target"].as_str().unwrap())
+            .collect();
+        assert!(targets.contains(&"profile:default"), "{targets:?}");
+        assert!(targets.contains(&"profile:work"), "{targets:?}");
+        assert!(!installation.credentials_file().unwrap().exists());
+        assert_eq!(report["credentials"]["profiles"][0], "default");
+    }
+
+    /// `ATLASSIAN_NO_KEYCHAIN` is a per-environment setting, so this asserts the
+    /// branch through the enumeration outcome rather than by setting it.
+    #[tokio::test]
+    async fn an_enumeration_that_did_not_happen_refuses_before_the_binary_goes() {
+        let home = tempfile::tempdir().unwrap();
+        let installation = installation(home.path());
+        write_credentials(&installation, &["default"]);
+
+        let refusal =
+            clear_stored_tokens_refusal(&atlassian_cli::auth::KeyringEnumeration::Skipped);
+        assert!(
+            refusal.is_some(),
+            "a forbidden look must not pass for a clear"
+        );
+        assert!(
+            clear_stored_tokens_refusal(&atlassian_cli::auth::KeyringEnumeration::Failed(
+                "locked".to_string()
+            ))
+            .is_some_and(|message| message.contains("locked")),
+            "a store that would not answer must name why"
+        );
+        // A build with no store never wrote to one, so there is nothing to miss.
+        assert!(
+            clear_stored_tokens_refusal(&atlassian_cli::auth::KeyringEnumeration::Unsupported)
+                .is_none()
+        );
+        assert!(
+            clear_stored_tokens_refusal(&atlassian_cli::auth::KeyringEnumeration::Listed).is_none()
+        );
+        assert!(installation.binary().exists());
     }
 
     #[test]
