@@ -380,6 +380,12 @@ impl CommentFamily {
 /// larger page is purely fewer round trips.
 const COMMENT_PAGE_SIZE: &str = "250";
 
+/// Hard ceiling on one thread walk, so a server answering every `children`
+/// request with fresh ids cannot make it run forever. Far beyond any real
+/// page — the largest discussions on a wiki run to hundreds — so it fails
+/// loudly rather than truncating, matching `paginate`'s `MAX_PAGES`.
+const MAX_THREAD_COMMENTS: usize = 50_000;
+
 fn comment_query() -> [(&'static str, &'static str); 2] {
     [("body-format", "storage"), ("limit", COMMENT_PAGE_SIZE)]
 }
@@ -392,10 +398,11 @@ fn comment_query() -> [(&'static str, &'static str); 2] {
 /// level goes through `fetch_all_v2_results`, which is also what keeps a long
 /// reply chain from being cut at a page boundary.
 ///
-/// `seen` is what makes the walk terminate. A tree cannot reach a comment
-/// twice, so an id that returns as its own descendant is drift, and drift bails
-/// rather than looping — the same posture `CursorTrail` takes toward a cursor
-/// that stops advancing.
+/// `seen` is what makes the walk terminate on a repeat: a tree cannot reach a
+/// comment twice, so an id that returns as its own descendant is drift, and
+/// drift bails rather than looping — the same posture `CursorTrail` takes
+/// toward a cursor that stops advancing. `limit` covers the case `seen` cannot,
+/// a server answering every level with fresh ids forever.
 struct ThreadWalk<'a> {
     client: &'a ApiClient,
     family: CommentFamily,
@@ -404,6 +411,7 @@ struct ThreadWalk<'a> {
     page_id: Option<&'a str>,
     include_replies: bool,
     seen: HashSet<String>,
+    limit: usize,
 }
 
 impl<'a> ThreadWalk<'a> {
@@ -419,6 +427,7 @@ impl<'a> ThreadWalk<'a> {
             page_id,
             include_replies,
             seen: HashSet::new(),
+            limit: MAX_THREAD_COMMENTS,
         }
     }
 
@@ -488,6 +497,13 @@ impl<'a> ThreadWalk<'a> {
         };
         if !self.seen.insert(id.clone()) {
             anyhow::bail!("Failed to {what}: comment {id} is reachable from itself");
+        }
+        if self.seen.len() > self.limit {
+            anyhow::bail!(
+                "Failed to {what}: more than {} comments in one thread walk — aborting to avoid \
+                 an unbounded walk",
+                self.limit
+            );
         }
 
         object.insert("location".into(), json!(self.family.label()));
@@ -2393,6 +2409,55 @@ mod tests {
                 "/wiki/api/v2/footer-comments/..%2F..%2F..%2Fpages%2F999/children".to_string(),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn integ_thread_walk_bails_before_an_endless_supply_of_new_replies() {
+        let server = MockServer::start().await;
+        // `seen` catches a repeat; nothing catches a server that answers every
+        // level with an id it has not used before.
+        Mock::given(method("GET"))
+            .and(path("/wiki/api/v2/pages/5/footer-comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{ "id": "root" }]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(EverFreshReply::default())
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let roots = fetch_all_v2_results(
+            &client,
+            "get comments",
+            &CommentFamily::Footer.page_path("5"),
+            &comment_query(),
+        )
+        .await
+        .unwrap();
+        let mut walk = ThreadWalk::new(&client, CommentFamily::Footer, Some("5"), true);
+        walk.limit = 3;
+        let err = walk
+            .collect("get comments", roots, None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unbounded walk"), "got: {err}");
+    }
+
+    /// One reply per request, under an id never used before — the shape `seen`
+    /// cannot terminate on.
+    #[derive(Default)]
+    struct EverFreshReply(std::sync::atomic::AtomicUsize);
+
+    impl wiremock::Respond for EverFreshReply {
+        fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
+            let n = self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            ResponseTemplate::new(200)
+                .set_body_json(json!({ "results": [{ "id": format!("fresh-{n}") }] }))
+        }
     }
 
     #[tokio::test]
