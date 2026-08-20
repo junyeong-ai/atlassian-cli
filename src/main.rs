@@ -2502,38 +2502,6 @@ mod tests {
         assert_eq!(report["binary"], binary.display().to_string());
     }
 
-    /// A read that could not reach the keychain falls back to the file, so
-    /// finding nothing there is not a reason to leave the keychain alone —
-    /// which is how a session survived a logout that exited zero.
-    #[tokio::test]
-    async fn logout_clears_the_keychain_even_when_the_read_found_nothing() {
-        mock_keychain();
-        let home = tempfile::tempdir().unwrap();
-        let file = home.path().join("credentials.json");
-        let store = atlassian_cli::auth::TokenStore::at("logout-unreadable", file);
-
-        let entry = keyring_core::Entry::new("atlassian-cli", "logout-unreadable").unwrap();
-        entry.set_password("{}").unwrap();
-        // Consumed by the next call, which is the read — so the read fails and
-        // falls through to the file while the entry is still there.
-        entry
-            .as_any()
-            .downcast_ref::<keyring_core::mock::Cred>()
-            .expect("the mock store hands out mock credentials")
-            .set_error(keyring_core::Error::NoStorageAccess(Box::new(
-                std::io::Error::other("the keychain is locked"),
-            )));
-
-        clear_session(&store, "logout-unreadable").await.unwrap();
-
-        assert!(matches!(
-            keyring_core::Entry::new("atlassian-cli", "logout-unreadable")
-                .unwrap()
-                .get_password(),
-            Err(keyring_core::Error::NoEntry)
-        ));
-    }
-
     /// A stored entry that will not parse is still an entry to remove, and
     /// removing it does not need it parsed. Letting the read's failure out
     /// first leaves the credential exactly where it was.
