@@ -11,10 +11,31 @@
 
 `comment`, `label`, `property`, `space`, `attachment` each route through a `Confluence*Action` enum, parallel to the Jira side. Function names follow the same verbs: `add_comment`/`update_comment`/`delete_comment`, `get_labels`/`add_label`/`remove_label`, `get_properties`/`set_property`/`delete_property`, `get_spaces`/`get_space`, `get_attachments`/`upload_attachment`.
 
-- **Footer comments**: `add_comment(page_id, body, parent_id, …)` — `parent_id = Some(id)` posts a threaded reply. The v2 endpoint requires *exactly one* container id, so a reply sends only `parentCommentId` and a top-level comment only `pageId` (sending both is a 400); both ride in the JSON body, never the path. `update_comment` bumps `version.number`, reading the current version via `fetch_version_number` first (same contract as `update_page`).
+- **Comments**: see *Comment threads* below for reads. `add_comment(page_id, body, parent_id, …)` — `parent_id = Some(id)` posts a threaded reply. The v2 endpoint requires *exactly one* container id, so a reply sends only `parentCommentId` and a top-level comment only `pageId` (sending both is a 400); both ride in the JSON body, never the path. `update_comment` bumps `version.number`, reading the current version via `fetch_version_number` first (same contract as `update_page`). Writes are footer-only — v2's inline-comment create needs an anchor (`inlineCommentProperties`) that has no CLI representation yet.
 - **Deletes need no `--yes`**: `delete_comment`, `remove_label`, `delete_property` are id/name/key-scoped — the identifier is the specificity guard, matching the Jira `delete_comment`/`remove_link` family. Only whole-page `delete_page` requires `--yes`.
 - **Response envelopes** (stable contract, matching the Jira side): lists return `{"items": [...]}`, creating writes return `{"id": ...}` via `response::require_field` (a 2xx whose body lacks the id is schema drift and bails loudly rather than handing back a placeholder `null` a caller would chain on), and side-effect-only writes return `{}`.
 - **`attachment upload`** sends `minorEdit` (the v1 endpoint expects it); the `--minor` flag sets it `true` to suppress the watcher notification a re-upload otherwise fires. The body part is `file`; its `Content-Type` is mapped from the extension (`--content-type` overrides) — see the attachment-write note above.
+
+## Comment threads
+
+v2 splits comments into two families — footer and inline — and addresses both through an identical path algebra: a page's roots (`/pages/{id}/{family}`), one comment's children (`/{family}/{id}/children`), one comment by id (`/{family}/{id}`). `CommentFamily` holds the differing segment so every comment read is one code path; do not branch on the family anywhere else.
+
+**A page endpoint returns ROOT comments only.** The spec says so in as many words, and a reply is reachable solely through its parent's `children` collection. `ThreadWalk` therefore walks every level — each one a full `fetch_all_v2_results` cursor walk — and flattens the tree depth-first. Listing only the roots is the same failure the pagination helpers exist to prevent: an incomplete set handed back as a complete one.
+
+Each emitted comment carries four fields the **walk** determined, never the response:
+
+| field | value |
+|---|---|
+| `location` | the family whose path was requested |
+| `depth` | 0 at the roots of *this* listing, +1 per level |
+| `parentCommentId` | the comment whose `children` collection this was read out of; explicit `null` at a root, so "answers nothing" and "not reported" stay distinguishable |
+| `pageId` | stamped on replies only — the page endpoint already reports it on a root, and a reply's model (`ChildrenCommentModel`) carries no container at all |
+
+`ThreadWalk` keeps a `seen` set of ids. A tree cannot reach a comment twice, so an id returning as its own descendant is drift and bails — the same posture `CursorTrail` takes toward a cursor that stops advancing. That set, not a depth cap, is what makes the walk terminate; an arbitrary ceiling would turn a legitimately deep thread into a failure.
+
+**The family is part of a comment's address, not something to discover.** `get_comment`/`get_comment_replies` take it explicitly (CLI: `--location`, default `footer`). Retrying in the other family on a 404 would collapse "wrong family", "deleted" and "not visible to you" into one answer. Every comment this module emits carries its `location`, so an id it handed out is always complete.
+
+Comment collections send `limit=250` (`COMMENT_PAGE_SIZE`) — the spec's maximum against a default of 25. Completeness comes from following `_links.next` either way, so the larger page is purely fewer round trips.
 
 ## Content properties = structured JSON metadata
 
@@ -46,7 +67,7 @@ Both walks record their steps in a `CursorTrail`, which resolves each link and r
 The two API generations disagree on what `next` is relative to, which is the only reason there are two mechanisms:
 
 - **v1 search** (`search_all`): `_links.base` is `…/wiki` and `_links.next` is `/rest/api/search?…` — relative to the *base path*. `v1_next_link` joins the two into an absolute link, which `link_path` then reduces. Resolving `next` as host-root-relative (what a standards-conformant URL join does) would drop `/wiki` and 404.
-- **v2 lists** (`fetch_all_v2_results`): `_links.next` is already rooted at the site (`/wiki/api/v2/…`), so it is used as-is. Joining it onto `base` would duplicate `/wiki`. Every v2 list endpoint (`get_comments`, `get_page_children`, `get_labels`, `get_properties`, `get_spaces`, `get_attachments`) funnels through this helper, which follows `next` to exhaustion so a single page is never silently returned as the whole set. The per-call `query` (e.g. `get_comments`'s `body-format=storage`) is sent on the **first** request only — each `next` link already carries it forward. Results are wrapped and filtered once via `v2_list_envelope`.
+- **v2 lists** (`fetch_all_v2_results`): `_links.next` is already rooted at the site (`/wiki/api/v2/…`), so it is used as-is. Joining it onto `base` would duplicate `/wiki`. Every v2 list endpoint (`get_page_children`, `get_labels`, `get_properties`, `get_spaces`, `get_attachments`, and every level of a comment thread) funnels through this helper, which follows `next` to exhaustion so a single page is never silently returned as the whole set. The per-call `query` (e.g. a comment collection's `body-format=storage&limit=250`) is sent on the **first** request only — each `next` link already carries it forward. Results are wrapped and filtered once via `v2_list_envelope`.
 
 Do not re-inline a one-page GET for any v2 list — silent truncation past the first page is exactly what this helper exists to prevent.
 

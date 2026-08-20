@@ -482,11 +482,63 @@ enum ConfluenceSubcommand {
     },
 }
 
+/// Which of Confluence's two comment families an id or a listing refers to.
+#[derive(Clone, Copy, ValueEnum)]
+enum CommentLocation {
+    Footer,
+    Inline,
+}
+
+impl From<CommentLocation> for atlassian_cli::confluence::CommentFamily {
+    fn from(location: CommentLocation) -> Self {
+        use atlassian_cli::confluence::CommentFamily;
+        match location {
+            CommentLocation::Footer => CommentFamily::Footer,
+            CommentLocation::Inline => CommentFamily::Inline,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum ConfluenceCommentAction {
-    /// List footer comments on a page
+    /// List comments on a page, replies included
     List {
         page_id: String,
+        #[arg(
+            long,
+            value_enum,
+            help = "Comment family to list (default: both footer and inline)"
+        )]
+        location: Option<CommentLocation>,
+        /// List only top-level comments, leaving their replies unfetched
+        #[arg(long)]
+        roots_only: bool,
+        #[arg(long, value_enum, default_value = "html", help = "Body content format")]
+        format: OutputFormat,
+    },
+    /// Fetch a single comment by id
+    Get {
+        comment_id: String,
+        #[arg(
+            long,
+            value_enum,
+            default_value = "footer",
+            help = "Comment family the id belongs to"
+        )]
+        location: CommentLocation,
+        #[arg(long, value_enum, default_value = "html", help = "Body content format")]
+        format: OutputFormat,
+    },
+    /// List every reply below a comment
+    Replies {
+        comment_id: String,
+        #[arg(
+            long,
+            value_enum,
+            default_value = "footer",
+            help = "Comment family the id belongs to"
+        )]
+        location: CommentLocation,
         #[arg(long, value_enum, default_value = "html", help = "Body content format")]
         format: OutputFormat,
     },
@@ -1153,9 +1205,50 @@ async fn handle_confluence(
             confluence::get_page_children(&page_id, client).await
         }
         ConfluenceSubcommand::Comment { action } => match action {
-            ConfluenceCommentAction::List { page_id, format } => {
-                let as_markdown = matches!(format, OutputFormat::Markdown);
-                confluence::get_comments(&page_id, as_markdown, client).await
+            ConfluenceCommentAction::List {
+                page_id,
+                location,
+                roots_only,
+                format,
+            } => {
+                let families = match location {
+                    Some(location) => vec![location.into()],
+                    None => confluence::CommentFamily::ALL.to_vec(),
+                };
+                confluence::get_comments(
+                    &page_id,
+                    &families,
+                    !roots_only,
+                    matches!(format, OutputFormat::Markdown),
+                    client,
+                )
+                .await
+            }
+            ConfluenceCommentAction::Get {
+                comment_id,
+                location,
+                format,
+            } => {
+                confluence::get_comment(
+                    &comment_id,
+                    location.into(),
+                    matches!(format, OutputFormat::Markdown),
+                    client,
+                )
+                .await
+            }
+            ConfluenceCommentAction::Replies {
+                comment_id,
+                location,
+                format,
+            } => {
+                confluence::get_comment_replies(
+                    &comment_id,
+                    location.into(),
+                    matches!(format, OutputFormat::Markdown),
+                    client,
+                )
+                .await
             }
             ConfluenceCommentAction::Add {
                 page_id,

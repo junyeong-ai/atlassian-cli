@@ -316,19 +316,293 @@ pub async fn get_page_children(page_id: &str, client: &ApiClient) -> Result<Valu
     Ok(v2_list_envelope(items, client))
 }
 
-pub async fn get_comments(page_id: &str, as_markdown: bool, client: &ApiClient) -> Result<Value> {
-    let path = format!(
-        "/wiki/api/v2/pages/{}/footer-comments",
-        encode_path_segment(page_id)
-    );
-    let items =
-        fetch_all_v2_results(client, "get comments", &path, &[("body-format", "storage")]).await?;
+/// The two comment families Confluence v2 exposes.
+///
+/// Both are addressed through an identical path algebra — a page's roots, one
+/// comment's children, one comment by id — differing only in a path segment.
+/// Carrying that segment as data keeps every comment operation on one code path
+/// instead of two that drift, and makes the family part of a comment's address
+/// rather than something to infer from a request that failed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CommentFamily {
+    Footer,
+    Inline,
+}
 
+impl CommentFamily {
+    /// Both families, in the order a combined listing reports them.
+    pub const ALL: [CommentFamily; 2] = [CommentFamily::Footer, CommentFamily::Inline];
+
+    /// The path segment, and the value stamped onto every comment emitted from
+    /// this family — one table, so the two can never name different things.
+    const fn parts(self) -> (&'static str, &'static str) {
+        match self {
+            CommentFamily::Footer => ("footer-comments", "footer"),
+            CommentFamily::Inline => ("inline-comments", "inline"),
+        }
+    }
+
+    fn segment(self) -> &'static str {
+        self.parts().0
+    }
+
+    fn label(self) -> &'static str {
+        self.parts().1
+    }
+
+    fn page_path(self, page_id: &str) -> String {
+        format!(
+            "/wiki/api/v2/pages/{}/{}",
+            encode_path_segment(page_id),
+            self.segment()
+        )
+    }
+
+    fn children_path(self, comment_id: &str) -> String {
+        format!(
+            "/wiki/api/v2/{}/{}/children",
+            self.segment(),
+            encode_path_segment(comment_id)
+        )
+    }
+
+    fn single_path(self, comment_id: &str) -> String {
+        format!(
+            "/wiki/api/v2/{}/{}",
+            self.segment(),
+            encode_path_segment(comment_id)
+        )
+    }
+}
+
+/// Page size for every comment collection. The endpoints default to 25 and cap
+/// at 250; completeness comes from following `_links.next` either way, so the
+/// larger page is purely fewer round trips.
+const COMMENT_PAGE_SIZE: &str = "250";
+
+fn comment_query() -> [(&'static str, &'static str); 2] {
+    [("body-format", "storage"), ("limit", COMMENT_PAGE_SIZE)]
+}
+
+/// Depth-first accumulation of a comment tree, one cursor walk per level.
+///
+/// A page endpoint returns only ROOT comments, and a reply is reachable solely
+/// through its parent's `children` collection — so a listing that stops at the
+/// roots hands back an incomplete thread as if it were the whole one. Every
+/// level goes through `fetch_all_v2_results`, which is also what keeps a long
+/// reply chain from being cut at a page boundary.
+///
+/// `seen` is what makes the walk terminate. A tree cannot reach a comment
+/// twice, so an id that returns as its own descendant is drift, and drift bails
+/// rather than looping — the same posture `CursorTrail` takes toward a cursor
+/// that stops advancing.
+struct ThreadWalk<'a> {
+    client: &'a ApiClient,
+    family: CommentFamily,
+    /// Stamped onto every reply. `None` where the walk began at a comment
+    /// rather than a page, and the container is therefore not known here.
+    page_id: Option<&'a str>,
+    include_replies: bool,
+    seen: HashSet<String>,
+}
+
+impl<'a> ThreadWalk<'a> {
+    fn new(
+        client: &'a ApiClient,
+        family: CommentFamily,
+        page_id: Option<&'a str>,
+        include_replies: bool,
+    ) -> Self {
+        ThreadWalk {
+            client,
+            family,
+            page_id,
+            include_replies,
+            seen: HashSet::new(),
+        }
+    }
+
+    /// Flatten `roots` and everything below them, depth first.
+    ///
+    /// `root_parent` is the comment the roots answer, which the caller knows
+    /// and the root objects do not carry: a page's roots answer nothing, a
+    /// `replies` listing's roots answer the comment that was asked for.
+    async fn collect(
+        &mut self,
+        what: &str,
+        roots: Vec<Value>,
+        root_parent: Option<&str>,
+    ) -> Result<Vec<Value>> {
+        let mut out = Vec::with_capacity(roots.len());
+        // Reversed on push so each level pops in the order the server returned
+        // it, and a comment is emitted before the replies below it.
+        let mut pending: Vec<(Value, Option<String>, usize)> = roots
+            .into_iter()
+            .rev()
+            .map(|comment| (comment, root_parent.map(str::to_string), 0))
+            .collect();
+
+        while let Some((mut comment, parent, depth)) = pending.pop() {
+            let id = self.admit(what, &mut comment, parent, depth)?;
+            out.push(comment);
+
+            if !self.include_replies {
+                continue;
+            }
+            let children = fetch_all_v2_results(
+                self.client,
+                what,
+                &self.family.children_path(&id),
+                &comment_query(),
+            )
+            .await?;
+            pending.extend(
+                children
+                    .into_iter()
+                    .rev()
+                    .map(|child| (child, Some(id.clone()), depth + 1)),
+            );
+        }
+        Ok(out)
+    }
+
+    /// Take one comment into the listing: read its id, refuse one already seen,
+    /// and record what the traversal knows about it.
+    ///
+    /// `parentCommentId` comes from the collection the comment was read out of
+    /// and `location` from the path that was requested, so both are facts of
+    /// the walk rather than response fields to trust — and `parentCommentId` is
+    /// an explicit `null` at the roots, so "answers nothing" and "not reported"
+    /// stay distinguishable. `depth` counts from the roots of this listing.
+    fn admit(
+        &mut self,
+        what: &str,
+        comment: &mut Value,
+        parent: Option<String>,
+        depth: usize,
+    ) -> Result<String> {
+        let Some(object) = comment.as_object_mut() else {
+            anyhow::bail!("Failed to {what}: a comment was not a JSON object");
+        };
+        let Some(id) = object.get("id").and_then(Value::as_str).map(str::to_string) else {
+            anyhow::bail!("Failed to {what}: a comment had no string 'id'");
+        };
+        if !self.seen.insert(id.clone()) {
+            anyhow::bail!("Failed to {what}: comment {id} is reachable from itself");
+        }
+
+        object.insert("location".into(), json!(self.family.label()));
+        object.insert("depth".into(), json!(depth));
+        object.insert(
+            "parentCommentId".into(),
+            parent.map_or(Value::Null, Value::String),
+        );
+        // Only on replies: the page endpoint already reports it on a root, and
+        // a reply's own model carries no container at all.
+        if depth > 0
+            && let Some(page_id) = self.page_id
+        {
+            object.insert("pageId".into(), json!(page_id));
+        }
+        Ok(id)
+    }
+}
+
+/// Wrap a flattened comment listing in the standard envelope.
+fn comment_envelope(items: Vec<Value>, as_markdown: bool, client: &ApiClient) -> Value {
     let mut envelope = v2_list_envelope(items, client);
     if as_markdown && let Some(comments) = envelope["items"].as_array_mut() {
         convert_comments_to_markdown(comments);
     }
-    Ok(envelope)
+    envelope
+}
+
+/// List a page's comments, replies included.
+///
+/// `families` selects which of the two the listing covers; `include_replies`
+/// decides whether each root's thread is walked. The result is one flat,
+/// depth-first array, so the `{"items": [...]}` envelope holds at any nesting
+/// and every entry has the same shape — `parentCommentId`, `depth` and
+/// `location` carry the thread structure through the flattening, and each entry
+/// is a complete address for `get_comment` / `get_comment_replies`.
+pub async fn get_comments(
+    page_id: &str,
+    families: &[CommentFamily],
+    include_replies: bool,
+    as_markdown: bool,
+    client: &ApiClient,
+) -> Result<Value> {
+    let mut items = Vec::new();
+    for &family in families {
+        let roots = fetch_all_v2_results(
+            client,
+            "get comments",
+            &family.page_path(page_id),
+            &comment_query(),
+        )
+        .await?;
+        items.extend(
+            ThreadWalk::new(client, family, Some(page_id), include_replies)
+                .collect("get comments", roots, None)
+                .await?,
+        );
+    }
+    Ok(comment_envelope(items, as_markdown, client))
+}
+
+/// List everything below one comment.
+///
+/// The requested comment is the origin rather than a member of the result, so
+/// its direct replies are depth 0 — the roots of a listing are depth 0 either
+/// way, which is what keeps this shape identical to `get_comments`'.
+pub async fn get_comment_replies(
+    comment_id: &str,
+    family: CommentFamily,
+    as_markdown: bool,
+    client: &ApiClient,
+) -> Result<Value> {
+    let roots = fetch_all_v2_results(
+        client,
+        "get replies",
+        &family.children_path(comment_id),
+        &comment_query(),
+    )
+    .await?;
+    let items = ThreadWalk::new(client, family, None, true)
+        .collect("get replies", roots, Some(comment_id))
+        .await?;
+    Ok(comment_envelope(items, as_markdown, client))
+}
+
+/// Fetch one comment by id.
+///
+/// The family is part of the address, not something to discover: a 404 from the
+/// wrong one is indistinguishable from a comment that was deleted or that the
+/// caller cannot see, so retrying in the other family would collapse three
+/// different answers into one. Every comment this module emits carries its
+/// `location`, so an id it handed out is always a complete address.
+pub async fn get_comment(
+    comment_id: &str,
+    family: CommentFamily,
+    as_markdown: bool,
+    client: &ApiClient,
+) -> Result<Value> {
+    let request = client
+        .get(Service::Confluence, &family.single_path(comment_id))
+        .await?
+        .header("Accept", "application/json")
+        .query(&[("body-format", "storage")]);
+    let response = client.execute("get comment", request).await?;
+
+    let mut data: Value = response.json().await?;
+    filter::apply(&mut data, client.config());
+    if as_markdown {
+        convert_comments_to_markdown(std::slice::from_mut(&mut data));
+    }
+    if let Some(object) = data.as_object_mut() {
+        object.insert("location".into(), json!(family.label()));
+    }
+    Ok(data)
 }
 
 pub async fn create_page(
@@ -1822,31 +2096,418 @@ mod tests {
         assert!(err.contains("Failed to read"), "got: {err}");
     }
 
-    #[tokio::test]
-    async fn integ_get_comments_converts_storage_to_markdown() {
-        let server = MockServer::start().await;
-        // `as_markdown=true` must convert each comment's storage HTML in place.
+    // --- Comment threads --------------------------------------------------
+
+    /// Mount one comment collection. Callers mount an empty collection for
+    /// every leaf too — a thread walk still has to ask, and a missing mock
+    /// would look like a network failure rather than an unasked question.
+    async fn mount_comments(server: &MockServer, at: &str, results: Value) {
         Mock::given(method("GET"))
-            .and(path("/wiki/api/v2/pages/5/footer-comments"))
+            .and(path(at.to_string()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "results": results })))
+            .mount(server)
+            .await;
+    }
+
+    /// Where one comment sits in a listing: its id, depth, the comment it
+    /// answers, its family, and the page it belongs to.
+    type Placement<'a> = (&'a str, u64, Option<&'a str>, &'a str, Option<&'a str>);
+
+    fn thread_shape(listing: &Value) -> Vec<Placement<'_>> {
+        listing["items"]
+            .as_array()
+            .expect("listing has an items array")
+            .iter()
+            .map(|comment| {
+                (
+                    comment["id"].as_str().expect("id"),
+                    comment["depth"].as_u64().expect("depth"),
+                    comment["parentCommentId"].as_str(),
+                    comment["location"].as_str().expect("location"),
+                    comment["pageId"].as_str(),
+                )
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn integ_get_comments_walks_every_reply_depth_first() {
+        let server = MockServer::start().await;
+        // r1 ─┬ a1 ─ g1        A page endpoint answers with roots only, so
+        //     └ a2             everything below the first row is reachable
+        // r2                   solely through the `children` collections.
+        mount_comments(
+            &server,
+            "/wiki/api/v2/pages/5/footer-comments",
+            json!([{ "id": "r1", "pageId": "5" }, { "id": "r2", "pageId": "5" }]),
+        )
+        .await;
+        mount_comments(
+            &server,
+            "/wiki/api/v2/footer-comments/r1/children",
+            json!([{ "id": "a1" }, { "id": "a2" }]),
+        )
+        .await;
+        mount_comments(
+            &server,
+            "/wiki/api/v2/footer-comments/a1/children",
+            json!([{ "id": "g1" }]),
+        )
+        .await;
+        for leaf in ["r2", "a2", "g1"] {
+            mount_comments(
+                &server,
+                &format!("/wiki/api/v2/footer-comments/{leaf}/children"),
+                json!([]),
+            )
+            .await;
+        }
+
+        let client = mock_client(server.uri());
+        let result = get_comments("5", &[CommentFamily::Footer], true, false, &client)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            thread_shape(&result),
+            vec![
+                ("r1", 0, None, "footer", Some("5")),
+                ("a1", 1, Some("r1"), "footer", Some("5")),
+                ("g1", 2, Some("a1"), "footer", Some("5")),
+                ("a2", 1, Some("r1"), "footer", Some("5")),
+                ("r2", 0, None, "footer", Some("5")),
+            ]
+        );
+        // A root answers nothing, and that is stated rather than left out: an
+        // absent key and a null one would read the same to a consumer building
+        // the tree back up.
+        assert!(
+            result["items"][0]
+                .get("parentCommentId")
+                .is_some_and(Value::is_null)
+        );
+    }
+
+    #[tokio::test]
+    async fn integ_get_comments_follows_the_cursor_inside_a_reply_collection() {
+        let server = MockServer::start().await;
+        // A thread longer than one page is exactly where a single GET would
+        // silently drop replies.
+        mount_comments(
+            &server,
+            "/wiki/api/v2/pages/5/footer-comments",
+            json!([{ "id": "r1" }]),
+        )
+        .await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/api/v2/footer-comments/r1/children"))
+            .and(query_param_is_missing("cursor"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "results": [{
-                    "id": "c1",
-                    "body": { "storage": { "value": "<p>hello <strong>world</strong></p>" } }
-                }]
+                "results": [{ "id": "a1" }],
+                "_links": { "next": "/wiki/api/v2/footer-comments/r1/children?cursor=P2" }
             })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/api/v2/footer-comments/r1/children"))
+            .and(query_param("cursor", "P2"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "results": [{ "id": "a2" }] })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        for leaf in ["a1", "a2"] {
+            mount_comments(
+                &server,
+                &format!("/wiki/api/v2/footer-comments/{leaf}/children"),
+                json!([]),
+            )
+            .await;
+        }
+
+        let client = mock_client(server.uri());
+        let result = get_comments("5", &[CommentFamily::Footer], true, false, &client)
+            .await
+            .unwrap();
+        assert_eq!(
+            thread_shape(&result),
+            vec![
+                ("r1", 0, None, "footer", None),
+                ("a1", 1, Some("r1"), "footer", Some("5")),
+                ("a2", 1, Some("r1"), "footer", Some("5")),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn integ_roots_only_never_asks_for_replies() {
+        let server = MockServer::start().await;
+        mount_comments(
+            &server,
+            "/wiki/api/v2/pages/5/footer-comments",
+            json!([{ "id": "r1" }]),
+        )
+        .await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/api/v2/footer-comments/r1/children"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "results": [] })))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let result = get_comments("5", &[CommentFamily::Footer], false, false, &client)
+            .await
+            .unwrap();
+        assert_eq!(thread_shape(&result), vec![("r1", 0, None, "footer", None)]);
+    }
+
+    #[tokio::test]
+    async fn integ_a_family_that_was_not_asked_for_is_never_requested() {
+        let server = MockServer::start().await;
+        mount_comments(
+            &server,
+            "/wiki/api/v2/pages/5/footer-comments",
+            json!([{ "id": "f1" }]),
+        )
+        .await;
+        mount_comments(
+            &server,
+            "/wiki/api/v2/footer-comments/f1/children",
+            json!([]),
+        )
+        .await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/api/v2/pages/5/inline-comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "results": [] })))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        get_comments("5", &[CommentFamily::Footer], true, false, &client)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn integ_both_families_are_listed_and_tagged() {
+        let server = MockServer::start().await;
+        mount_comments(
+            &server,
+            "/wiki/api/v2/pages/5/footer-comments",
+            json!([{ "id": "f1" }]),
+        )
+        .await;
+        mount_comments(
+            &server,
+            "/wiki/api/v2/footer-comments/f1/children",
+            json!([]),
+        )
+        .await;
+        // The inline family is a whole second set of comments on the same page;
+        // listing only the footer one reports a page as quieter than it is.
+        mount_comments(
+            &server,
+            "/wiki/api/v2/pages/5/inline-comments",
+            json!([{
+                "id": "i1",
+                "resolutionStatus": "open",
+                "properties": {
+                    "inlineMarkerRef": "marker-1",
+                    "inlineOriginalSelection": "the highlighted words"
+                }
+            }]),
+        )
+        .await;
+        mount_comments(
+            &server,
+            "/wiki/api/v2/inline-comments/i1/children",
+            json!([{ "id": "i2" }]),
+        )
+        .await;
+        mount_comments(
+            &server,
+            "/wiki/api/v2/inline-comments/i2/children",
+            json!([]),
+        )
+        .await;
+
+        let client = mock_client(server.uri());
+        let result = get_comments("5", &CommentFamily::ALL, true, false, &client)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            thread_shape(&result),
+            vec![
+                ("f1", 0, None, "footer", None),
+                ("i1", 0, None, "inline", None),
+                ("i2", 1, Some("i1"), "inline", Some("5")),
+            ]
+        );
+        // What makes an inline comment findable in the page is its anchor, so
+        // the response filter must not be treating it as noise.
+        assert_eq!(result["items"][1]["resolutionStatus"], json!("open"));
+        assert_eq!(
+            result["items"][1]["properties"]["inlineOriginalSelection"],
+            json!("the highlighted words")
+        );
+    }
+
+    #[tokio::test]
+    async fn integ_thread_walk_bails_when_a_comment_answers_itself() {
+        let server = MockServer::start().await;
+        // A tree cannot reach a comment twice, so this is drift — and a walk
+        // that followed it would loop instead of returning a short list.
+        mount_comments(
+            &server,
+            "/wiki/api/v2/pages/5/footer-comments",
+            json!([{ "id": "r1" }]),
+        )
+        .await;
+        mount_comments(
+            &server,
+            "/wiki/api/v2/footer-comments/r1/children",
+            json!([{ "id": "r1" }]),
+        )
+        .await;
+
+        let client = mock_client(server.uri());
+        let err = get_comments("5", &[CommentFamily::Footer], true, false, &client)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("reachable from itself"), "unexpected: {err}");
+    }
+
+    #[tokio::test]
+    async fn integ_get_comments_converts_storage_at_every_depth() {
+        let server = MockServer::start().await;
+        // `as_markdown=true` converts a comment's storage HTML in place —
+        // replies included, or a thread reads half markdown and half HTML.
+        mount_comments(
+            &server,
+            "/wiki/api/v2/pages/5/footer-comments",
+            json!([{
+                "id": "c1",
+                "body": { "storage": { "value": "<p>hello <strong>world</strong></p>" } }
+            }]),
+        )
+        .await;
+        mount_comments(
+            &server,
+            "/wiki/api/v2/footer-comments/c1/children",
+            json!([{
+                "id": "c2",
+                "body": { "storage": { "value": "<p>a <em>reply</em></p>" } }
+            }]),
+        )
+        .await;
+        mount_comments(
+            &server,
+            "/wiki/api/v2/footer-comments/c2/children",
+            json!([]),
+        )
+        .await;
+
+        let client = mock_client(server.uri());
+        let result = get_comments("5", &[CommentFamily::Footer], true, true, &client)
+            .await
+            .unwrap();
+        for (index, word) in [(0, "world"), (1, "reply")] {
+            let body = result["items"][index]["body"]["storage"]["value"]
+                .as_str()
+                .unwrap();
+            assert!(!body.contains("<p>"), "expected HTML stripped, got: {body}");
+            assert!(body.contains(word), "expected text preserved, got: {body}");
+        }
+    }
+
+    #[tokio::test]
+    async fn integ_get_comment_reads_only_the_named_family() {
+        let server = MockServer::start().await;
+        // The family is part of the address. Falling back to the other one on a
+        // 404 would make "wrong family", "deleted" and "not visible to you" the
+        // same answer.
+        Mock::given(method("GET"))
+            .and(path("/wiki/api/v2/inline-comments/77"))
+            .and(query_param("body-format", "storage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "77",
+                "body": { "storage": { "value": "<p>anchored</p>" } }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/api/v2/footer-comments/77"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "77" })))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let result = get_comment("77", CommentFamily::Inline, false, &client)
+            .await
+            .unwrap();
+        assert_eq!(result["id"], json!("77"));
+        assert_eq!(result["location"], json!("inline"));
+    }
+
+    #[tokio::test]
+    async fn integ_get_comment_encodes_the_id() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/api/v2/footer-comments/7%2F7"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "7/7" })))
             .expect(1)
             .mount(&server)
             .await;
 
         let client = mock_client(server.uri());
-        let result = get_comments("5", true, &client).await.unwrap();
-        let body = result["items"][0]["body"]["storage"]["value"]
-            .as_str()
+        let result = get_comment("7/7", CommentFamily::Footer, false, &client)
+            .await
             .unwrap();
-        assert!(!body.contains("<p>"), "expected HTML stripped, got: {body}");
-        assert!(
-            body.contains("world"),
-            "expected text preserved, got: {body}"
+        assert_eq!(result["id"], json!("7/7"));
+    }
+
+    #[tokio::test]
+    async fn integ_replies_are_rooted_under_the_comment_that_was_asked_for() {
+        let server = MockServer::start().await;
+        mount_comments(
+            &server,
+            "/wiki/api/v2/footer-comments/r1/children",
+            json!([{ "id": "a1" }]),
+        )
+        .await;
+        mount_comments(
+            &server,
+            "/wiki/api/v2/footer-comments/a1/children",
+            json!([{ "id": "g1" }]),
+        )
+        .await;
+        mount_comments(
+            &server,
+            "/wiki/api/v2/footer-comments/g1/children",
+            json!([]),
+        )
+        .await;
+
+        let client = mock_client(server.uri());
+        let result = get_comment_replies("r1", CommentFamily::Footer, false, &client)
+            .await
+            .unwrap();
+        // The origin is not a member of its own reply listing, and no page id
+        // is claimed — a walk that began at a comment was never told one.
+        assert_eq!(
+            thread_shape(&result),
+            vec![
+                ("a1", 0, Some("r1"), "footer", None),
+                ("g1", 1, Some("a1"), "footer", None),
+            ]
         );
     }
 
@@ -1999,11 +2660,12 @@ mod tests {
     #[tokio::test]
     async fn integ_get_comments_sends_body_format_then_accumulates() {
         let server = MockServer::start().await;
-        // The `body-format` query rides only on the first request; the cursor
-        // link carries its own params on the follow-up.
+        // The `body-format` and `limit` queries ride only on the first request;
+        // the cursor link carries its own params on the follow-up.
         Mock::given(method("GET"))
             .and(path("/wiki/api/v2/pages/5/footer-comments"))
             .and(query_param("body-format", "storage"))
+            .and(query_param("limit", COMMENT_PAGE_SIZE))
             .and(query_param_is_missing("cursor"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "results": [{ "id": "c1" }],
@@ -2023,7 +2685,9 @@ mod tests {
             .await;
 
         let client = mock_client(server.uri());
-        let result = get_comments("5", false, &client).await.unwrap();
+        let result = get_comments("5", &[CommentFamily::Footer], false, false, &client)
+            .await
+            .unwrap();
         assert_eq!(result["items"].as_array().unwrap().len(), 2);
     }
 
