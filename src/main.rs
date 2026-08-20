@@ -964,8 +964,19 @@ fn redeploy_skill(installation: &atlassian_cli::dist::Installation) -> &'static 
     let Some(dir) = installation.skill_dir() else {
         return "skipped";
     };
-    if skill::state(&dir) == SkillState::Absent {
-        return "absent";
+    match skill::state(&dir) {
+        // An install that took no skill must not acquire one from an update.
+        SkillState::Absent => return "absent",
+        // Not the same answer: a directory that could not be read may well hold
+        // the predecessor's copy, and skipping on it is how the two drift.
+        SkillState::Unreadable => {
+            eprintln!(
+                "warning: could not read {} — run `atlassian-cli self skill install`",
+                dir.display()
+            );
+            return "unreadable";
+        }
+        SkillState::Current | SkillState::Stale => {}
     }
     match std::process::Command::new(installation.binary())
         .args(["self", "skill", "install"])

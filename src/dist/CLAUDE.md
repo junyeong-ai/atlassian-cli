@@ -12,6 +12,8 @@ Everything runs in-process — `reqwest` for the download, `sha2` for the checks
 
 Writing has the same reach as deleting and needs the same guard: `fs::write` opens *through* a symlink, so a deploy unlinks a carried name that **is** a link before writing it. Without that, a `SKILL.md` pointed at `~/.zshrc` had that file's contents replaced with the skill. Only a link — an ordinary file stays a truncating write, which needs permission on the file rather than on the directory, so a deploy still lands in a skill directory the user made read-only.
 
+`SkillState` carries an `Unreadable` alongside `Absent` because one of the two is acted on: `self update` redeploys only where a skill is already there, so a directory it could not read must not answer the question a skip is the reply to — that is how the predecessor's copy survives the binary that replaced it.
+
 `remove` takes the skill directory and an emptied `~/.claude/skills`, never `~/.claude` — that one holds the agent's own state. It classifies with `symlink_metadata` rather than `exists`, which reports a dangling link as nothing there and leaves it behind.
 
 Deliberately absent: fetching the skill from a git ref, and detecting a source checkout to prefer. Both existed in the shell installer and were the mechanism by which the skill and binary drifted.

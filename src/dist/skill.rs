@@ -31,6 +31,11 @@ pub enum SkillState {
     /// Deployed, but not what this binary carries — an older release's copy, or
     /// one edited in place.
     Stale,
+    /// The directory could not be read, so none of the above was established.
+    /// Kept apart from `Absent` because that one is acted on: an update skips
+    /// the redeploy on it, and doing that here would leave the predecessor's
+    /// skill against the new binary and call it nothing deployed.
+    Unreadable,
 }
 
 impl SkillState {
@@ -39,6 +44,7 @@ impl SkillState {
             SkillState::Absent => "absent",
             SkillState::Current => "current",
             SkillState::Stale => "stale",
+            SkillState::Unreadable => "unreadable",
         }
     }
 }
@@ -54,8 +60,10 @@ pub struct Deployed {
 }
 
 pub fn state(dir: &Path) -> SkillState {
-    if !dir.is_dir() {
-        return SkillState::Absent;
+    match std::fs::metadata(dir) {
+        Ok(meta) if meta.is_dir() => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return SkillState::Absent,
+        _ => return SkillState::Unreadable,
     }
     // Only where this tool reconciles the directory: elsewhere a file it does
     // not carry is not a difference to report, because it is not one `deploy`
@@ -212,6 +220,25 @@ mod tests {
         for (name, _) in FILES {
             assert!(!name.contains('/'), "`{name}` is not a direct child");
         }
+    }
+
+    /// A directory that cannot be read is not an empty one. `redeploy_skill`
+    /// acts on `Absent` by doing nothing, so answering it here would leave the
+    /// predecessor's skill deployed against the binary that replaced it.
+    #[cfg(unix)]
+    #[test]
+    fn a_skill_directory_that_cannot_be_read_is_not_reported_absent() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("skills").join(SKILL_NAME);
+        deploy(&dir).unwrap();
+        let parent = dir.parent().unwrap();
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let found = state(&dir);
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert_eq!(found, SkillState::Unreadable);
     }
 
     #[cfg(unix)]
