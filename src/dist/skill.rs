@@ -119,10 +119,17 @@ pub fn deploy(dir: &Path) -> Result<Deployed, DistError> {
         // skill. Only a link is unlinked, and `remove_file` never traverses —
         // an ordinary file stays a truncating write, which is what lets a
         // deploy still land in a directory the user made read-only.
-        if std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink()) {
-            std::fs::remove_file(&path).map_err(|e| {
-                DistError::io(format!("replacing the link at {}", path.display()), e)
-            })?;
+        match std::fs::symlink_metadata(&path) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                std::fs::remove_file(&path).map_err(|e| {
+                    DistError::io(format!("replacing the link at {}", path.display()), e)
+                })?;
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            // Not a link is a thing to establish, not to assume: the write
+            // below opens through one.
+            Err(e) => return Err(DistError::io(format!("reading {}", path.display()), e)),
         }
         std::fs::write(&path, contents)
             .map_err(|e| DistError::io(format!("writing {}", path.display()), e))?;
@@ -192,8 +199,18 @@ fn reconcilable_files(dir: &Path) -> Result<Option<BTreeSet<OsString>>, DistErro
         .map_err(|e| DistError::io(format!("listing {}", dir.display()), e))?;
     for entry in entries {
         let entry = entry.map_err(|e| DistError::io(format!("listing {}", dir.display()), e))?;
-        let meta = std::fs::symlink_metadata(entry.path())
-            .map_err(|e| DistError::io(format!("reading {}", entry.path().display()), e))?;
+        // Gone between the listing and the stat is the one definite absence
+        // here — nothing to prune, and nothing to fail a deploy over.
+        let meta = match std::fs::symlink_metadata(entry.path()) {
+            Ok(meta) => meta,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return Err(DistError::io(
+                    format!("reading {}", entry.path().display()),
+                    e,
+                ));
+            }
+        };
         if meta.file_type().is_file() {
             found.insert(entry.file_name());
         }
