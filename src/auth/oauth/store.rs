@@ -682,6 +682,17 @@ fn default_file_path() -> Result<PathBuf> {
 mod tests {
     use super::*;
 
+    /// `keyring-core` takes the default store as process-global startup state,
+    /// so installing one per test lets a parallel run swap the store another
+    /// test is midway through. One mock for the whole process; every test below
+    /// keys its entries by a profile name of its own.
+    fn mock_keychain() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            set_default_store(keyring_core::mock::Store::new().unwrap());
+        });
+    }
+
     fn fixture_tokens() -> TokenSet {
         TokenSet {
             access_token: SecretString::new("access-abc".into()),
@@ -798,7 +809,7 @@ mod tests {
     /// keychain is unreachable, and a logout there was leaving the token behind.
     #[tokio::test]
     async fn a_refusing_keychain_still_leaves_the_file_cleared() {
-        set_default_store(keyring_core::mock::Store::new().unwrap());
+        mock_keychain();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credentials.json");
         let store = TokenStore::at("refusing-keychain", path.clone());
@@ -843,7 +854,7 @@ mod tests {
     /// than what was asked for. The service each entry names is what decides.
     #[tokio::test]
     async fn an_entry_belonging_to_another_service_is_not_one_of_these_profiles() {
-        set_default_store(keyring_core::mock::Store::new().unwrap());
+        mock_keychain();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credentials.json");
 
@@ -867,7 +878,7 @@ mod tests {
     /// left to name.
     #[tokio::test]
     async fn a_credentials_file_that_cannot_be_read_says_so() {
-        set_default_store(keyring_core::mock::Store::new().unwrap());
+        mock_keychain();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credentials.json");
         fs::write(&path, "{ not json").unwrap();
@@ -888,7 +899,7 @@ mod tests {
     #[tokio::test]
     async fn a_credentials_file_that_cannot_be_opened_says_so() {
         use std::os::unix::fs::PermissionsExt;
-        set_default_store(keyring_core::mock::Store::new().unwrap());
+        mock_keychain();
         let dir = tempfile::tempdir().unwrap();
         let closed = dir.path().join("closed");
         fs::create_dir(&closed).unwrap();
@@ -912,7 +923,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn saving_through_a_link_is_refused_as_clearing_through_one_is() {
-        set_default_store(keyring_core::mock::Store::new().unwrap());
+        mock_keychain();
         let dir = tempfile::tempdir().unwrap();
         let real = dir.path().join("elsewhere.json");
         let link = dir.path().join("credentials.json");
@@ -971,7 +982,7 @@ mod tests {
     /// honors a store already configured by an embedder/test.
     #[tokio::test]
     async fn keyring_path_roundtrip_via_mock() {
-        set_default_store(keyring_core::mock::Store::new().unwrap());
+        mock_keychain();
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credentials.json");
