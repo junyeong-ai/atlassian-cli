@@ -125,6 +125,31 @@ where
     .unwrap_or_else(|join_err| Keychain::Unreachable(join_err.to_string()))
 }
 
+/// The keychain would not answer, so whether a session is stored is unknown.
+///
+/// A type rather than a message, because the one caller that reports this
+/// instead of raising it has to tell it apart from every other failure —
+/// matching on prose is the guess this codebase refuses everywhere else.
+#[derive(Debug)]
+pub struct SessionUnknown {
+    pub profile: String,
+    pub reason: String,
+}
+
+impl std::fmt::Display for SessionUnknown {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "The keychain would not answer for profile '{}' ({}), so whether a session is stored \
+             there is unknown. Unlock it and retry, set ATLASSIAN_NO_KEYCHAIN=1 to use the file \
+             store alone, or run `atlassian-cli auth login` if there is no session to reach.",
+            self.profile, self.reason
+        )
+    }
+}
+
+impl std::error::Error for SessionUnknown {}
+
 /// Where the persisted tokens for the active profile currently live.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenStorageBackend {
@@ -310,9 +335,12 @@ impl TokenStore {
         }
     }
 
-    /// Load tokens. Checks keyring first, then file. Returns the loaded
-    /// tokens tagged with the backend they came from, or `Ok(None)` if not
-    /// present in either backend.
+    /// Load tokens. Checks keyring first, then file, and reports the backend
+    /// the answer came from.
+    ///
+    /// `Ok(None)` means neither holds a session, which only a keychain that
+    /// answered can establish. One that would not answer gives
+    /// [`SessionUnknown`] instead.
     pub async fn load(&self) -> Result<Option<LoadedTokens>> {
         let outcome = self.keyring_op(|e| e.get_password()).await;
         if let Keychain::Done(json) = &outcome {
@@ -338,12 +366,10 @@ impl TokenStore {
         // run `auth login`", advice that replaces a session rather than
         // reaching the one that is there.
         match outcome {
-            Keychain::Unreachable(reason) => Err(anyhow::anyhow!(
-                "The keychain would not answer for profile '{}' ({reason}), so whether a session \
-                 is stored there is unknown. Unlock it and retry, or set ATLASSIAN_NO_KEYCHAIN=1 \
-                 to use the file store alone.",
-                self.profile
-            )),
+            Keychain::Unreachable(reason) => Err(anyhow::Error::new(SessionUnknown {
+                profile: self.profile.clone(),
+                reason,
+            })),
             _ => Ok(None),
         }
     }
@@ -357,11 +383,13 @@ impl TokenStore {
     /// success is how `auth logout` and `self uninstall` came to say a token
     /// was gone while it was still there.
     pub async fn delete(&self) -> Result<()> {
-        let keyring = self.keyring_op(|e| e.delete_credential()).await;
-        // The file is this tool's to remove whatever the keychain did. Skipping
-        // it because the keychain failed would leave a token behind on exactly
-        // the machines that keep tokens there.
+        // The file goes first, and literally: it is this tool's to remove
+        // whatever the keychain did, and skipping it because the keychain
+        // failed would leave a token behind on exactly the machines that keep
+        // tokens there. Going first also means a path this store will not
+        // rewrite is refused before either backend changes.
         self.file_delete()?;
+        let keyring = self.keyring_op(|e| e.delete_credential()).await;
 
         match keyring {
             Keychain::Done(()) | Keychain::Empty | Keychain::Forbidden | Keychain::Absent => Ok(()),
@@ -502,6 +530,20 @@ pub fn remove_credentials_file(path: &std::path::Path) -> Result<bool> {
 }
 
 fn read_all_from(file_path: &std::path::Path) -> Result<HashMap<String, OnDisk>> {
+    // The path's own shape decides whether there is a store here, because the
+    // read cannot: through a symlink whose target is away, `read_to_string`
+    // answers `NotFound` about the target, and calling that an empty store
+    // reports no session for one that comes back with the volume. Not
+    // `owned_credentials_file` — a link to a live file stays readable, it is
+    // only rewriting and removing one that is refused.
+    match fs::symlink_metadata(file_path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
+        Err(e) => {
+            return Err(anyhow::Error::from(e)
+                .context(format!("Failed to read credentials file {file_path:?}")));
+        }
+        Ok(_) => {}
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -516,16 +558,8 @@ fn read_all_from(file_path: &std::path::Path) -> Result<HashMap<String, OnDisk>>
             }
         }
     }
-    // Only "not there" is an empty answer. Any other failure leaves whatever
-    // the file holds unread and unnamed, which is not the same thing.
-    let raw = match fs::read_to_string(file_path) {
-        Ok(raw) => raw,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
-        Err(e) => {
-            return Err(anyhow::Error::from(e)
-                .context(format!("Failed to read credentials file {file_path:?}")));
-        }
-    };
+    let raw = fs::read_to_string(file_path)
+        .with_context(|| format!("Failed to read credentials file {file_path:?}"))?;
     serde_json::from_str(&raw).with_context(|| {
         format!(
             "Failed to parse credentials file {file_path:?} — it is not rewritten over, because \
@@ -876,10 +910,35 @@ mod tests {
                 std::io::Error::other("the keychain is locked"),
             )));
 
-        let err = store.load().await.unwrap_err().to_string();
+        let err = store.load().await.unwrap_err();
 
-        assert!(err.contains("would not answer"), "{err}");
-        assert!(err.contains("locked"), "{err}");
+        // Downcast, not prose: `auth status` reports this one outcome and
+        // raises every other, and it tells them apart by type.
+        let unknown = err
+            .downcast_ref::<SessionUnknown>()
+            .expect("the one outcome a caller reports rather than raises");
+        assert_eq!(unknown.profile, "locked-read");
+        assert!(unknown.reason.contains("locked"), "{unknown}");
+    }
+
+    /// The same reading on the way in: a link whose target is away answers
+    /// `NotFound` about the target, and calling that an empty store reports no
+    /// session for one that comes back with the volume.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn loading_through_a_link_whose_target_is_away_is_not_an_empty_store() {
+        mock_keychain();
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("credentials.json");
+        std::os::unix::fs::symlink(dir.path().join("unmounted.json"), &link).unwrap();
+
+        let err = TokenStore::at("away-read", link)
+            .load()
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("Failed to read credentials file"), "{err}");
     }
 
     /// A keychain that refuses must not take the file store down with it: the

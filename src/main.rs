@@ -2042,11 +2042,18 @@ async fn handle_auth(
             // answers. Only an OAuth profile has a session to look for.
             let session = match TokenStore::new(&config.profile)?.load().await {
                 Ok(session) => session,
-                Err(e) if method == Some(AuthMethod::OAuth) => {
-                    println!("Session unknown (profile: {}): {e:#}", config.profile);
+                // Only this one outcome: saying what is stored is the command's
+                // job, and "the keychain would not answer" is one of the
+                // answers. Every other failure is a failure, and swallowing it
+                // would report no stored session from code that read none.
+                Err(e)
+                    if e.downcast_ref::<atlassian_cli::auth::SessionUnknown>()
+                        .is_some() =>
+                {
+                    println!("Session unknown (profile: {}): {e}", config.profile);
                     return Ok(());
                 }
-                Err(_) => None,
+                Err(e) => return Err(e),
             };
 
             match (method, &session) {
