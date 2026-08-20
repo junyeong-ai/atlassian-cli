@@ -8,7 +8,9 @@ Everything runs in-process — `reqwest` for the download, `sha2` for the checks
 
 `skill.rs` carries `SKILL.md` through `include_str!`. There is one artifact, so a deployed copy cannot be a different version from the binary — and `SkillState` is decided by **byte comparison**, not a version string, so an edited copy is detected too. Adding a file to the skill is a line in `FILES`; editing one rebuilds the binary that carries it.
 
-`deploy` also removes anything in the skill directory that this binary does not carry, so the directory states this version and nothing else. A test asserts `SKILL.md`'s `version:` equals `CARGO_PKG_VERSION` — bump both together.
+`deploy` also removes the files in the skill directory that this binary does not carry, so the directory states this version and nothing else. That set is deliberately narrow, because it is a set the code *deletes*: regular files, one level deep, classified with `symlink_metadata`, and empty for a directory that is itself a symlink. Following any of those resolves the deletion somewhere it was never pointed — a link inside the directory, or a skill directory the user redirected into a dotfiles repository. `FILES` must therefore stay flat; a test enforces it, along with `SKILL.md`'s `version:` equalling `CARGO_PKG_VERSION`.
+
+`remove` takes the skill directory and an emptied `~/.claude/skills`, never `~/.claude` — that one holds the agent's own state.
 
 Deliberately absent: fetching the skill from a git ref, and detecting a source checkout to prefer. Both existed in the shell installer and were the mechanism by which the skill and binary drifted.
 
@@ -38,6 +40,10 @@ Every target publishes a `.tar.gz`, Windows included, so there is one extraction
 
 ## Uninstall enumerates rather than guesses
 
-Every platform store `keyring-core` links (macOS Keychain, Windows Credential Manager, Secret Service) implements `search`, so `auth::stored_profiles` lists the entries under the `atlassian-cli` service and that is the complete set. Where a store still answers `NotSupportedByStore`, `KeyringEnumeration` reports it instead of the caller claiming completeness — telling someone their credentials are gone when they are not is the failure to avoid.
+Every platform store `keyring-core` links (macOS Keychain, Windows Credential Manager, Secret Service) implements `search`, so `auth::stored_profiles` lists the entries under the `atlassian-cli` service and that is the complete set. An enumeration that did not happen — a store that cannot search, or `ATLASSIAN_NO_KEYCHAIN` forbidding the look — **refuses the uninstall before anything is removed**. The step after clearing tokens deletes the binary, so proceeding would leave tokens behind along with nothing that knows where they are. `TokenStore::delete` propagates a keychain that refused for the same reason; only "nothing there" and "no keychain in play" count as success.
 
 The credentials file is removed because it belongs to this installation, not because its contents parsed; a corrupt one still holds tokens.
+
+`--purge-config` removes the config file this tool writes and then the directory only if that leaves it empty. `credentials.json` lives in that directory, so a `remove_dir_all` there would take it whatever `--keep-credentials` said — and would take anything else the user keeps beside it.
+
+The binary goes last and through `self_replace::self_delete_at`: Windows refuses to unlink a running executable, so a plain `remove_file` would fail there after everything else had already gone. A failure at that point names what was already removed, because "Permission denied" alone reads as "nothing happened".

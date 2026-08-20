@@ -59,7 +59,9 @@ impl std::fmt::Display for DistError {
             | DistError::Network(message)
             | DistError::Release(message)
             | DistError::Integrity(message) => f.write_str(message),
-            DistError::Io { context, source } => write!(f, "{context}: {source}"),
+            // Not the source: `source()` exposes it, and anyhow's chain
+            // rendering would print it a second time.
+            DistError::Io { context, .. } => f.write_str(context),
         }
     }
 }

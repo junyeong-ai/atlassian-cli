@@ -1049,26 +1049,41 @@ async fn self_uninstall(
         }
     }
 
+    // Remove the file this tool wrote, then the directory only if that leaves
+    // it empty. `credentials.json` lives here too, so a whole-directory delete
+    // would take it whatever `--keep-credentials` said — and would take
+    // anything else the user keeps here besides.
     if let Some(dir) = installation.config_dir()
         && dir.is_dir()
     {
         if purge_config {
-            std::fs::remove_dir_all(&dir)?;
-            record("config", dir.display().to_string());
+            if let Some(file) = installation.config_file()
+                && file.exists()
+            {
+                std::fs::remove_file(&file)?;
+                record("config", file.display().to_string());
+            }
+            if std::fs::remove_dir(&dir).is_ok() {
+                record("config", dir.display().to_string());
+            }
         } else {
             kept.push("config");
         }
     }
 
+    // Last, and through `self-replace`: Windows refuses to unlink a running
+    // executable, so a plain `remove_file` would fail there after everything
+    // above had already gone.
     let binary = installation.binary();
-    match std::fs::remove_file(binary) {
-        Ok(()) => record("binary", binary.display().to_string()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => {
-            return Err(
-                anyhow::Error::from(e).context(format!("Failed to remove {}", binary.display()))
-            );
+    if binary.exists() {
+        if let Err(e) = self_replace::self_delete_at(binary) {
+            return Err(anyhow::Error::from(e).context(format!(
+                "Failed to remove {} — already removed: {}",
+                binary.display(),
+                removed_summary(&removed)
+            )));
         }
+        record("binary", binary.display().to_string());
     }
 
     Ok(serde_json::json!({
@@ -1079,20 +1094,53 @@ async fn self_uninstall(
     }))
 }
 
+/// What an uninstall has already done, for an error raised after the fact.
+///
+/// A failure at the last step used to discard the record entirely, so a user
+/// whose install directory was read-only read "Permission denied" and could not
+/// tell that their tokens were already gone.
+fn removed_summary(removed: &[serde_json::Value]) -> String {
+    if removed.is_empty() {
+        return "nothing".to_string();
+    }
+    removed
+        .iter()
+        .filter_map(|entry| entry["target"].as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Discard every stored token, and the file that holds the fallback copies.
 ///
 /// The keychain is enumerated rather than guessed at: every platform store this
 /// binary links implements search, so the entries under this service are the
-/// whole set. Where a store still answers that it cannot search, that is
-/// reported instead of being papered over — tokens may remain, and telling
-/// someone their credentials are gone when they are not is the failure to avoid.
+/// whole set. An enumeration that did not happen is refused rather than
+/// reported, because the step after this one removes the binary — leaving
+/// tokens behind along with nothing that knows where they are.
 async fn clear_stored_tokens(
     installation: &atlassian_cli::dist::Installation,
     record: &mut impl FnMut(&str, String),
 ) -> Result<serde_json::Value> {
-    use atlassian_cli::auth::TokenStore;
+    use atlassian_cli::auth::{KeyringEnumeration, TokenStore};
 
     let stored = atlassian_cli::auth::stored_profiles().await;
+    if stored.keyring != KeyringEnumeration::Listed {
+        anyhow::bail!(
+            "the keychain could not be listed ({}{}), so the tokens it holds cannot be cleared — \
+             nothing was removed. Clear it first, or re-run with --keep-credentials and delete {} \
+             yourself if this machine keeps its tokens there",
+            stored.keyring.as_str(),
+            stored
+                .keyring
+                .reason()
+                .map(|reason| format!(": {reason}"))
+                .unwrap_or_default(),
+            installation
+                .credentials_file()
+                .map(|file| file.display().to_string())
+                .unwrap_or_else(|| "the credentials file".to_string())
+        );
+    }
     for profile in &stored.profiles {
         TokenStore::new(profile.clone())?.delete().await?;
         record("credentials", format!("profile:{profile}"));

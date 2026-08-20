@@ -225,15 +225,27 @@ impl TokenStore {
         }
     }
 
-    /// Delete tokens from both backends. Best-effort cleanup; never errors
-    /// on missing entries.
+    /// Delete this profile's tokens from both backends.
+    ///
+    /// A keychain that holds nothing, or that is not in play on this platform
+    /// at all, leaves nothing to delete and is success. A keychain that exists
+    /// and refused — locked, or a prompt the user denied — is a failure, and
+    /// reporting it as success is how `auth logout` and `self uninstall` came
+    /// to say a token was gone while it was still there.
     pub async fn delete(&self) -> Result<()> {
         match self.keyring_op(|e| e.delete_credential()).await {
-            Ok(()) | Err(KeyringError::NoEntry) => {}
-            Err(e) => tracing::debug!("Keyring delete returned: {}", e),
+            Ok(())
+            | Err(KeyringError::NoEntry)
+            | Err(KeyringError::NoDefaultStore)
+            | Err(KeyringError::NotSupportedByStore(_)) => {}
+            Err(e) => {
+                return Err(anyhow::anyhow!(e).context(format!(
+                    "Failed to clear the keychain entry for '{}'",
+                    self.profile
+                )));
+            }
         }
-        let _ = self.file_delete();
-        Ok(())
+        self.file_delete()
     }
 
     /// Run a keyring operation off the async runtime. Native stores expose

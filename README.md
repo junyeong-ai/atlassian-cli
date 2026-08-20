@@ -145,7 +145,7 @@ atlassian-cli self uninstall --yes [--keep-skill] [--keep-credentials] [--purge-
 
 - skill 은 바이너리에 컴파일되어 들어갑니다. 버전이 어긋날 수 없고, `self status` 는 배포본을 **바이트 비교**로 판정하므로 직접 수정한 사본도 `stale` 로 잡힙니다.
 - `self update` 는 내려받은 바이너리를 **교체 전에** 실행해 버전을 확인합니다. 이 기계에서 돌지 않는 바이너리는 아무것도 건드리지 않고 실패합니다.
-- `self uninstall` 은 OS 키체인에 남은 OAuth 토큰까지 지웁니다 (`--keep-credentials` 로 보존). 글로벌 설정은 기본 보존이며 `--purge-config` 로 제거합니다. 프로젝트 로컬 설정(`.atlassian.toml`)은 건드리지 않습니다.
+- `self uninstall` 은 OS 키체인에 남은 OAuth 토큰까지 지웁니다 (`--keep-credentials` 로 보존). 키체인을 열거할 수 없으면 **아무것도 지우지 않고 거부**합니다 — 토큰을 남긴 채 바이너리만 사라지는 게 최악이기 때문입니다. `--purge-config` 는 이 도구가 쓴 설정 파일을 지우고 디렉터리는 비었을 때만 지우므로, `--keep-credentials` 와 함께 써도 `credentials.json` 은 남습니다. 프로젝트 로컬 설정(`.atlassian.toml`)은 건드리지 않습니다.
 **Requirement**: Rust 1.97.1+ (소스 빌드 시).
 
 ---

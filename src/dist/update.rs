@@ -44,7 +44,11 @@ pub fn decide(
 ) -> Option<Decision> {
     let target = requested.or(latest)?;
 
-    Some(match precedence(target, running) {
+    // `cmp_precedence`, not `cmp`: `Ord` has to agree with `Eq`, so `Version`
+    // orders by build metadata, which the specification says carries none.
+    // Under `cmp`, `1.2.3+build.5` is neither older than nor the same as
+    // `1.2.3` and resolves to an update onto the version already installed.
+    Some(match target.cmp_precedence(running) {
         Ordering::Less if requested.is_none() => Decision::RefusedDowngrade {
             running: running.clone(),
             offered: target.clone(),
@@ -55,24 +59,6 @@ pub fn decide(
             to: target.clone(),
         },
     })
-}
-
-/// Semver precedence, which is not `Version`'s own ordering.
-///
-/// `Ord` has to agree with `Eq`, and `Eq` separates two builds of one version —
-/// so `Version` orders by build metadata, which the specification says carries
-/// no precedence. Comparing the pair with that field cleared is the crate's
-/// ordering for everything that counts, minus the one field that must not:
-/// without it `1.2.3+build.5` reads as neither older than nor the same as
-/// `1.2.3`, which resolves to an update onto the version already installed.
-fn precedence(a: &Version, b: &Version) -> Ordering {
-    fn bare(version: &Version) -> Version {
-        Version {
-            build: semver::BuildMetadata::EMPTY,
-            ..version.clone()
-        }
-    }
-    bare(a).cmp(&bare(b))
 }
 
 /// A private directory for the archive and what is unpacked from it.
@@ -86,12 +72,17 @@ pub struct Staging(tempfile::TempDir);
 
 impl Staging {
     pub fn new() -> Result<Self, DistError> {
-        let dir = tempfile::Builder::new()
-            .prefix("atlassian-cli-update-")
+        let mut builder = tempfile::Builder::new();
+        builder.prefix("atlassian-cli-update-");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            builder.permissions(std::fs::Permissions::from_mode(0o700));
+        }
+        builder
             .tempdir()
-            .map_err(|e| DistError::io("creating a private staging directory", e))?;
-        restrict_to_owner(dir.path())?;
-        Ok(Staging(dir))
+            .map(Staging)
+            .map_err(|e| DistError::io("creating a private staging directory", e))
     }
 
     pub fn write(&self, name: &str, bytes: &[u8]) -> Result<PathBuf, DistError> {
@@ -200,21 +191,6 @@ fn make_executable(path: &Path) -> Result<(), DistError> {
 
 #[cfg(not(unix))]
 fn make_executable(_path: &Path) -> Result<(), DistError> {
-    Ok(())
-}
-
-/// `tempfile` creates the directory exclusively under a random name, which is
-/// what closes the pre-created-symlink hole; the mode it lands on is the
-/// process umask's, so the narrower one is set here rather than assumed.
-#[cfg(unix)]
-fn restrict_to_owner(path: &Path) -> Result<(), DistError> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
-        .map_err(|e| DistError::io(format!("restricting {}", path.display()), e))
-}
-
-#[cfg(not(unix))]
-fn restrict_to_owner(_path: &Path) -> Result<(), DistError> {
     Ok(())
 }
 
