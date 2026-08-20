@@ -424,12 +424,16 @@ impl TokenStore {
         // A file that cannot be read still holds whatever is in it, so calling
         // that a cleared session is the same lie as swallowing a keychain that
         // refused.
+        // Before the lookup, not after it: a link whose target is gone or not
+        // mounted reads as an empty map, so a profile that is in fact stored
+        // there is "not found", nothing is written or unlinked, and the call
+        // reports a cleared session. The target comes back with the token.
+        owned_credentials_file(&self.file_path)?;
         let mut all = self.file_read_all()?;
         if all.remove(&self.profile).is_some() {
             if all.is_empty() {
                 remove_credentials_file(&self.file_path)?;
             } else {
-                owned_credentials_file(&self.file_path)?;
                 let parent = self
                     .file_path
                     .parent()
@@ -998,6 +1002,32 @@ mod tests {
             "{err:#}"
         );
         assert_eq!(fs::read_to_string(&path).unwrap(), "{ not json");
+    }
+
+    /// A link whose target is away reads as an empty file, so the profile
+    /// stored behind it is "not there", nothing happens, and the call reports
+    /// a cleared session. The target comes back holding the token.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn clearing_through_a_link_whose_target_is_away_is_refused() {
+        mock_keychain();
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("credentials.json");
+        std::os::unix::fs::symlink(dir.path().join("unmounted.json"), &link).unwrap();
+
+        let err = TokenStore::at("away", link.clone())
+            .delete()
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("not a regular file"), "{err}");
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 
     /// Unlinking a symlink removes the link. The tokens stay readable where it
