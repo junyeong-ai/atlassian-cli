@@ -452,6 +452,17 @@ impl<'a> ThreadWalk<'a> {
             .collect();
 
         while let Some((mut comment, parent, depth)) = pending.pop() {
+            // Counted together, because they grow at different rates: each
+            // admitted comment adds one to `seen` and up to a page of replies
+            // to `pending`, so bounding the admitted set alone would let the
+            // queue exhaust memory long before the ceiling was reached.
+            if self.seen.len() + pending.len() >= self.limit {
+                anyhow::bail!(
+                    "Failed to {what}: more than {} comments in one thread walk — aborting to \
+                     avoid an unbounded walk",
+                    self.limit
+                );
+            }
             let id = self.admit(what, &mut comment, parent, depth)?;
             out.push(comment);
 
@@ -497,13 +508,6 @@ impl<'a> ThreadWalk<'a> {
         };
         if !self.seen.insert(id.clone()) {
             anyhow::bail!("Failed to {what}: comment {id} is reachable from itself");
-        }
-        if self.seen.len() > self.limit {
-            anyhow::bail!(
-                "Failed to {what}: more than {} comments in one thread walk — aborting to avoid \
-                 an unbounded walk",
-                self.limit
-            );
         }
 
         object.insert("location".into(), json!(self.family.label()));
@@ -2439,6 +2443,47 @@ mod tests {
         .unwrap();
         let mut walk = ThreadWalk::new(&client, CommentFamily::Footer, Some("5"), true);
         walk.limit = 3;
+        let err = walk
+            .collect("get comments", roots, None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unbounded walk"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn integ_thread_walk_counts_the_replies_it_is_holding_not_only_the_ones_it_took() {
+        let server = MockServer::start().await;
+        // One level of a wide reply set already outgrows the comments admitted
+        // so far, which is why the ceiling counts the queue too.
+        mount_comments(
+            &server,
+            "/wiki/api/v2/pages/5/footer-comments",
+            json!([{ "id": "root" }]),
+        )
+        .await;
+        mount_comments(
+            &server,
+            "/wiki/api/v2/footer-comments/root/children",
+            json!(
+                (0..10)
+                    .map(|n| json!({ "id": format!("r{n}") }))
+                    .collect::<Vec<_>>()
+            ),
+        )
+        .await;
+
+        let client = mock_client(server.uri());
+        let roots = fetch_all_v2_results(
+            &client,
+            "get comments",
+            &CommentFamily::Footer.page_path("5"),
+            &comment_query(),
+        )
+        .await
+        .unwrap();
+        let mut walk = ThreadWalk::new(&client, CommentFamily::Footer, Some("5"), true);
+        walk.limit = 5;
         let err = walk
             .collect("get comments", roots, None)
             .await

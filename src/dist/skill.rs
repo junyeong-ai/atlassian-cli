@@ -56,7 +56,10 @@ pub fn state(dir: &Path) -> SkillState {
     if !dir.is_dir() {
         return SkillState::Absent;
     }
-    if deployed_files(dir) != carried_names() {
+    // Only where this tool reconciles the directory: elsewhere a file it does
+    // not carry is not a difference to report, because it is not one `deploy`
+    // would remove.
+    if reconcilable_files(dir).is_some_and(|found| found != carried_names()) {
         return SkillState::Stale;
     }
     for (relative, contents) in FILES {
@@ -73,11 +76,13 @@ pub fn state(dir: &Path) -> SkillState {
 pub fn deploy(dir: &Path) -> Result<Deployed, DistError> {
     let mut outcome = Deployed::default();
 
-    for stale in deployed_files(dir).difference(&carried_names()) {
-        let path = dir.join(stale);
-        std::fs::remove_file(&path)
-            .map_err(|e| DistError::io(format!("removing {}", path.display()), e))?;
-        outcome.pruned.push(stale.clone());
+    if let Some(found) = reconcilable_files(dir) {
+        for stale in found.difference(&carried_names()) {
+            let path = dir.join(stale);
+            std::fs::remove_file(&path)
+                .map_err(|e| DistError::io(format!("removing {}", path.display()), e))?;
+            outcome.pruned.push(stale.clone());
+        }
     }
 
     for (relative, contents) in FILES {
@@ -116,28 +121,30 @@ fn carried_names() -> BTreeSet<String> {
         .collect()
 }
 
-/// The regular files this tool owns in `dir` — the set `deploy` deletes from,
-/// and `state` measures against.
+/// The regular files in `dir` this tool reconciles — the set `deploy` deletes
+/// from, and the one `state` measures against. `None` where the directory is
+/// not this tool's to reconcile.
 ///
-/// Deliberately shallow, symlink-blind, and empty for a directory this tool did
-/// not create, because every one of those is a way the deletion reaches
-/// somewhere it was never pointed. A symlinked entry would resolve the removal
-/// through it; a skill directory the user redirected into a dotfiles repository
-/// is a directory whose contents are theirs, not a deployment to reconcile.
-fn deployed_files(dir: &Path) -> BTreeSet<String> {
+/// Deliberately shallow and symlink-blind, because every alternative is a way
+/// the deletion reaches somewhere it was never pointed: a symlinked entry would
+/// resolve the removal through it, and a skill directory the user redirected
+/// into a dotfiles repository holds their files, not a deployment. There the
+/// answer is `None` rather than an empty set — nothing to prune, and nothing
+/// there counts as a difference either.
+fn reconcilable_files(dir: &Path) -> Option<BTreeSet<String>> {
     if !std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.file_type().is_dir()) {
-        return BTreeSet::new();
+        return None;
     }
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return BTreeSet::new();
-    };
-    entries
-        .flatten()
-        .filter(|entry| {
-            std::fs::symlink_metadata(entry.path()).is_ok_and(|meta| meta.file_type().is_file())
-        })
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .collect()
+    Some(
+        std::fs::read_dir(dir)
+            .ok()?
+            .flatten()
+            .filter(|entry| {
+                std::fs::symlink_metadata(entry.path()).is_ok_and(|meta| meta.file_type().is_file())
+            })
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect(),
+    )
 }
 
 /// Everything this binary carries, for a caller that reports rather than writes.
@@ -238,6 +245,11 @@ mod tests {
         assert!(repo.join("README.md").is_file());
         assert!(repo.join("nested/deep.txt").is_file());
         assert!(repo.join("SKILL.md").is_file(), "the skill was not written");
+        // Files this tool would never prune are not a difference to report, so
+        // a deploy that succeeded reads as current rather than stale forever.
+        assert_eq!(state(&dir), SkillState::Current);
+        std::fs::write(dir.join("SKILL.md"), "edited").unwrap();
+        assert_eq!(state(&dir), SkillState::Stale);
 
         // And removing the skill takes the link, not what it points at.
         assert!(remove(&dir).unwrap());
