@@ -56,8 +56,7 @@ pub fn state(dir: &Path) -> SkillState {
     if !dir.is_dir() {
         return SkillState::Absent;
     }
-    let carried: BTreeSet<&str> = FILES.iter().map(|(relative, _)| *relative).collect();
-    if deployed_files(dir) != carried.iter().map(|r| r.to_string()).collect() {
+    if deployed_files(dir) != carried_names() {
         return SkillState::Stale;
     }
     for (relative, contents) in FILES {
@@ -69,16 +68,12 @@ pub fn state(dir: &Path) -> SkillState {
     SkillState::Current
 }
 
-/// Write every carried file into `dir`, and remove anything there that this
+/// Write every carried file into `dir`, and remove the files there that this
 /// binary does not carry.
 pub fn deploy(dir: &Path) -> Result<Deployed, DistError> {
     let mut outcome = Deployed::default();
-    let carried: BTreeSet<String> = FILES
-        .iter()
-        .map(|(relative, _)| (*relative).to_string())
-        .collect();
 
-    for stale in deployed_files(dir).difference(&carried) {
+    for stale in deployed_files(dir).difference(&carried_names()) {
         let path = dir.join(stale);
         std::fs::remove_file(&path)
             .map_err(|e| DistError::io(format!("removing {}", path.display()), e))?;
@@ -98,50 +93,51 @@ pub fn deploy(dir: &Path) -> Result<Deployed, DistError> {
     Ok(outcome)
 }
 
-/// Remove the deployed skill, reporting whether there was one. Empty ancestors
-/// go too, up to but never including the home directory: a `~/.claude` this
-/// tool emptied is one it created.
+/// Remove the deployed skill, reporting whether there was one.
+///
+/// `remove_dir_all` does not follow a symlink, so a skill directory the user
+/// pointed elsewhere loses the link and nothing behind it. An emptied
+/// `~/.claude/skills` goes too, but never `~/.claude` itself — that one belongs
+/// to the agent, not to this tool.
 pub fn remove(dir: &Path) -> Result<bool, DistError> {
     if !dir.exists() {
         return Ok(false);
     }
     std::fs::remove_dir_all(dir)
         .map_err(|e| DistError::io(format!("removing {}", dir.display()), e))?;
-    prune_empty_ancestors(dir, 2);
+    let _ = dir.parent().map(std::fs::remove_dir);
     Ok(true)
 }
 
-/// Every file under `dir`, addressed the way `FILES` addresses them.
+fn carried_names() -> BTreeSet<String> {
+    FILES
+        .iter()
+        .map(|(relative, _)| (*relative).to_string())
+        .collect()
+}
+
+/// The regular files this tool owns in `dir` — the set `deploy` deletes from,
+/// and `state` measures against.
+///
+/// Deliberately shallow, symlink-blind, and empty for a directory this tool did
+/// not create, because every one of those is a way the deletion reaches
+/// somewhere it was never pointed. A symlinked entry would resolve the removal
+/// through it; a skill directory the user redirected into a dotfiles repository
+/// is a directory whose contents are theirs, not a deployment to reconcile.
 fn deployed_files(dir: &Path) -> BTreeSet<String> {
-    let mut found = BTreeSet::new();
-    collect(dir, dir, &mut found);
-    found
-}
-
-fn collect(root: &Path, dir: &Path, into: &mut BTreeSet<String>) {
+    if !std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.file_type().is_dir()) {
+        return BTreeSet::new();
+    }
     let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+        return BTreeSet::new();
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect(root, &path, into);
-        } else if let Ok(relative) = path.strip_prefix(root) {
-            into.insert(relative.to_string_lossy().replace('\\', "/"));
-        }
-    }
-}
-
-fn prune_empty_ancestors(from: &Path, levels: usize) {
-    let home = dirs::home_dir();
-    let mut current = from.parent().map(Path::to_path_buf);
-    for _ in 0..levels {
-        let Some(dir) = current else { return };
-        if home.as_deref() == Some(dir.as_path()) || std::fs::remove_dir(&dir).is_err() {
-            return;
-        }
-        current = dir.parent().map(Path::to_path_buf);
-    }
+    entries
+        .flatten()
+        .filter(|entry| {
+            std::fs::symlink_metadata(entry.path()).is_ok_and(|meta| meta.file_type().is_file())
+        })
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect()
 }
 
 /// Everything this binary carries, for a caller that reports rather than writes.
@@ -187,6 +183,65 @@ mod tests {
     #[test]
     fn the_skill_carries_the_file_an_agent_loads() {
         assert!(carried_files().contains(&"SKILL.md"));
+    }
+
+    /// `deployed_files` reads one directory level and compares file names, and
+    /// it is the set `deploy` deletes from. A carried file addressed into a
+    /// subdirectory would never match, so every deploy would delete it and
+    /// write it back.
+    #[test]
+    fn every_carried_file_sits_directly_in_the_skill_directory() {
+        for name in carried_files() {
+            assert!(!name.contains('/'), "`{name}` is not a direct child");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_in_the_skill_directory_is_left_alone_rather_than_followed() {
+        let root = tempfile::tempdir().unwrap();
+        let victim = root.path().join("victim");
+        std::fs::create_dir_all(&victim).unwrap();
+        std::fs::write(victim.join("precious.txt"), "not ours").unwrap();
+
+        let dir = root.path().join(".claude/skills").join(SKILL_NAME);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::os::unix::fs::symlink(&victim, dir.join("link")).unwrap();
+
+        let outcome = deploy(&dir).unwrap();
+        assert!(outcome.pruned.is_empty(), "{:?}", outcome.pruned);
+        assert!(
+            victim.join("precious.txt").is_file(),
+            "deploy reached through a symlink and deleted a file it does not own"
+        );
+        assert!(dir.join("link").is_symlink(), "the link itself was removed");
+    }
+
+    /// A skill directory symlinked into a dotfiles repository is the shape
+    /// where a recursive prune is most costly: everything in the repository is
+    /// a file this binary does not carry.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_skill_directory_does_not_have_its_target_emptied() {
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path().join("dotfiles");
+        std::fs::create_dir_all(repo.join("nested")).unwrap();
+        std::fs::write(repo.join("README.md"), "mine").unwrap();
+        std::fs::write(repo.join("nested/deep.txt"), "also mine").unwrap();
+
+        let skills = root.path().join(".claude/skills");
+        std::fs::create_dir_all(&skills).unwrap();
+        let dir = skills.join(SKILL_NAME);
+        std::os::unix::fs::symlink(&repo, &dir).unwrap();
+
+        deploy(&dir).unwrap();
+        assert!(repo.join("README.md").is_file());
+        assert!(repo.join("nested/deep.txt").is_file());
+        assert!(repo.join("SKILL.md").is_file(), "the skill was not written");
+
+        // And removing the skill takes the link, not what it points at.
+        assert!(remove(&dir).unwrap());
+        assert!(repo.join("README.md").is_file(), "the target was removed");
     }
 
     #[test]
@@ -241,6 +296,9 @@ mod tests {
             !home.path().join(".claude/skills").exists(),
             "an emptied skills directory is left behind"
         );
+        // `~/.claude` holds the agent's own state and is not this tool's to
+        // remove, however empty this leaves it.
+        assert!(home.path().join(".claude").is_dir());
         assert!(!remove(&dir).unwrap());
     }
 
