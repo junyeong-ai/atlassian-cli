@@ -422,7 +422,10 @@ impl TokenStore {
 /// stays readable at the far end while the call reports them cleared.
 fn owned_credentials_file(path: &std::path::Path) -> Result<bool> {
     match fs::symlink_metadata(path) {
-        Err(_) => Ok(false),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => {
+            Err(anyhow::Error::from(e).context(format!("Failed to read credentials file {path:?}")))
+        }
         Ok(meta) if meta.file_type().is_file() => Ok(true),
         Ok(_) => anyhow::bail!(
             "Credentials file {path:?} is not a regular file, so clearing it would leave the \
@@ -441,9 +444,6 @@ pub fn remove_credentials_file(path: &std::path::Path) -> Result<bool> {
 }
 
 fn read_all_from(file_path: &std::path::Path) -> Result<HashMap<String, OnDisk>> {
-    if !file_path.exists() {
-        return Ok(HashMap::new());
-    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -458,8 +458,16 @@ fn read_all_from(file_path: &std::path::Path) -> Result<HashMap<String, OnDisk>>
             }
         }
     }
-    let raw = fs::read_to_string(file_path)
-        .with_context(|| format!("Failed to read credentials file {file_path:?}"))?;
+    // Only "not there" is an empty answer. Any other failure leaves whatever
+    // the file holds unread and unnamed, which is not the same thing.
+    let raw = match fs::read_to_string(file_path) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
+        Err(e) => {
+            return Err(anyhow::Error::from(e)
+                .context(format!("Failed to read credentials file {file_path:?}")));
+        }
+    };
     serde_json::from_str(&raw)
         .with_context(|| format!("Failed to parse credentials file {file_path:?}"))
 }
@@ -856,6 +864,30 @@ mod tests {
                 .file_error
                 .is_some_and(|reason| reason.contains("credentials")),
             "an unreadable file passed for an empty one"
+        );
+    }
+
+    /// A file that cannot be opened is not a file with nothing in it. Reading
+    /// the failure as an empty answer is what lets an uninstall report every
+    /// profile cleared without having read one.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_credentials_file_that_cannot_be_opened_says_so() {
+        use std::os::unix::fs::PermissionsExt;
+        set_default_store(keyring_core::mock::Store::new().unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        let closed = dir.path().join("closed");
+        fs::create_dir(&closed).unwrap();
+        let path = closed.join("credentials.json");
+        fs::write(&path, "{}").unwrap();
+        fs::set_permissions(&closed, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let stored = stored_profiles(&path).await;
+        fs::set_permissions(&closed, fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert!(
+            stored.file_error.is_some(),
+            "a file that would not open passed for an empty one"
         );
     }
 

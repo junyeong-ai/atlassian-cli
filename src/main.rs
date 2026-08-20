@@ -877,7 +877,7 @@ async fn self_status(
         "skill": skill_dir(installation).ok().as_deref().map(skill_report),
         "config": {
             "path": config_file.as_deref().map(display_path),
-            "exists": config_file.as_deref().is_some_and(std::path::Path::exists),
+            "exists": config_file.as_deref().map(present).transpose()?,
         },
         "credentials": credentials_report(&stored, credentials_file.as_deref()),
     }))
@@ -1037,11 +1037,8 @@ async fn self_uninstall(
             .map_err(|e| already_removed(e, &removed))?
     };
 
-    // `symlink_metadata`, not `exists`: the latter resolves the link and reports
-    // a dangling one as nothing there, which is the state `skill::remove` was
-    // written to clean up.
     if let Some(dir) = installation.skill_dir()
-        && std::fs::symlink_metadata(&dir).is_ok()
+        && present(&dir).map_err(|e| already_removed(e, &removed))?
     {
         if keep_skill {
             kept.push("skill");
@@ -1055,11 +1052,11 @@ async fn self_uninstall(
     // would take it whatever `--keep-credentials` said — and would take
     // anything else the user keeps here besides.
     if let Some(dir) = installation.config_dir()
-        && dir.is_dir()
+        && present(&dir).map_err(|e| already_removed(e, &removed))?
     {
         if purge_config {
             if let Some(file) = installation.config_file()
-                && file.exists()
+                && present(&file).map_err(|e| already_removed(e, &removed))?
             {
                 std::fs::remove_file(&file).map_err(|e| already_removed(e.into(), &removed))?;
                 record(&mut removed, "config", file.display().to_string());
@@ -1080,7 +1077,7 @@ async fn self_uninstall(
     // executable, so a plain `remove_file` would fail there after everything
     // above had already gone.
     let binary = installation.binary();
-    if binary.exists() {
+    if present(binary).map_err(|e| already_removed(e, &removed))? {
         if let Err(e) = self_replace::self_delete_at(binary) {
             return Err(already_removed(
                 anyhow::Error::from(e).context(format!("Failed to remove {}", binary.display())),
@@ -1213,6 +1210,21 @@ fn token_store(
         .credentials_file()
         .ok_or_else(|| anyhow::anyhow!("Failed to determine home directory"))?;
     Ok(atlassian_cli::auth::TokenStore::at(profile, file))
+}
+
+/// Whether something is at this path, refusing to read a failure as an absence.
+///
+/// `exists` answers false both for "nothing there" and for "could not tell",
+/// and it resolves a symlink, so a dangling one reads as nothing there too.
+/// Every removal below is irreversible and ends with the binary that knows
+/// where the rest is, so a step skipped on either mistake is a thing left
+/// behind and reported gone.
+fn present(path: &std::path::Path) -> Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(anyhow::Error::from(e).context(format!("Failed to read {}", path.display()))),
+    }
 }
 
 /// A path as JSON. `Path` serializes only when it is UTF-8 and `json!` panics
@@ -2338,6 +2350,56 @@ mod tests {
 
         assert!(format!("{err:#}").contains("not a regular file"), "{err:#}");
         assert_eq!(std::fs::read_to_string(&real).unwrap(), r#"{"default":{}}"#);
+        assert!(installation.binary().exists());
+    }
+
+    /// A directory that will not open answers every question about what is
+    /// inside it with an error, and `exists` renders that as "nothing there".
+    /// Taking it that way removes the binary and reports a token gone that was
+    /// never reachable to clear.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_credentials_file_that_cannot_be_reached_stops_the_uninstall() {
+        use std::os::unix::fs::PermissionsExt;
+        mock_keychain();
+        let home = tempfile::tempdir().unwrap();
+        let installation = installation(home.path());
+        write_credentials(&installation, &["default"]);
+        let dir = installation.config_dir().unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let outcome = self_uninstall(&installation, true, false, false).await;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert!(
+            outcome.is_err(),
+            "an unreachable token file passed for an absent one"
+        );
+        assert!(installation.binary().exists());
+        assert!(installation.credentials_file().unwrap().is_file());
+    }
+
+    /// The same rule one step out: a skill directory that cannot be stat'd is
+    /// not an absent one, and stepping over it removes the binary and reports
+    /// a clean uninstall with the skill still deployed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_skill_directory_that_cannot_be_reached_stops_the_uninstall() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let installation = installation(home.path());
+        let dir = installation.skill_dir().unwrap();
+        skill::deploy(&dir).unwrap();
+        let parent = dir.parent().unwrap().to_path_buf();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let outcome = self_uninstall(&installation, false, true, false).await;
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert!(
+            outcome.is_err(),
+            "an unreachable skill passed for an absent one"
+        );
         assert!(installation.binary().exists());
     }
 

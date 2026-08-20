@@ -61,7 +61,7 @@ A refusal comes before the skill, the config and the binary, because removing th
 
 The credentials file is cleared first regardless — it belongs to this installation, and a keychain that cannot be reached is no reason to leave it. `TokenStore::delete` clears both backends independently for the same reason: the machines where the keychain refuses are the ones that keep tokens in the file. It goes through `auth::remove_credentials_file`, which requires the path to be the regular file the store wrote: unlinking a symlink clears the name and leaves every token readable at the far end.
 
-Nothing here uses `Path::exists` to decide whether something is there. It resolves the link, so a dangling one reads as absent — which is the state `skill::remove` classifies with `symlink_metadata` in order to clean up, and a guard at the call site would undo that.
+Nothing here uses `Path::exists` to decide whether something is there; `present` does. `exists` answers false to two different questions — nothing there, and could not tell — and it resolves a link, so a dangling one reads as absent too. Every step below is irreversible and the last one takes the binary that knows where the rest is, so a step skipped on either reading leaves something behind and calls it removed. Absence is concluded from `NotFound` alone.
 
 Paths reach a report through `display_path`. `json!` serializes a `Path` by unwrapping, so a path the platform allows and UTF-8 cannot spell would answer with a panic instead of the single-line error object the CLI contract promises.
 
