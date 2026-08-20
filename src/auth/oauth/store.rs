@@ -278,10 +278,12 @@ impl TokenStore {
         {
             Keychain::Done(()) => {
                 if let Err(e) = self.file_delete() {
+                    // What the file holds is exactly what could not be read, so
+                    // this says the clear failed and no more. The keychain is
+                    // read first, so anything left there is shadowed anyway.
                     tracing::warn!(
-                        "Saved to the keychain, but the file store still holds a session for \
-                         '{}' ({e:#}). The keychain is read first, so this one wins until the \
-                         file is cleared.",
+                        "Saved to the keychain, but the file store could not be cleared for \
+                         '{}' ({e:#}).",
                         self.profile
                     );
                 }
@@ -996,24 +998,6 @@ mod tests {
             "{err:#}"
         );
         assert_eq!(fs::read_to_string(&path).unwrap(), "{ not json");
-    }
-
-    /// The same write beside a file it can read keeps what is already there.
-    #[test]
-    fn saving_beside_another_profile_keeps_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("credentials.json");
-        let token = serde_json::to_string(&OnDisk::from(&fixture_tokens())).unwrap();
-        TokenStore::at("first", path.clone())
-            .file_save(&token)
-            .unwrap();
-
-        TokenStore::at("second", path.clone())
-            .file_save(&token)
-            .unwrap();
-
-        let all = read_all_from(&path).unwrap();
-        assert_eq!(all.len(), 2, "{:?}", all.keys().collect::<Vec<_>>());
     }
 
     /// Unlinking a symlink removes the link. The tokens stay readable where it

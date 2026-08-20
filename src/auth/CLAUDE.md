@@ -131,7 +131,13 @@ spells the separator the same way so both builders read identically.
   cannot find an older session first. That clear is **reported, never raised**:
   the save has already happened, and returning an error would tell an operator
   their login failed while they are logged in — and would fail every token
-  refresh on that machine besides.
+  refresh on that machine besides. The two branches are not equally harmless,
+  and the warnings say which is which. `load` reads the keychain first, so a
+  file entry left behind by a keychain save is shadowed; a keychain entry left
+  behind by a file save is the one a later read will find, and after rotation
+  its refresh token is the revoked one. Neither can be resolved from here — the
+  keychain that would not answer is the same one holding it — so the operator
+  is told, and `auth logout` once it answers is the remedy.
 - An unparseable `credentials.json` is never written over, because it still
   holds whatever sessions it names. That leaves no in-tool repair, so the parse
   error names the one there is: remove the file.
