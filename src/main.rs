@@ -2037,18 +2037,14 @@ async fn handle_auth(
                 overrides,
             )?;
             let method = config.auth.as_ref().map(|a| a.method());
-            // Only this one outcome: saying what is stored is the command's
-            // job, and "the keychain would not answer" is one of the answers.
-            let session = match TokenStore::new(&config.profile)?.load().await {
-                Ok(session) => session,
-                Err(e)
-                    if e.downcast_ref::<atlassian_cli::auth::SessionUnknown>()
-                        .is_some() =>
-                {
-                    println!("Session unknown (profile: {}): {e}", config.profile);
-                    return Ok(());
-                }
-                Err(e) => return Err(e),
+            // Reported, not raised, and not in place of the rest: saying what
+            // is configured and what is stored is this command's whole job, and
+            // a store that would not answer is one of those answers — for a
+            // profile whose credentials come from config it is not even the
+            // interesting one. `self status` carries the same fact as data.
+            let (session, unreadable) = match TokenStore::new(&config.profile)?.load().await {
+                Ok(session) => (session, None),
+                Err(e) => (None, Some(e)),
             };
 
             match (method, &session) {
@@ -2075,10 +2071,13 @@ async fn handle_auth(
                         }
                     );
                 }
-                (Some(AuthMethod::OAuth), None) => println!(
-                    "Not logged in (profile: {}). Run `atlassian-cli auth login`.",
-                    config.profile
-                ),
+                (Some(AuthMethod::OAuth), None) => match &unreadable {
+                    Some(e) => println!("Session unknown (profile: {}): {e}", config.profile),
+                    None => println!(
+                        "Not logged in (profile: {}). Run `atlassian-cli auth login`.",
+                        config.profile
+                    ),
+                },
                 (Some(method), _) => {
                     println!(
                         "Profile '{}' uses '{}' auth — credentials are read from config/env, \
@@ -2094,14 +2093,16 @@ async fn handle_auth(
             // be cleared rather than lingering unnoticed in the keychain — and
             // say when that could not be checked at all, because "no stale
             // session" is the reading a store nothing read must not produce.
-            if !matches!(method, Some(AuthMethod::OAuth))
-                && let Some(loaded) = &session
-            {
-                println!(
-                    "  Stale OAuth session present ({}) from an earlier configuration — \
-                     run `atlassian-cli auth logout` to clear it.",
-                    loaded.backend
-                );
+            if !matches!(method, Some(AuthMethod::OAuth)) {
+                if let Some(loaded) = &session {
+                    println!(
+                        "  Stale OAuth session present ({}) from an earlier configuration — \
+                         run `atlassian-cli auth logout` to clear it.",
+                        loaded.backend
+                    );
+                } else if let Some(e) = &unreadable {
+                    println!("  Whether a session is stored could not be read: {e}");
+                }
             }
             Ok(())
         }
