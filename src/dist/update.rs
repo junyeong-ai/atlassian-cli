@@ -133,7 +133,20 @@ pub fn version_of(binary: &Path) -> Result<Version, DistError> {
         .arg("--version")
         .stdin(std::process::Stdio::null())
         .output()
-        .map_err(|e| DistError::io(format!("running {}", binary.display()), e))?;
+        .map_err(|e| {
+            // A staging directory on a `noexec` mount — the usual hardening for
+            // /tmp — refuses this without saying why, and the way out is a
+            // different TMPDIR rather than anything about the download.
+            let context = match e.kind() {
+                std::io::ErrorKind::PermissionDenied => format!(
+                    "running {} — if the temporary directory is mounted noexec, \
+                     set TMPDIR to one that is not",
+                    binary.display()
+                ),
+                _ => format!("running {}", binary.display()),
+            };
+            DistError::io(context, e)
+        })?;
     if !output.status.success() {
         return Err(DistError::Integrity(format!(
             "{} exited {} when asked for its version",
