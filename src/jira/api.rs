@@ -413,18 +413,10 @@ pub async fn get_comments(issue_key: &str, as_markdown: bool, client: &ApiClient
         "/rest/api/3/issue/{}/comment",
         encode_path_segment(issue_key)
     );
+    let mut items = paginate(&url, &[], "get comments", COMMENT_PAGE, client).await?;
 
-    let request = client
-        .get(Service::Jira, &url)
-        .await?
-        .header("Accept", "application/json");
-    let response = client.execute("get comments", request).await?;
-
-    let mut data: Value = response.json().await?;
-    filter::apply(&mut data, client.config());
-
-    if as_markdown && let Some(comments) = data["comments"].as_array_mut() {
-        for comment in comments {
+    if as_markdown {
+        for comment in &mut items {
             if let Some(body) = comment.get_mut("body")
                 && body.is_object()
             {
@@ -433,7 +425,7 @@ pub async fn get_comments(issue_key: &str, as_markdown: bool, client: &ApiClient
         }
     }
 
-    Ok(json!({ "items": data["comments"] }))
+    Ok(json!({ "items": items }))
 }
 
 pub async fn get_link_types(client: &ApiClient) -> Result<Value> {
@@ -721,13 +713,48 @@ pub async fn get_watchers(issue_key: &str, client: &ApiClient) -> Result<Value> 
     Ok(json!({ "items": data["watchers"] }))
 }
 
-/// Loop through a paginated `values`/`isLast`/`startAt` endpoint and accumulate
-/// every item. Shared by endpoints that follow the Agile-style pagination
-/// contract (`/rest/api/3/label`, `/rest/agile/1.0/board`, sprints, etc.).
-async fn paginate_values(
+/// How a Jira collection reports that a page is the last one.
+///
+/// The two generations answer the same question in different terms and cannot
+/// be read interchangeably: an Agile collection states it outright, a classic
+/// one states only how many items exist. Holding the difference here keeps both
+/// on one loop instead of a second paginator that drifts from this one.
+#[derive(Clone, Copy)]
+enum PageEnd {
+    /// An `isLast` boolean.
+    IsLast,
+    /// A `total` count the accumulated length is measured against.
+    Total,
+}
+
+/// The shape of one paginated collection: where its items sit, and how it says
+/// it is finished.
+#[derive(Clone, Copy)]
+struct PageContract {
+    items: &'static str,
+    end: PageEnd,
+}
+
+/// `/rest/api/3/label`, `/rest/agile/1.0/board`, sprints — everything on the
+/// Agile-style contract.
+const AGILE_PAGE: PageContract = PageContract {
+    items: "values",
+    end: PageEnd::IsLast,
+};
+
+/// `/rest/api/3/issue/{key}/comment`.
+const COMMENT_PAGE: PageContract = PageContract {
+    items: "comments",
+    end: PageEnd::Total,
+};
+
+/// Loop through a paginated `startAt`/`maxResults` endpoint and accumulate every
+/// item, following `contract` to know where the items are and when to stop.
+async fn paginate(
     path: &str,
     extra_query: &[(&str, String)],
     operation: &str,
+    contract: PageContract,
     client: &ApiClient,
 ) -> Result<Vec<Value>> {
     // Local tuning knob — Atlassian accepts up to 1000 per request on these
@@ -735,17 +762,17 @@ async fn paginate_values(
     // and bound peak memory. Unrelated to `AGILE_BULK_LIMIT` (which is a hard
     // server-side cap on bulk writes).
     const PAGE_SIZE: u64 = 50;
-    // Hard ceiling so a server that keeps returning `isLast: false` (a broken
-    // or hostile endpoint) cannot loop forever appending duplicates. At
-    // PAGE_SIZE=50 this admits 500k items — far beyond any real label/board/
-    // sprint list — before failing loudly.
+    // Hard ceiling so a server that never reports the end (a broken or hostile
+    // endpoint) cannot loop forever appending duplicates. At PAGE_SIZE=50 this
+    // admits 500k items — far beyond any real collection — before failing
+    // loudly.
     const MAX_PAGES: u32 = 10_000;
     let mut all: Vec<Value> = Vec::new();
     let mut start_at: u64 = 0;
 
-    // Fetch up to MAX_PAGES pages. We return the moment the server reports
-    // `isLast`; only a server that never sets it (broken or hostile) runs the
-    // loop to exhaustion, which then bails below instead of looping forever.
+    // Fetch up to MAX_PAGES pages. We return the moment the server reports the
+    // end; only a server that never does runs the loop to exhaustion, which
+    // then bails below instead of looping forever.
     for _ in 0..MAX_PAGES {
         let start_at_str = start_at.to_string();
         let page_size_str = PAGE_SIZE.to_string();
@@ -762,33 +789,56 @@ async fn paginate_values(
 
         let data: Value = response.json().await?;
 
-        // The Agile pagination contract mandates both fields. Bail loudly
-        // rather than silently truncating when the server breaks the
-        // contract — partial results are worse than a clear failure.
-        let values = data
-            .get("values")
+        // A page that carries neither its items nor the field that ends the
+        // collection has broken the contract. Bail loudly rather than silently
+        // truncating — partial results are worse than a clear failure.
+        let page = data
+            .get(contract.items)
             .and_then(Value::as_array)
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "Failed to {}: paginated response missing `values` array",
-                    operation
+                    "Failed to {}: paginated response missing `{}` array",
+                    operation,
+                    contract.items
                 )
             })?
             .clone();
-        let is_last = data.get("isLast").and_then(Value::as_bool).ok_or_else(|| {
-            anyhow::anyhow!(
-                "Failed to {}: paginated response missing `isLast` flag",
-                operation
-            )
-        })?;
+        let end = match contract.end {
+            PageEnd::IsLast => data.get("isLast").and_then(Value::as_bool).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Failed to {}: paginated response missing `isLast` flag",
+                    operation
+                )
+            })?,
+            PageEnd::Total => {
+                let total = data.get("total").and_then(Value::as_u64).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Failed to {}: paginated response missing `total` count",
+                        operation
+                    )
+                })?;
+                // The count is the whole contract here, so a page that adds
+                // nothing while items remain is the server declining to hand
+                // them over — not the end of the collection.
+                if page.is_empty() && (all.len() as u64) < total {
+                    anyhow::bail!(
+                        "Failed to {}: server reported {} items but stopped returning them at {}",
+                        operation,
+                        total,
+                        all.len()
+                    );
+                }
+                all.len() as u64 + page.len() as u64 >= total
+            }
+        };
 
-        let count = values.len() as u64;
-        for mut item in values {
+        let count = page.len() as u64;
+        for mut item in page {
             filter::apply(&mut item, client.config());
             all.push(item);
         }
 
-        if is_last {
+        if end {
             return Ok(all);
         }
 
@@ -804,9 +854,9 @@ async fn paginate_values(
         .await;
     }
 
-    // Reached only if MAX_PAGES pages were fetched and none reported `isLast`.
+    // Reached only if MAX_PAGES pages were fetched and none reported the end.
     anyhow::bail!(
-        "Failed to {}: exceeded {} pages without `isLast` — aborting to avoid an unbounded loop",
+        "Failed to {}: exceeded {} pages without reaching the end of the collection — aborting to avoid an unbounded loop",
         operation,
         MAX_PAGES
     )
@@ -842,17 +892,18 @@ pub async fn get_statuses(client: &ApiClient) -> Result<Value> {
 }
 
 pub async fn get_labels(client: &ApiClient) -> Result<Value> {
-    let items = paginate_values("/rest/api/3/label", &[], "get labels", client).await?;
+    let items = paginate("/rest/api/3/label", &[], "get labels", AGILE_PAGE, client).await?;
     Ok(json!({ "items": items }))
 }
 
 // -- Board / Sprint / Epic (Agile API) --
 
 pub async fn get_boards(project: &str, client: &ApiClient) -> Result<Value> {
-    let items = paginate_values(
+    let items = paginate(
         "/rest/agile/1.0/board",
         &[("projectKeyOrId", project.to_string())],
         "get boards",
+        AGILE_PAGE,
         client,
     )
     .await?;
@@ -891,10 +942,11 @@ pub async fn resolve_board_id(project: &str, client: &ApiClient) -> Result<u64> 
 
 pub async fn get_sprints(board_id: u64, state: &str, client: &ApiClient) -> Result<Value> {
     let path = format!("/rest/agile/1.0/board/{}/sprint", board_id);
-    let items = paginate_values(
+    let items = paginate(
         &path,
         &[("state", state.to_string())],
         "get sprints",
+        AGILE_PAGE,
         client,
     )
     .await?;
@@ -1707,7 +1759,9 @@ mod tests {
         // %20 is the encoding for space — verify the issue_key is percent-encoded.
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/MDW%20207/comment"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "comments": [] })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "comments": [], "total": 0 })),
+            )
             .expect(1)
             .mount(&server)
             .await;
@@ -1715,6 +1769,98 @@ mod tests {
         let client = mock_client(server.uri());
         let result = get_comments("MDW 207", false, &client).await;
         assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[tokio::test]
+    async fn integ_get_comments_reads_past_the_first_page() {
+        let server = MockServer::start().await;
+        // The endpoint reports how many comments exist and hands them over a
+        // page at a time; reading only the first page drops the rest of a busy
+        // issue's discussion without saying so.
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/ABC-1/comment"))
+            .and(query_param("startAt", "0"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "startAt": 0,
+                "total": 3,
+                "comments": [{ "id": "1" }, { "id": "2" }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/ABC-1/comment"))
+            .and(query_param("startAt", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "startAt": 2,
+                "total": 3,
+                "comments": [{ "id": "3" }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let result = get_comments("ABC-1", false, &client).await.unwrap();
+        let ids: Vec<&str> = result["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, vec!["1", "2", "3"]);
+    }
+
+    #[tokio::test]
+    async fn integ_get_comments_bails_when_the_server_stops_short_of_its_own_total() {
+        let server = MockServer::start().await;
+        // `total` is the whole contract here, so a page that adds nothing while
+        // items remain is the server declining to hand them over. Returning the
+        // short list would report a truncated discussion as the entire one.
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/ABC-1/comment"))
+            .and(query_param("startAt", "0"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "total": 9,
+                "comments": [{ "id": "1" }]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/ABC-1/comment"))
+            .and(query_param("startAt", "1"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "total": 9, "comments": [] })),
+            )
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = get_comments("ABC-1", false, &client)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("stopped returning them at 1"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn integ_get_comments_bails_without_a_total() {
+        let server = MockServer::start().await;
+        // A 2xx that omits the count cannot say whether more comments exist.
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/ABC-1/comment"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "comments": [{ "id": "1" }] })),
+            )
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = get_comments("ABC-1", false, &client)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("missing `total` count"), "got: {err}");
     }
 
     #[tokio::test]

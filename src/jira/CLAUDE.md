@@ -27,3 +27,14 @@ When adding a new write endpoint that takes user text, route through these helpe
 - Side-effect-only writes return `{}` (`update_issue`, `delete_issue`, `delete_comment`, `transition_issue`, `add_link`, `remove_link`, `remove_worklog`, `add_watcher`, `remove_watcher`, `move_issues_to_sprint`, `move_issues_to_backlog`, `assign_issues_to_epic`, `unassign_issues_from_epic`).
 
 Keep these shapes stable — downstream tooling (skill, scripts) depends on them.
+
+## Pagination contracts
+
+`paginate` is the single `startAt`/`maxResults` loop. Which fields it reads comes from the `PageContract` a caller names:
+
+- `AGILE_PAGE` — `values` + `isLast`. `/rest/api/3/label`, `/rest/agile/1.0/board`, sprints.
+- `COMMENT_PAGE` — `comments` + `total`. `/rest/api/3/issue/{key}/comment`, which reports how many comments exist rather than flagging the last page.
+
+Under `Total` the count is the whole contract, so a page that adds nothing while items remain is the server declining to hand them over — that bails, where the `IsLast` arm's empty page is a legitimate skip-ahead. A response missing its items array, its `isLast`, or its `total` bails too: a truncated collection returned as a complete one is the failure this helper exists to prevent.
+
+Add a new endpoint by adding a `PageContract` constant, never a second loop.
