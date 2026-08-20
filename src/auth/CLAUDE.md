@@ -49,10 +49,14 @@ Change a value once.
 
 ## `AuthConfig::oauth_params(profile)` is the single extraction point
 
-Every `auth` subcommand goes through `Config::oauth_params()` → which calls
-`AuthConfig::oauth_params(profile)`. This is the only place that decides
+`auth login` and `auth refresh` go through `Config::oauth_params()` → which
+calls `AuthConfig::oauth_params(profile)`. This is the only place that decides
 whether the active profile is OAuth-configured and produces the canonical
 error message when it isn't.
+
+`logout` and `status` are about what is stored, not about what is configured,
+so they do not ask: a profile moved off OAuth keeps its persisted session, and
+gating on the method would leave that credential unreachable.
 
 ## URL building is shared
 
@@ -123,6 +127,14 @@ spells the separator the same way so both builders read identically.
   instead: `Done`, `Empty`, `Forbidden` (the opt-out), `Absent` (this build
   carries no store — the only outcome absence may be concluded from), and
   `Unreachable`. Add a consumer and the compiler names every case.
+- `save` commits to one backend and then clears the other so a later read
+  cannot find an older session first. That clear is **reported, never raised**:
+  the save has already happened, and returning an error would tell an operator
+  their login failed while they are logged in — and would fail every token
+  refresh on that machine besides.
+- An unparseable `credentials.json` is never written over, because it still
+  holds whatever sessions it names. That leaves no in-tool repair, so the parse
+  error names the one there is: remove the file.
 - `TokenStore::delete` clears both backends independently and reports a keychain
   that would not answer as a failure. The file goes first, so nothing is lost
   when the keychain is unreachable — but `auth logout` does exit non-zero there,

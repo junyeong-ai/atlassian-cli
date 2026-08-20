@@ -31,6 +31,13 @@ fn keychain_disabled() -> bool {
     keychain_disabled_from(std::env::var("ATLASSIAN_NO_KEYCHAIN").ok().as_deref())
 }
 
+/// Whether the opt-out is in force, for a caller reporting what was not done.
+/// The one place the flag is read stays [`keychain_disabled`]; this is that
+/// answer, not a second reading of the environment.
+pub fn keychain_opt_out() -> bool {
+    keychain_disabled()
+}
+
 /// Pure parsing of the opt-out value, split out so it is testable without
 /// mutating process-global env (which would race the parallel test runner).
 fn keychain_disabled_from(value: Option<&str>) -> bool {
@@ -253,8 +260,13 @@ impl TokenStore {
         }
     }
 
-    /// Save tokens. Tries keyring first; on any error falls back to the
-    /// 0600 file. Always clears the unused backend so reads are unambiguous.
+    /// Save tokens. Tries keyring first; on any error falls back to the 0600
+    /// file.
+    ///
+    /// The other backend is then cleared so a later read cannot find an older
+    /// session first — but the save itself has already committed, so a clear
+    /// that fails is reported and not raised. Returning an error there would
+    /// tell an operator their login failed when they are logged in.
     pub async fn save(&self, tokens: &TokenSet) -> Result<TokenStorageBackend> {
         let on_disk = OnDisk::from(tokens);
         let json = serde_json::to_string(&on_disk).context("Failed to serialize tokens")?;
@@ -265,17 +277,32 @@ impl TokenStore {
             .await
         {
             Keychain::Done(()) => {
-                self.file_delete()?;
+                if let Err(e) = self.file_delete() {
+                    tracing::warn!(
+                        "Saved to the keychain, but the file store still holds a session for \
+                         '{}' ({e:#}). The keychain is read first, so this one wins until the \
+                         file is cleared.",
+                        self.profile
+                    );
+                }
                 Ok(TokenStorageBackend::Keyring)
             }
             outcome => {
                 tracing::debug!("Keyring save unavailable ({outcome}), using the file store");
                 self.file_save(&json)?;
-                // The keychain is unreachable — that is why this is the file
-                // path — so it cannot be asked to drop a stale entry. `load`
-                // reads it first, so one left there wins until it is cleared;
-                // `auth logout` without whatever made it unreachable does that.
-                let _ = self.keyring_op(|e| e.delete_credential()).await;
+                if let Keychain::Unreachable(reason) =
+                    self.keyring_op(|e| e.delete_credential()).await
+                {
+                    // `load` reads the keychain first, so a session left there
+                    // wins over the one just written. Clearing it needs
+                    // whatever made it unreachable fixed first.
+                    tracing::warn!(
+                        "Saved to the file store, but the keychain would not drop what it holds \
+                         for '{}' ({reason}). If it had a session, that one is read first — run \
+                         `auth logout` once the keychain answers.",
+                        self.profile
+                    );
+                }
                 Ok(TokenStorageBackend::File)
             }
         }
@@ -480,8 +507,12 @@ fn read_all_from(file_path: &std::path::Path) -> Result<HashMap<String, OnDisk>>
                 .context(format!("Failed to read credentials file {file_path:?}")));
         }
     };
-    serde_json::from_str(&raw)
-        .with_context(|| format!("Failed to parse credentials file {file_path:?}"))
+    serde_json::from_str(&raw).with_context(|| {
+        format!(
+            "Failed to parse credentials file {file_path:?} — it is not rewritten over, because \
+             it still holds whatever sessions it names; remove it to start over"
+        )
+    })
 }
 
 /// How completely the keychain could say which profiles it holds tokens for.
@@ -683,9 +714,11 @@ mod tests {
     use super::*;
 
     /// `keyring-core` takes the default store as process-global startup state,
-    /// so installing one per test lets a parallel run swap the store another
-    /// test is midway through. One mock for the whole process; every test below
-    /// keys its entries by a profile name of its own.
+    /// so under `cargo test`, where the whole binary is one process, installing
+    /// one per test lets a parallel run swap the store another test is midway
+    /// through. (CI runs `cargo nextest`, which gives each test its own.) One
+    /// mock either way; every test below keys its entries by a profile name of
+    /// its own.
     fn mock_keychain() {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
@@ -952,12 +985,35 @@ mod tests {
         let path = dir.path().join("credentials.json");
         fs::write(&path, "{ not json").unwrap();
 
+        let token = serde_json::to_string(&OnDisk::from(&fixture_tokens())).unwrap();
+
         let err = TokenStore::at("newcomer", path.clone())
-            .file_save("{}")
+            .file_save(&token)
             .unwrap_err();
 
-        assert!(format!("{err:#}").contains("credentials"), "{err:#}");
+        assert!(
+            format!("{err:#}").contains("remove it to start over"),
+            "{err:#}"
+        );
         assert_eq!(fs::read_to_string(&path).unwrap(), "{ not json");
+    }
+
+    /// The same write beside a file it can read keeps what is already there.
+    #[test]
+    fn saving_beside_another_profile_keeps_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        let token = serde_json::to_string(&OnDisk::from(&fixture_tokens())).unwrap();
+        TokenStore::at("first", path.clone())
+            .file_save(&token)
+            .unwrap();
+
+        TokenStore::at("second", path.clone())
+            .file_save(&token)
+            .unwrap();
+
+        let all = read_all_from(&path).unwrap();
+        assert_eq!(all.len(), 2, "{:?}", all.keys().collect::<Vec<_>>());
     }
 
     /// Unlinking a symlink removes the link. The tokens stay readable where it
