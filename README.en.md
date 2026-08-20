@@ -176,7 +176,7 @@ atlassian-cli self uninstall --yes [--keep-skill] [--keep-credentials] [--purge-
 
 - The skill is compiled into the binary, so the two cannot be different versions, and `self status` compares the deployed copy **byte for byte** — a locally edited one reads as `stale`.
 - `self update` runs the downloaded binary and checks the version it reports **before** replacing anything, so a binary that will not run on this machine leaves the installation untouched.
-- `self uninstall` also clears OAuth tokens from the OS keychain (`--keep-credentials` to keep them), and **refuses without removing anything** when the keychain cannot be listed — leaving tokens behind with no tool that knows where they are is the worst outcome. `--purge-config` removes the config file this tool writes and the directory only if that leaves it empty, so `credentials.json` survives alongside `--keep-credentials`. Project-local `.atlassian.toml` is never touched.
+- `self uninstall` also clears OAuth tokens from the OS keychain (`--keep-credentials` to keep them), and **refuses** when a keychain exists but will not be read — locked, or `ATLASSIAN_NO_KEYCHAIN` forbidding the look — because leaving tokens behind with no tool that knows where they are is the worst outcome. Where no keychain could be installed at all (headless, containers) there is nothing to miss, so it proceeds. `--purge-config` removes the config file this tool writes and the directory only if that leaves it empty, so `credentials.json` survives alongside `--keep-credentials`. Project-local `.atlassian.toml` is never touched.
 
 ### Method 2: Build from Source
 

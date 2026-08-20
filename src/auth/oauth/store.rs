@@ -326,13 +326,15 @@ impl TokenStore {
     }
 
     fn file_delete(&self) -> Result<()> {
-        let mut all = match self.file_read_all() {
-            Ok(a) => a,
-            Err(_) => return Ok(()),
-        };
+        // A file that cannot be read still holds whatever is in it, so calling
+        // that a cleared session is the same lie as swallowing a keychain that
+        // refused.
+        let mut all = self.file_read_all()?;
         if all.remove(&self.profile).is_some() {
             if all.is_empty() {
-                let _ = fs::remove_file(&self.file_path);
+                fs::remove_file(&self.file_path).with_context(|| {
+                    format!("Failed to remove credentials file {:?}", self.file_path)
+                })?;
             } else {
                 let parent = self
                     .file_path

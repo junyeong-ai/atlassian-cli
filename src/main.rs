@@ -1065,8 +1065,12 @@ async fn self_uninstall(
                 std::fs::remove_file(&file).map_err(|e| already_removed(e.into(), &removed))?;
                 record(&mut removed, "config", file.display().to_string());
             }
+            // Only when empty — anything else there is not this tool's. Saying
+            // so keeps a directory that survived from going unmentioned.
             if std::fs::remove_dir(&dir).is_ok() {
                 record(&mut removed, "config", dir.display().to_string());
+            } else {
+                kept.push("config-directory");
             }
         } else {
             kept.push("config");
@@ -1120,47 +1124,53 @@ fn already_removed(error: anyhow::Error, removed: &[serde_json::Value]) -> anyho
 
 /// Discard every stored token, and the file that holds the fallback copies.
 ///
-/// The keychain is enumerated rather than guessed at: every platform store this
-/// binary links implements search, so the entries under this service are the
-/// whole set. An enumeration that did not happen is refused rather than
-/// reported, because the step after this one removes the binary — leaving
-/// tokens behind along with nothing that knows where they are.
+/// The file goes first and unconditionally: it belongs to this installation, so
+/// a keychain that cannot be reached is no reason to leave it — and a corrupt
+/// one still holds tokens whether or not its contents parsed.
+///
+/// The keychain is then enumerated rather than guessed at; every platform store
+/// this binary links implements search. Which answers refuse is the question of
+/// whether a token could still be there afterwards:
+///
+/// - `Unsupported` — no store could be installed, so this binary never wrote a
+///   token to one. Nothing to miss; proceed.
+/// - `Skipped` — `ATLASSIAN_NO_KEYCHAIN` forbids the look, but a session from
+///   before the flag was set may well be in there (see `src/auth/CLAUDE.md`).
+/// - `Failed` — a store that exists and would not answer.
+///
+/// The last two refuse, because the step after this one removes the binary and
+/// with it anything that knows where those tokens are.
 async fn clear_stored_tokens(
     installation: &atlassian_cli::dist::Installation,
     removed: &mut Vec<serde_json::Value>,
 ) -> Result<serde_json::Value> {
     use atlassian_cli::auth::{KeyringEnumeration, TokenStore};
 
-    let stored = atlassian_cli::auth::stored_profiles().await;
-    if stored.keyring != KeyringEnumeration::Listed {
-        anyhow::bail!(
-            "the keychain could not be listed ({}{}), so the tokens it holds cannot be cleared — \
-             nothing was removed. Clear it first, or re-run with --keep-credentials and delete {} \
-             yourself if this machine keeps its tokens there",
-            stored.keyring.as_str(),
-            stored
-                .keyring
-                .reason()
-                .map(|reason| format!(": {reason}"))
-                .unwrap_or_default(),
-            installation
-                .credentials_file()
-                .map(|file| file.display().to_string())
-                .unwrap_or_else(|| "the credentials file".to_string())
-        );
-    }
-    for profile in &stored.profiles {
-        TokenStore::new(profile.clone())?.delete().await?;
-        record(removed, "credentials", format!("profile:{profile}"));
-    }
-
-    // The file belongs to this installation, so it goes whether or not its
-    // contents could be read — a corrupt one still holds tokens.
     if let Some(file) = installation.credentials_file()
         && file.exists()
     {
         std::fs::remove_file(&file)?;
         record(removed, "credentials", file.display().to_string());
+    }
+
+    let stored = atlassian_cli::auth::stored_profiles().await;
+    match &stored.keyring {
+        KeyringEnumeration::Skipped => anyhow::bail!(
+            "ATLASSIAN_NO_KEYCHAIN forbids reading the keychain, so any session stored there \
+             before the flag was set cannot be cleared — unset it and re-run, or pass \
+             --keep-credentials to leave stored tokens alone"
+        ),
+        KeyringEnumeration::Failed(reason) => anyhow::bail!(
+            "the keychain would not be listed ({reason}), so the tokens it holds cannot be \
+             cleared — unlock it and re-run, or pass --keep-credentials to leave stored tokens \
+             alone"
+        ),
+        KeyringEnumeration::Listed | KeyringEnumeration::Unsupported => {}
+    }
+
+    for profile in &stored.profiles {
+        TokenStore::new(profile.clone())?.delete().await?;
+        record(removed, "credentials", format!("profile:{profile}"));
     }
 
     Ok(serde_json::json!({

@@ -6,6 +6,7 @@
 //! bytes rather than a declared version.
 
 use std::collections::BTreeSet;
+use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
 use super::DistError;
@@ -81,7 +82,7 @@ pub fn deploy(dir: &Path) -> Result<Deployed, DistError> {
             let path = dir.join(stale);
             std::fs::remove_file(&path)
                 .map_err(|e| DistError::io(format!("removing {}", path.display()), e))?;
-            outcome.pruned.push(stale.clone());
+            outcome.pruned.push(stale.to_string_lossy().into_owned());
         }
     }
 
@@ -90,6 +91,14 @@ pub fn deploy(dir: &Path) -> Result<Deployed, DistError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| DistError::io(format!("creating {}", parent.display()), e))?;
+        }
+        // Unlink first: `write` opens through a symlink, so a carried name
+        // pointed at something else would have that file's contents replaced
+        // with the skill. `remove_file` never traverses, so it takes the link.
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(DistError::io(format!("replacing {}", path.display()), e)),
         }
         std::fs::write(&path, contents)
             .map_err(|e| DistError::io(format!("writing {}", path.display()), e))?;
@@ -105,19 +114,25 @@ pub fn deploy(dir: &Path) -> Result<Deployed, DistError> {
 /// `~/.claude/skills` goes too, but never `~/.claude` itself — that one belongs
 /// to the agent, not to this tool.
 pub fn remove(dir: &Path) -> Result<bool, DistError> {
-    if !dir.exists() {
+    // `symlink_metadata`, not `exists`: the latter reports a dangling symlink
+    // as nothing there, leaving the link behind and calling it removed.
+    let Ok(meta) = std::fs::symlink_metadata(dir) else {
         return Ok(false);
-    }
-    std::fs::remove_dir_all(dir)
-        .map_err(|e| DistError::io(format!("removing {}", dir.display()), e))?;
+    };
+    let outcome = if meta.file_type().is_symlink() {
+        std::fs::remove_file(dir)
+    } else {
+        std::fs::remove_dir_all(dir)
+    };
+    outcome.map_err(|e| DistError::io(format!("removing {}", dir.display()), e))?;
     let _ = dir.parent().map(std::fs::remove_dir);
     Ok(true)
 }
 
-fn carried_names() -> BTreeSet<String> {
+fn carried_names() -> BTreeSet<OsString> {
     FILES
         .iter()
-        .map(|(relative, _)| (*relative).to_string())
+        .map(|(relative, _)| OsStr::new(relative).to_os_string())
         .collect()
 }
 
@@ -131,10 +146,13 @@ fn carried_names() -> BTreeSet<String> {
 /// into a dotfiles repository holds their files, not a deployment. There the
 /// answer is `None` rather than an empty set — nothing to prune, and nothing
 /// there counts as a difference either.
-fn reconcilable_files(dir: &Path) -> Option<BTreeSet<String>> {
+fn reconcilable_files(dir: &Path) -> Option<BTreeSet<OsString>> {
     if !std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.file_type().is_dir()) {
         return None;
     }
+    // Names stay `OsString`: a lossy `String` does not name the file it came
+    // from, so pruning one would fail on a name this platform allows and take
+    // every deploy down with it.
     Some(
         std::fs::read_dir(dir)
             .ok()?
@@ -142,7 +160,7 @@ fn reconcilable_files(dir: &Path) -> Option<BTreeSet<String>> {
             .filter(|entry| {
                 std::fs::symlink_metadata(entry.path()).is_ok_and(|meta| meta.file_type().is_file())
             })
-            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .map(|entry| entry.file_name())
             .collect(),
     )
 }
@@ -222,6 +240,40 @@ mod tests {
             "deploy reached through a symlink and deleted a file it does not own"
         );
         assert!(dir.join("link").is_symlink(), "the link itself was removed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_carried_name_pointed_elsewhere_has_its_target_left_alone() {
+        let root = tempfile::tempdir().unwrap();
+        let victim = root.path().join("zshrc");
+        std::fs::write(&victim, "export FOO=1\n").unwrap();
+
+        let dir = root.path().join(".claude/skills").join(SKILL_NAME);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Pruning leaves a symlink alone, so the write is the path that would
+        // otherwise reach through it — `fs::write` opens through a link.
+        std::os::unix::fs::symlink(&victim, dir.join("SKILL.md")).unwrap();
+
+        deploy(&dir).unwrap();
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "export FOO=1\n");
+        assert_eq!(state(&dir), SkillState::Current);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_skill_directory_link_is_removed_rather_than_reported_absent() {
+        let root = tempfile::tempdir().unwrap();
+        let skills = root.path().join(".claude/skills");
+        std::fs::create_dir_all(&skills).unwrap();
+        let dir = skills.join(SKILL_NAME);
+        std::os::unix::fs::symlink(root.path().join("gone"), &dir).unwrap();
+
+        assert!(
+            remove(&dir).unwrap(),
+            "the link was reported as nothing there"
+        );
+        assert!(!dir.is_symlink());
     }
 
     /// A skill directory symlinked into a dotfiles repository is the shape
