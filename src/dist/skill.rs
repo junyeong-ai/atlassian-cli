@@ -61,16 +61,24 @@ pub struct Deployed {
 }
 
 pub fn state(dir: &Path) -> SkillState {
-    match std::fs::metadata(dir) {
-        Ok(meta) if meta.is_dir() => {}
+    // `symlink_metadata` decides absence, because `metadata` resolves the link
+    // and answers `NotFound` for one whose target is gone or not mounted —
+    // which is a deployment to repair, not the nothing an update skips on.
+    match std::fs::symlink_metadata(dir) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return SkillState::Absent,
-        _ => return SkillState::Unreadable,
+        Err(_) => return SkillState::Unreadable,
+        Ok(_) => {}
+    }
+    if !std::fs::metadata(dir).is_ok_and(|meta| meta.is_dir()) {
+        return SkillState::Unreadable;
     }
     // Only where this tool reconciles the directory: elsewhere a file it does
     // not carry is not a difference to report, because it is not one `deploy`
     // would remove.
-    if reconcilable_files(dir).is_some_and(|found| found != carried_names()) {
-        return SkillState::Stale;
+    match reconcilable_files(dir) {
+        Ok(Some(found)) if found != carried_names() => return SkillState::Stale,
+        Ok(_) => {}
+        Err(_) => return SkillState::Unreadable,
     }
     for (relative, contents) in FILES {
         match std::fs::read(dir.join(relative)) {
@@ -91,7 +99,7 @@ pub fn state(dir: &Path) -> SkillState {
 pub fn deploy(dir: &Path) -> Result<Deployed, DistError> {
     let mut outcome = Deployed::default();
 
-    if let Some(found) = reconcilable_files(dir) {
+    if let Some(found) = reconcilable_files(dir)? {
         for stale in found.difference(&carried_names()) {
             let path = dir.join(stale);
             std::fs::remove_file(&path)
@@ -131,9 +139,13 @@ pub fn deploy(dir: &Path) -> Result<Deployed, DistError> {
 /// to the agent, not to this tool.
 pub fn remove(dir: &Path) -> Result<bool, DistError> {
     // `symlink_metadata`, not `exists`: the latter reports a dangling symlink
-    // as nothing there, leaving the link behind and calling it removed.
-    let Ok(meta) = std::fs::symlink_metadata(dir) else {
-        return Ok(false);
+    // as nothing there, leaving the link behind and calling it removed. And
+    // only `NotFound` is nothing there — a path that would not answer is a
+    // skill this call did not remove, whatever it says.
+    let meta = match std::fs::symlink_metadata(dir) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(DistError::io(format!("reading {}", dir.display()), e)),
     };
     let outcome = if meta.file_type().is_symlink() {
         std::fs::remove_file(dir)
@@ -160,25 +172,33 @@ fn carried_names() -> BTreeSet<OsString> {
 /// the deletion reaches somewhere it was never pointed: a symlinked entry would
 /// resolve the removal through it, and a skill directory the user redirected
 /// into a dotfiles repository holds their files, not a deployment. There the
-/// answer is `None` rather than an empty set — nothing to prune, and nothing
-/// there counts as a difference either.
-fn reconcilable_files(dir: &Path) -> Option<BTreeSet<OsString>> {
-    if !std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.file_type().is_dir()) {
-        return None;
+/// answer is `Ok(None)` rather than an empty set — nothing to prune, and
+/// nothing there counts as a difference either.
+///
+/// A directory that would not enumerate is neither: an empty set there would
+/// let a deploy report every uncarried file removed without having listed one.
+fn reconcilable_files(dir: &Path) -> Result<Option<BTreeSet<OsString>>, DistError> {
+    match std::fs::symlink_metadata(dir) {
+        Ok(meta) if meta.file_type().is_dir() => {}
+        Ok(_) => return Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(DistError::io(format!("reading {}", dir.display()), e)),
     }
     // Names stay `OsString`: a lossy `String` does not name the file it came
     // from, so pruning one would fail on a name this platform allows and take
     // every deploy down with it.
-    Some(
-        std::fs::read_dir(dir)
-            .ok()?
-            .flatten()
-            .filter(|entry| {
-                std::fs::symlink_metadata(entry.path()).is_ok_and(|meta| meta.file_type().is_file())
-            })
-            .map(|entry| entry.file_name())
-            .collect(),
-    )
+    let mut found = BTreeSet::new();
+    let entries = std::fs::read_dir(dir)
+        .map_err(|e| DistError::io(format!("listing {}", dir.display()), e))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| DistError::io(format!("listing {}", dir.display()), e))?;
+        let meta = std::fs::symlink_metadata(entry.path())
+            .map_err(|e| DistError::io(format!("reading {}", entry.path().display()), e))?;
+        if meta.file_type().is_file() {
+            found.insert(entry.file_name());
+        }
+    }
+    Ok(Some(found))
 }
 
 /// The version the carried skill declares, read from its YAML frontmatter.
@@ -245,6 +265,42 @@ mod tests {
         std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).unwrap();
 
         assert_eq!(found, SkillState::Unreadable);
+    }
+
+    /// A listing that failed is not an empty directory. `deploy` prunes what
+    /// the listing names, so an empty answer would have it report every
+    /// uncarried file removed without having seen one — and `state` would call
+    /// the directory this version and nothing else on the same evidence.
+    #[cfg(unix)]
+    #[test]
+    fn a_skill_directory_that_will_not_list_is_neither_reconciled_nor_called_current() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join(SKILL_NAME);
+        deploy(&dir).unwrap();
+        std::fs::write(dir.join("retired.md"), "from an older release").unwrap();
+        // Traversable but not listable: the carried file still opens.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o300)).unwrap();
+
+        let found = state(&dir);
+        let deployed = deploy(&dir);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert_eq!(found, SkillState::Unreadable);
+        assert!(deployed.is_err(), "a deploy pruned nothing and said so");
+        assert!(dir.join("retired.md").is_file());
+    }
+
+    /// `metadata` resolves the link, so a target that is gone answers the same
+    /// as a path that was never there — and an update skips on that one.
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_skill_link_is_not_reported_absent() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join(SKILL_NAME);
+        std::os::unix::fs::symlink(root.path().join("gone"), &dir).unwrap();
+
+        assert_eq!(state(&dir), SkillState::Unreadable);
     }
 
     /// The directory opens and its contents do not. Nothing was compared, so

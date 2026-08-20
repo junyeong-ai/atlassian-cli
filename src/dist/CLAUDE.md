@@ -12,7 +12,9 @@ Everything runs in-process — `reqwest` for the download, `sha2` for the checks
 
 Writing has the same reach as deleting and needs the same guard: `fs::write` opens *through* a symlink, so a deploy unlinks a carried name that **is** a link before writing it. Without that, a `SKILL.md` pointed at `~/.zshrc` had that file's contents replaced with the skill. Only a link — an ordinary file stays a truncating write, which needs permission on the file rather than on the directory, so a deploy still lands in a skill directory the user made read-only.
 
-`SkillState` carries an `Unreadable` alongside `Absent` because one of the two is acted on: `self update` redeploys only where a skill is already there, so a directory it could not read must not answer the question a skip is the reply to — that is how the predecessor's copy survives the binary that replaced it.
+`SkillState` carries an `Unreadable` alongside `Absent` because only one of them is a reason not to act. `self update` redeploys where a skill is already there and skips on `Absent` alone, so every other answer — including a path that would not answer — is tried, and a deploy that cannot repair it reports its own failure. Answering `Absent` for a directory nothing read is how the predecessor's copy survives the binary that replaced it.
+
+`reconcilable_files` separates the same two once more. `Ok(None)` is a directory this tool does not reconcile; a listing that failed is `Err`, because an empty set there would have a deploy report every uncarried file removed without having seen one, and `state` call the directory this version and nothing else on the same evidence.
 
 `remove` takes the skill directory and an emptied `~/.claude/skills`, never `~/.claude` — that one holds the agent's own state. It classifies with `symlink_metadata` rather than `exists`, which reports a dangling link as nothing there and leaves it behind.
 
