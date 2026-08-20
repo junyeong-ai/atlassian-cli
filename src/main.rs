@@ -1371,14 +1371,14 @@ async fn handle_config(
                 };
 
             if let Some(global) = atlassian_cli::Config::global_config_path() {
-                let status = if global.exists() { "✓" } else { "✗" };
-                println!("Global:  {:?} {}", global, status);
-                if global.exists() {
+                let there = present(&global)?;
+                println!("Global:  {:?} {}", global, if there { "✓" } else { "✗" });
+                if there {
                     collect(&global);
                 }
             }
 
-            if let Some(project) = atlassian_cli::Config::project_config_path() {
+            if let Some(project) = atlassian_cli::Config::project_config_path()? {
                 println!("Project: {:?} ✓", project);
                 collect(&project);
             } else {
@@ -1417,7 +1417,7 @@ async fn handle_config(
             let path = if global {
                 atlassian_cli::Config::global_config_path()
             } else {
-                atlassian_cli::Config::project_config_path()
+                atlassian_cli::Config::project_config_path()?
                     .or_else(atlassian_cli::Config::global_config_path)
             };
 
@@ -1432,7 +1432,7 @@ async fn handle_config(
             let path = if global {
                 atlassian_cli::Config::global_config_path()
             } else {
-                atlassian_cli::Config::project_config_path()
+                atlassian_cli::Config::project_config_path()?
                     .or_else(atlassian_cli::Config::global_config_path)
             };
 
@@ -2037,15 +2037,10 @@ async fn handle_auth(
                 overrides,
             )?;
             let method = config.auth.as_ref().map(|a| a.method());
-            // Reported, not raised: this command exists to say what the stored
-            // session is, and "the keychain would not answer" is one of the
-            // answers. Only an OAuth profile has a session to look for.
+            // Only this one outcome: saying what is stored is the command's
+            // job, and "the keychain would not answer" is one of the answers.
             let session = match TokenStore::new(&config.profile)?.load().await {
                 Ok(session) => session,
-                // Only this one outcome: saying what is stored is the command's
-                // job, and "the keychain would not answer" is one of the
-                // answers. Every other failure is a failure, and swallowing it
-                // would report no stored session from code that read none.
                 Err(e)
                     if e.downcast_ref::<atlassian_cli::auth::SessionUnknown>()
                         .is_some() =>
@@ -2096,7 +2091,9 @@ async fn handle_auth(
 
             // A session left behind by a previous OAuth configuration is a live
             // credential the current method never consults. Surface it so it can
-            // be cleared rather than lingering unnoticed in the keychain.
+            // be cleared rather than lingering unnoticed in the keychain — and
+            // say when that could not be checked at all, because "no stale
+            // session" is the reading a store nothing read must not produce.
             if !matches!(method, Some(AuthMethod::OAuth))
                 && let Some(loaded) = &session
             {

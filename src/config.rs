@@ -460,6 +460,19 @@ pub(crate) fn validate_cloud_id(raw: &str) -> Result<()> {
     Ok(())
 }
 
+/// Whether a config file is at this path.
+///
+/// `Path::exists` answers false to both "not there" and "could not tell", and
+/// resolves a link besides — so a dangling `.atlassian.toml` reads as no
+/// project config at all.
+fn config_file_present(path: &Path) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(anyhow::Error::from(e).context(format!("Failed to read config {path:?}"))),
+    }
+}
+
 impl Config {
     /// Extract OAuth flow parameters for this profile.
     /// Errors with an actionable message when the profile is not OAuth-configured.
@@ -507,7 +520,7 @@ impl Config {
 
         // 1. Load global config
         if let Some(global_path) = Self::global_config_path()
-            && global_path.exists()
+            && config_file_present(&global_path)?
         {
             tracing::debug!("Loading global config: {:?}", global_path);
             if let Some(profile_config) = Self::load_from_file(&global_path, profile)? {
@@ -517,7 +530,7 @@ impl Config {
         }
 
         // 2. Load project config
-        if let Some(project_path) = Self::project_config_path() {
+        if let Some(project_path) = Self::project_config_path()? {
             tracing::debug!("Loading project config: {:?}", project_path);
             if let Some(profile_config) = Self::load_from_file(&project_path, profile)? {
                 config.merge(profile_config);
@@ -830,22 +843,32 @@ impl Config {
         Self::global_config_dir().map(|dir| dir.join(Self::GLOBAL_CONFIG_FILE))
     }
 
-    pub fn project_config_path() -> Option<PathBuf> {
-        let current = std::env::current_dir().ok()?;
+    /// The nearest project config at or above the working directory.
+    ///
+    /// Absence is concluded from `NotFound` alone. The walk continues upward
+    /// past a candidate it does not find, so reading a file it merely could not
+    /// stat as absent runs the command against a parent directory's site
+    /// instead of the one the user put in this one.
+    pub fn project_config_path() -> Result<Option<PathBuf>> {
+        let Ok(current) = std::env::current_dir() else {
+            return Ok(None);
+        };
         let mut dir = current.as_path();
 
         loop {
-            let candidate = dir.join(".atlassian.toml");
-            if candidate.exists() {
-                return Some(candidate);
+            for candidate in [
+                dir.join(".atlassian.toml"),
+                dir.join(".atlassian/config.toml"),
+            ] {
+                if config_file_present(&candidate)? {
+                    return Ok(Some(candidate));
+                }
             }
 
-            let alt = dir.join(".atlassian/config.toml");
-            if alt.exists() {
-                return Some(alt);
+            match dir.parent() {
+                Some(parent) => dir = parent,
+                None => return Ok(None),
             }
-
-            dir = dir.parent()?;
         }
     }
 
@@ -856,7 +879,7 @@ impl Config {
             PathBuf::from(".atlassian.toml")
         };
 
-        if path.exists() {
+        if config_file_present(&path)? {
             bail!("Config file already exists: {:?}", path);
         }
 
@@ -1935,5 +1958,24 @@ domain = "x.atlassian.net"
             ..Default::default()
         };
         assert!(config.validate().is_ok());
+    }
+    /// The walk continues upward past a candidate it does not find, so reading
+    /// one it merely could not stat as absent runs the command against a parent
+    /// directory's site instead of the one the user put in this one.
+    #[cfg(unix)]
+    #[test]
+    fn a_project_config_that_will_not_stat_is_not_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let candidate = dir.path().join(".atlassian.toml");
+        std::fs::write(&candidate, "").unwrap();
+        assert!(config_file_present(&candidate).unwrap());
+
+        let missing = dir.path().join("nothing.toml");
+        assert!(!config_file_present(&missing).unwrap());
+
+        // A dangling link is something at the path, not nothing.
+        let link = dir.path().join("dangling.toml");
+        std::os::unix::fs::symlink(dir.path().join("gone"), &link).unwrap();
+        assert!(config_file_present(&link).unwrap());
     }
 }
