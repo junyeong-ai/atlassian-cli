@@ -869,6 +869,9 @@ async fn self_status(
     let credentials_file = installation.credentials_file();
     let stored = stored_profiles_of(installation).await;
     let config_file = installation.config_file();
+    // Reported, not raised: this is the command a user runs after an uninstall
+    // refused, and a path it cannot read is the answer they came for.
+    let config_state = config_file.as_deref().map(present).transpose();
 
     Ok(serde_json::json!({
         "version": dist::current_version().to_string(),
@@ -877,7 +880,8 @@ async fn self_status(
         "skill": skill_dir(installation).ok().as_deref().map(skill_report),
         "config": {
             "path": config_file.as_deref().map(display_path),
-            "exists": config_file.as_deref().map(present).transpose()?,
+            "exists": config_state.as_ref().ok().copied().flatten(),
+            "error": config_state.as_ref().err().map(|e| format!("{e:#}")),
         },
         "credentials": credentials_report(&stored, credentials_file.as_deref()),
     }))
@@ -1062,11 +1066,22 @@ async fn self_uninstall(
                 record(&mut removed, "config", display_path(&file));
             }
             // Only when empty — anything else there is not this tool's. Saying
-            // so keeps a directory that survived from going unmentioned.
-            if std::fs::remove_dir(&dir).is_ok() {
-                record(&mut removed, "config", display_path(&dir));
-            } else {
-                kept.push("config-directory");
+            // so keeps a directory that survived from going unmentioned. Not
+            // emptied is the expected refusal; anything else is a failure, and
+            // reading it as "kept" is how a directory nobody could remove goes
+            // out as a clean uninstall.
+            match std::fs::remove_dir(&dir) {
+                Ok(()) => record(&mut removed, "config", display_path(&dir)),
+                Err(e) if e.kind() == std::io::ErrorKind::DirectoryNotEmpty => {
+                    kept.push("config-directory");
+                }
+                Err(e) => {
+                    return Err(already_removed(
+                        anyhow::Error::from(e)
+                            .context(format!("Failed to remove {}", dir.display())),
+                        &removed,
+                    ));
+                }
             }
         } else {
             kept.push("config");
@@ -1210,6 +1225,35 @@ fn token_store(
         .credentials_file()
         .ok_or_else(|| anyhow::anyhow!("Failed to determine home directory"))?;
     Ok(atlassian_cli::auth::TokenStore::at(profile, file))
+}
+
+/// Clear a profile's stored session and say what was there.
+///
+/// The read only names the backend for the message. It never decides whether
+/// to clear: a read falls back to the file when the keychain will not answer,
+/// so finding nothing there says nothing about what the keychain still holds —
+/// and an entry that will not parse is still an entry to remove. `delete`
+/// clears both backends and reports one that refused.
+async fn clear_session(store: &atlassian_cli::auth::TokenStore, profile: &str) -> Result<()> {
+    let found = store.load().await;
+    store.delete().await?;
+    match found {
+        Ok(Some(loaded)) => println!(
+            "✓ OAuth session cleared for profile '{profile}' ({})",
+            loaded.backend
+        ),
+        Ok(None) => println!("No readable session for profile '{profile}'."),
+        Err(e) => {
+            println!("Cleared profile '{profile}'; what was stored could not be read ({e:#}).")
+        }
+    }
+    if atlassian_cli::auth::keychain_opt_out() {
+        println!(
+            "  ATLASSIAN_NO_KEYCHAIN is set, so the keychain was not touched. Unset it and \
+             re-run to clear a session stored there before the flag."
+        );
+    }
+    Ok(())
 }
 
 /// Whether something is at this path, refusing to read a failure as an absence.
@@ -1967,20 +2011,7 @@ async fn handle_auth(
                 profile.as_ref(),
                 overrides,
             )?;
-            let store = TokenStore::new(&config.profile)?;
-            // Read to name the backend, never to decide whether to clear: a
-            // read falls back to the file when the keychain will not answer,
-            // so finding nothing there says nothing about what the keychain
-            // still holds. `delete` clears both and reports one that refused.
-            let found = store.load().await?;
-            store.delete().await?;
-            match found {
-                Some(loaded) => println!(
-                    "✓ OAuth session cleared for profile '{}' ({})",
-                    config.profile, loaded.backend
-                ),
-                None => println!("No readable session for profile '{}'.", config.profile),
-            }
+            clear_session(&TokenStore::new(&config.profile)?, &config.profile).await?;
             Ok(())
         }
         AuthSubcommand::Status => {
@@ -2271,7 +2302,10 @@ mod tests {
         assert!(targets.contains(&"profile:default"), "{targets:?}");
         assert!(targets.contains(&"profile:work"), "{targets:?}");
         assert!(!installation.credentials_file().unwrap().exists());
-        assert_eq!(report["credentials"]["profiles"][0], "default");
+        // Not by index: the shared mock keychain accumulates every profile any
+        // test in this binary touched, and they are reported sorted.
+        let reported = report["credentials"]["profiles"].as_array().unwrap();
+        assert!(reported.iter().any(|p| p == "default"), "{reported:?}");
     }
 
     /// `ATLASSIAN_NO_KEYCHAIN` is a per-environment setting, so this asserts the
@@ -2423,6 +2457,38 @@ mod tests {
             .unwrap();
 
         assert_eq!(report["binary"], binary.display().to_string());
+    }
+
+    /// A read that could not reach the keychain falls back to the file, so
+    /// finding nothing there is not a reason to leave the keychain alone —
+    /// which is how a session survived a logout that exited zero.
+    #[tokio::test]
+    async fn logout_clears_the_keychain_even_when_the_read_found_nothing() {
+        mock_keychain();
+        let home = tempfile::tempdir().unwrap();
+        let file = home.path().join("credentials.json");
+        let store = atlassian_cli::auth::TokenStore::at("logout-unreadable", file);
+
+        let entry = keyring_core::Entry::new("atlassian-cli", "logout-unreadable").unwrap();
+        entry.set_password("{}").unwrap();
+        // Consumed by the next call, which is the read — so the read fails and
+        // falls through to the file while the entry is still there.
+        entry
+            .as_any()
+            .downcast_ref::<keyring_core::mock::Cred>()
+            .expect("the mock store hands out mock credentials")
+            .set_error(keyring_core::Error::NoStorageAccess(Box::new(
+                std::io::Error::other("the keychain is locked"),
+            )));
+
+        clear_session(&store, "logout-unreadable").await.unwrap();
+
+        assert!(matches!(
+            keyring_core::Entry::new("atlassian-cli", "logout-unreadable")
+                .unwrap()
+                .get_password(),
+            Err(keyring_core::Error::NoEntry)
+        ));
     }
 
     #[test]

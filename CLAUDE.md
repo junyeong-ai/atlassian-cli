@@ -40,12 +40,12 @@ Trait surface, secret handling, OAuth specifics, blank-value policy, and the sin
 
 ```
 atlassian-cli auth login [--no-browser]    # PKCE flow, persists tokens
-atlassian-cli auth logout                  # clears tokens (no-op on non-OAuth profiles, with a message)
+atlassian-cli auth logout                  # clears stored tokens, whatever method the profile is on
 atlassian-cli auth status                  # identity, expiry, scopes, storage backend
 atlassian-cli auth refresh                 # force refresh (debugging)
 ```
 
-Every `auth` subcommand routes through `Config::oauth_params(&self)`, which validates that the active profile is OAuth-configured and returns `OAuthParams`. The flow uses PKCE S256, `audience=api.atlassian.com`, `prompt=consent`, and the configured `scopes` (the default set includes `offline_access` — required for refresh tokens).
+`login` and `refresh` route through `Config::oauth_params(&self)`, which validates that the active profile is OAuth-configured and returns `OAuthParams`. `logout` and `status` deliberately do not: a profile moved off OAuth keeps whatever the last login persisted, and gating on the configured method would leave that credential unreachable. The flow uses PKCE S256, `audience=api.atlassian.com`, `prompt=consent`, and the configured `scopes` (the default set includes `offline_access` — required for refresh tokens).
 
 ## Config resolution
 
