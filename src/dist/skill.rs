@@ -92,13 +92,15 @@ pub fn deploy(dir: &Path) -> Result<Deployed, DistError> {
             std::fs::create_dir_all(parent)
                 .map_err(|e| DistError::io(format!("creating {}", parent.display()), e))?;
         }
-        // Unlink first: `write` opens through a symlink, so a carried name
-        // pointed at something else would have that file's contents replaced
-        // with the skill. `remove_file` never traverses, so it takes the link.
-        match std::fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(DistError::io(format!("replacing {}", path.display()), e)),
+        // `write` opens through a symlink, so a carried name pointed at
+        // something else would have that file's contents replaced with the
+        // skill. Only a link is unlinked, and `remove_file` never traverses —
+        // an ordinary file stays a truncating write, which is what lets a
+        // deploy still land in a directory the user made read-only.
+        if std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+            std::fs::remove_file(&path).map_err(|e| {
+                DistError::io(format!("replacing the link at {}", path.display()), e)
+            })?;
         }
         std::fs::write(&path, contents)
             .map_err(|e| DistError::io(format!("writing {}", path.display()), e))?;
@@ -257,6 +259,26 @@ mod tests {
 
         deploy(&dir).unwrap();
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "export FOO=1\n");
+        assert_eq!(state(&dir), SkillState::Current);
+    }
+
+    /// Unlinking is conditional so this keeps working: replacing the contents
+    /// of an existing file needs write permission on the file, not on the
+    /// directory holding it.
+    #[cfg(unix)]
+    #[test]
+    fn a_deploy_still_lands_in_a_directory_the_user_made_read_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join(".claude/skills").join(SKILL_NAME);
+        deploy(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), "edited").unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+        let outcome = deploy(&dir);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        outcome.expect("a writable file in a read-only directory is still replaceable");
         assert_eq!(state(&dir), SkillState::Current);
     }
 
