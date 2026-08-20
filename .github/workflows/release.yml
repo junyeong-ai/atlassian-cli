@@ -71,7 +71,9 @@ jobs:
           stem="${BIN_NAME}-${tag}-${target}" # e.g. atlassian-cli-v0.2.0-x86_64-unknown-linux-gnu
           mkdir -p dist staging
           bin="${BIN_NAME}"
-          [[ "$RUNNER_OS" == "Windows" ]] && bin="${BIN_NAME}.exe"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            bin="${BIN_NAME}.exe"
+          fi
           cp "target/${target}/release/${bin}" "staging/${bin}"
           # Every target publishes a .tar.gz so `self update` reads one archive
           # format everywhere; the Windows .zip is published alongside it for
