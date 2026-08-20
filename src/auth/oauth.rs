@@ -20,6 +20,6 @@ mod strategy;
 pub use flow::{LoginOutcome, SiteInfo};
 pub use store::{
     CREDENTIALS_FILE, KeyringEnumeration, LoadedTokens, StoredProfiles, TokenSet,
-    TokenStorageBackend, TokenStore, credentials_file, stored_profiles,
+    TokenStorageBackend, TokenStore, remove_credentials_file, stored_profiles,
 };
 pub use strategy::{OAuthParams, OAuthStrategy};

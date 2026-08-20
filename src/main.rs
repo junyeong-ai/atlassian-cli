@@ -1037,13 +1037,15 @@ async fn self_uninstall(
             .map_err(|e| already_removed(e, &removed))?
     };
 
+    // `symlink_metadata`, not `exists`: the latter resolves the link and reports
+    // a dangling one as nothing there, which is the state `skill::remove` was
+    // written to clean up.
     if let Some(dir) = installation.skill_dir()
-        && dir.exists()
+        && std::fs::symlink_metadata(&dir).is_ok()
     {
         if keep_skill {
             kept.push("skill");
-        } else {
-            skill::remove(&dir).map_err(|e| already_removed(e.into(), &removed))?;
+        } else if skill::remove(&dir).map_err(|e| already_removed(e.into(), &removed))? {
             record(&mut removed, "skill", dir.display().to_string());
         }
     }
@@ -1147,9 +1149,8 @@ async fn clear_stored_tokens(
     let stored = stored_profiles_of(installation).await;
 
     if let Some(file) = installation.credentials_file()
-        && file.exists()
+        && atlassian_cli::auth::remove_credentials_file(&file)?
     {
-        std::fs::remove_file(&file)?;
         record(removed, "credentials", file.display().to_string());
     }
 
@@ -2290,6 +2291,53 @@ mod tests {
         assert!(
             clear_stored_tokens_refusal(&atlassian_cli::auth::KeyringEnumeration::Listed).is_none()
         );
+        assert!(installation.binary().exists());
+    }
+
+    /// `exists` resolves the link, so a dangling one reads as nothing there —
+    /// the exact state `skill::remove` classifies with `symlink_metadata` in
+    /// order to clean up. A guard at the call site would undo that.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_dangling_skill_link_is_removed_rather_than_stepped_over() {
+        let home = tempfile::tempdir().unwrap();
+        let installation = installation(home.path());
+        let dir = installation.skill_dir().unwrap();
+        std::fs::create_dir_all(dir.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(home.path().join("gone"), &dir).unwrap();
+
+        let report = self_uninstall(&installation, false, true, false)
+            .await
+            .unwrap();
+
+        assert!(
+            std::fs::symlink_metadata(&dir).is_err(),
+            "the link outlived the tool that put it there"
+        );
+        assert!(kinds(&report).contains(&"skill"));
+    }
+
+    /// Unlinking a link clears the name, not the tokens. Reporting that as a
+    /// cleared session and then removing the binary is how a token ends up with
+    /// nothing left that knows where it is.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_credentials_link_stops_the_uninstall_before_the_binary_goes() {
+        mock_keychain();
+        let home = tempfile::tempdir().unwrap();
+        let installation = installation(home.path());
+        let link = installation.credentials_file().unwrap();
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        let real = home.path().join("tokens.json");
+        std::fs::write(&real, r#"{"default":{}}"#).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let err = self_uninstall(&installation, true, false, false)
+            .await
+            .unwrap_err();
+
+        assert!(format!("{err:#}").contains("not a regular file"), "{err:#}");
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), r#"{"default":{}}"#);
         assert!(installation.binary().exists());
     }
 

@@ -385,10 +385,9 @@ impl TokenStore {
         let mut all = self.file_read_all()?;
         if all.remove(&self.profile).is_some() {
             if all.is_empty() {
-                fs::remove_file(&self.file_path).with_context(|| {
-                    format!("Failed to remove credentials file {:?}", self.file_path)
-                })?;
+                remove_credentials_file(&self.file_path)?;
             } else {
+                owned_credentials_file(&self.file_path)?;
                 let parent = self
                     .file_path
                     .parent()
@@ -412,6 +411,32 @@ impl TokenStore {
     fn file_read_all(&self) -> Result<HashMap<String, OnDisk>> {
         read_all_from(&self.file_path)
     }
+}
+
+/// Whether the fallback token file is there, refusing a path that is not the
+/// regular file this tool writes.
+///
+/// The file is rewritten and removed whole. Through a symlink the rewrite
+/// replaces the link and the unlink removes the link, so either way every token
+/// stays readable at the far end while the call reports them cleared.
+fn owned_credentials_file(path: &std::path::Path) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Err(_) => Ok(false),
+        Ok(meta) if meta.file_type().is_file() => Ok(true),
+        Ok(_) => anyhow::bail!(
+            "Credentials file {path:?} is not a regular file, so clearing it would leave the \
+             tokens it names readable where it points"
+        ),
+    }
+}
+
+/// Remove the fallback token file, reporting whether there was one.
+pub fn remove_credentials_file(path: &std::path::Path) -> Result<bool> {
+    if !owned_credentials_file(path)? {
+        return Ok(false);
+    }
+    fs::remove_file(path).with_context(|| format!("Failed to remove credentials file {path:?}"))?;
+    Ok(true)
 }
 
 fn read_all_from(file_path: &std::path::Path) -> Result<HashMap<String, OnDisk>> {
@@ -623,12 +648,6 @@ fn search_spec() -> (&'static str, String) {
 /// The name of the fallback token file inside the global config directory.
 pub const CREDENTIALS_FILE: &str = "credentials.json";
 
-/// Where the fallback token file lives, for a caller that reports on or removes
-/// it rather than reading tokens out of it.
-pub fn credentials_file() -> Option<PathBuf> {
-    default_file_path().ok()
-}
-
 /// The fallback token file, beside the global config it belongs with.
 fn default_file_path() -> Result<PathBuf> {
     let dir =
@@ -837,6 +856,23 @@ mod tests {
                 .is_some_and(|reason| reason.contains("credentials")),
             "an unreadable file passed for an empty one"
         );
+    }
+
+    /// Unlinking a symlink removes the link. The tokens stay readable where it
+    /// pointed, which is the one thing a cleared session must not mean.
+    #[cfg(unix)]
+    #[test]
+    fn a_credentials_path_that_is_a_link_is_refused_rather_than_unlinked() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("elsewhere.json");
+        let link = dir.path().join("credentials.json");
+        fs::write(&real, "{}").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let err = remove_credentials_file(&link).unwrap_err().to_string();
+        assert!(err.contains("not a regular file"), "{err}");
+        assert!(link.exists() && real.is_file());
+        assert!(!remove_credentials_file(&dir.path().join("absent.json")).unwrap());
     }
 
     /// End-to-end exercise of the keyring path via `keyring_core::mock`.
