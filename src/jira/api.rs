@@ -118,7 +118,11 @@ pub async fn search(
     let mut data: Value = response.json().await?;
     filter::apply(&mut data, client.config());
 
-    let issues = data["issues"].as_array().cloned().unwrap_or_default();
+    // A 2xx whose body has no `issues` array is schema drift, and reporting it
+    // as no matches is the silent truncation `paginate` exists to prevent.
+    let Some(issues) = data["issues"].as_array().cloned() else {
+        anyhow::bail!("search succeeded but its response had no 'issues' array: {data}");
+    };
     let count = issues.len();
     let mut result = json!({
         "items": issues,
@@ -168,7 +172,11 @@ pub async fn search_all(
         let mut data: Value = response.json().await?;
         filter::apply(&mut data, client.config());
 
-        let issues = data["issues"].as_array().cloned().unwrap_or_default();
+        // Same as the single-page read, and it matters more here: `count == 0`
+        // ends the walk below, so a drifted page would truncate the rest.
+        let Some(issues) = data["issues"].as_array().cloned() else {
+            anyhow::bail!("search succeeded but its response had no 'issues' array: {data}");
+        };
         let count = issues.len();
 
         let processed_issues: Vec<Value> = if as_markdown {

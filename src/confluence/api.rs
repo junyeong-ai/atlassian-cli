@@ -747,10 +747,12 @@ async fn fetch_space_by_key(space_key: &str, client: &ApiClient) -> Result<Optio
         .await?;
 
     let data: Value = response.json().await?;
-    Ok(data["results"]
-        .as_array()
-        .and_then(|arr| arr.first())
-        .cloned())
+    // No `results` array on a 2xx is drift, not an answer: reading it as "not
+    // there" makes a lookup report an absence it never established.
+    let Some(results) = data["results"].as_array() else {
+        anyhow::bail!("lookup succeeded but its response had no 'results' array: {data}");
+    };
+    Ok(results.first().cloned())
 }
 
 /// Resolve a Confluence space key to its numeric space id. The single
@@ -1089,10 +1091,12 @@ async fn fetch_property_by_key(
     let response = client.execute("look up property", request).await?;
 
     let data: Value = response.json().await?;
-    Ok(data["results"]
-        .as_array()
-        .and_then(|arr| arr.first())
-        .cloned())
+    // No `results` array on a 2xx is drift, not an answer: reading it as "not
+    // there" makes a lookup report an absence it never established.
+    let Some(results) = data["results"].as_array() else {
+        anyhow::bail!("lookup succeeded but its response had no 'results' array: {data}");
+    };
+    Ok(results.first().cloned())
 }
 
 // --- Spaces ---------------------------------------------------------------
