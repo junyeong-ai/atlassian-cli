@@ -102,9 +102,14 @@ pub fn deploy(dir: &Path) -> Result<Deployed, DistError> {
     if let Some(found) = reconcilable_files(dir)? {
         for stale in found.difference(&carried_names()) {
             let path = dir.join(stale);
-            std::fs::remove_file(&path)
-                .map_err(|e| DistError::io(format!("removing {}", path.display()), e))?;
-            outcome.pruned.push(stale.to_string_lossy().into_owned());
+            match std::fs::remove_file(&path) {
+                Ok(()) => outcome.pruned.push(stale.to_string_lossy().into_owned()),
+                // Gone since the listing, over a wider window than the stat
+                // above: nothing to prune, and not this deploy's removal to
+                // report either.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(DistError::io(format!("removing {}", path.display()), e)),
+            }
         }
     }
 
