@@ -227,11 +227,11 @@ impl TokenStore {
 
     /// Delete this profile's tokens from both backends.
     ///
-    /// A keychain that holds nothing, or that is not in play on this platform
-    /// at all, leaves nothing to delete and is success. A keychain that exists
-    /// and refused — locked, or a prompt the user denied — is a failure, and
-    /// reporting it as success is how `auth logout` and `self uninstall` came
-    /// to say a token was gone while it was still there.
+    /// A keychain that holds nothing, or that this build has none of, leaves
+    /// nothing to delete and is success. A keychain that exists and would not
+    /// answer — locked, a prompt denied, a session bus out of reach — is a
+    /// failure, and reporting it as success is how `auth logout` and
+    /// `self uninstall` came to say a token was gone while it was still there.
     pub async fn delete(&self) -> Result<()> {
         let keyring = self.keyring_op(|e| e.delete_credential()).await;
         // The file is this tool's to remove whatever the keychain did. Skipping
@@ -390,7 +390,8 @@ fn read_all_from(file_path: &std::path::Path) -> Result<HashMap<String, OnDisk>>
 /// Carried rather than collapsed into the list, because "these are the profiles
 /// with tokens" is a claim only one of these variants supports. A caller that
 /// reports the list as exhaustive on any other is telling the user their
-/// credentials are gone when they may not be.
+/// credentials are gone when they may not be — and only `Unsupported` lets a
+/// caller conclude there was nothing there to begin with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeyringEnumeration {
     /// The store listed its entries, so its side of the answer is complete.
@@ -486,14 +487,42 @@ fn ensure_store_installed() -> std::result::Result<(), KeyringError> {
     })
     .as_ref()
     .map(|_| ())
-    // `NotSupportedByStore`, whatever the underlying reason: a store that could
-    // not be installed is one this binary never wrote a token to, so callers
-    // that distinguish "the keychain refused" from "there is no keychain here"
-    // get the second answer. The reason travels in the message. Caching forces
-    // the round trip through a string — `KeyringError` is not `Clone` — so the
-    // variant has to be chosen here rather than carried.
-    .map_err(|msg| KeyringError::NotSupportedByStore(msg.clone()))
+    // Which failure this was decides whether a caller may conclude the keychain
+    // holds nothing, and only the build can answer that. Every platform arm's
+    // `Store::new` connects eagerly — the Secret Service one opens a D-Bus
+    // session there and then — so an install that failed on a platform that HAS
+    // a store says nothing about whether a token is in it. Caching forces the
+    // error through a `String` (`KeyringError` is not `Clone`), so the variant
+    // is chosen here from the one fact that survives: whether this build has a
+    // store at all.
+    .map_err(|msg| {
+        if HAS_NATIVE_STORE {
+            KeyringError::PlatformFailure(Box::new(CachedInstallError(msg.clone())))
+        } else {
+            KeyringError::NotSupportedByStore(msg.clone())
+        }
+    })
 }
+
+/// Whether a credential store is compiled into this build. A fact of the
+/// target, so where it is false nothing was ever written to a keychain here.
+const HAS_NATIVE_STORE: bool = cfg!(any(
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "linux",
+    target_os = "freebsd"
+));
+
+#[derive(Debug)]
+struct CachedInstallError(String);
+
+impl std::fmt::Display for CachedInstallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for CachedInstallError {}
 
 #[cfg(target_os = "macos")]
 fn install_store() -> std::result::Result<(), KeyringError> {

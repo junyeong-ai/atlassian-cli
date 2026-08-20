@@ -49,9 +49,11 @@ Every platform store `keyring-core` links (macOS Keychain, Windows Credential Ma
 | enumeration | meaning | uninstall |
 |---|---|---|
 | `Listed` | the entries are known | proceeds |
-| `Unsupported` | no store could be installed, so this binary never wrote to one | proceeds — nothing to miss |
+| `Unsupported` | this build carries no store, so nothing was ever written to one | proceeds — nothing to miss |
 | `Skipped` | `ATLASSIAN_NO_KEYCHAIN` forbids the look, and a session from before the flag may be in there | refuses |
-| `Failed` | a store that exists and would not answer | refuses |
+| `Failed` | a store that exists and would not answer — locked, or a session bus out of reach | refuses |
+
+The line between the middle two rows is drawn by the build, not by the failure: every platform store's constructor connects eagerly, so an install that failed where a store exists says nothing about what is in it. Reading that as absence is how a token saved from a desktop session survives an uninstall run over SSH.
 
 A refusal comes before the skill, the config and the binary, because removing the binary takes away the only thing that knows where those tokens are. The credentials file is cleared first regardless — it belongs to this installation, and a keychain that cannot be reached is no reason to leave it. `TokenStore::delete` clears both backends independently for the same reason: the machines where the keychain refuses are the ones that keep tokens in the file.
 
