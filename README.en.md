@@ -97,9 +97,13 @@ atlassian-cli confluence get 123456 --format markdown        # Markdown conversi
 atlassian-cli confluence create TEAM "API Docs" "<p>Content</p>"
 atlassian-cli confluence update 123456 "New Title" "<p>New content</p>"
 
-# Children & footer comments
+# Children & comments — every reply, footer and inline
 atlassian-cli confluence children 123456
 atlassian-cli confluence comment list 123456 --format markdown
+atlassian-cli confluence comment list 123456 --location inline   # anchored comments only
+atlassian-cli confluence comment list 123456 --roots-only        # top level only
+atlassian-cli confluence comment get 67890                       # one comment by id
+atlassian-cli confluence comment replies 67890                   # one thread
 
 # Comments / labels / properties / spaces / attachments
 atlassian-cli confluence comment add 123456 "<p>Looks good</p>" --reply-to 67890
@@ -135,17 +139,15 @@ atlassian-cli jira get PROJ-123 | jq -r '.fields.summary'
 ```bash
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | bash
 ```
-Installs the latest prebuilt binary and can install the `jira-confluence` Claude Code skill at user level (`~/.claude/skills`). When run through `curl | bash`, the installer fetches the skill directly from GitHub.
+Installs the latest prebuilt binary, which then deploys the `jira-confluence` Claude Code skill it carries to `~/.claude/skills`.
 
 ```bash
 # Install a specific release
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.9.0 bash
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.10.0 bash
 
-# Uninstall (non-interactive defaults keep skill/config)
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/uninstall.sh | bash
-
-# Remove skill and global config too
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/uninstall.sh | bash -s -- --yes
+# After that the binary manages itself — no need to re-run the installer
+atlassian-cli self update
+atlassian-cli self uninstall --yes
 ```
 
 **Manual install**:
@@ -158,7 +160,23 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scri
 - macOS: Intel (x86_64), Apple Silicon (aarch64)
 - Windows: x86_64
 
-`install.sh` supports Linux/macOS automation. Windows builds are published as release binaries for manual installation.
+`install.sh` supports Linux/macOS automation. Windows builds are published as release binaries for manual installation. Every platform publishes a `.tar.gz`, so `self update` works everywhere.
+
+### Managing the installation
+
+```bash
+atlassian-cli self status                     # version, paths, skill state, profiles holding tokens (no network)
+atlassian-cli self update                     # replace with the latest release
+atlassian-cli self update --version 0.9.0     # a specific one; going back takes an explicit version
+atlassian-cli self update --verify-attestations   # also check GitHub build provenance (needs the gh CLI)
+atlassian-cli self skill install               # redeploy the skill
+atlassian-cli self skill remove --yes
+atlassian-cli self uninstall --yes [--keep-skill] [--keep-credentials] [--purge-config]
+```
+
+- The skill is compiled into the binary, so the two cannot be different versions, and `self status` compares the deployed copy **byte for byte** — a locally edited one reads as `stale`.
+- `self update` runs the downloaded binary and checks the version it reports **before** replacing anything, so a binary that will not run on this machine leaves the installation untouched.
+- `self uninstall` also clears OAuth tokens from the OS keychain (`--keep-credentials` to keep them). Global config is kept unless `--purge-config`; project-local `.atlassian.toml` is never touched.
 
 ### Method 2: Build from Source
 
@@ -171,14 +189,9 @@ cp target/release/atlassian-cli ~/.local/bin/
 
 **Requirements**: Rust 1.97.1+
 
-### 🤖 Claude Code Skill (Optional)
+### 🤖 Claude Code Skill
 
-When running `scripts/install.sh`, you can choose to install the Claude Code skill:
-
-- **User-level** (recommended): Available in all projects via `~/.claude/skills/jira-confluence`
-- **Skip**: Manual installation later
-
-The installer uses the local skill definition when run inside a checkout. With `curl | bash`, it fetches the skill from GitHub.
+`scripts/install.sh` deploys it to `~/.claude/skills/jira-confluence`, where it is available in every project. Manage it afterwards with `self skill install` / `self skill remove`.
 
 ---
 
@@ -397,7 +410,10 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 | `update <ID> <TITLE> <CONTENT>` | Update page | `confluence update 123456 "Title" "<p>HTML</p>"` |
 | `delete <ID> --yes` | Delete page (to trash) | `confluence delete 123456 --yes` |
 | `children <ID>` | List children | `confluence children 123456` |
-| `comment list/add/update/delete ...` | Footer comments | `confluence comment add 123456 "<p>Hi</p>" --reply-to 67890` |
+| `comment list <ID> [--location footer\|inline] [--roots-only]` | Every comment on a page — both families, replies included; each entry carries `location`, `depth`, `parentCommentId` | `confluence comment list 123456` |
+| `comment get <COMMENT_ID> [--location ...]` | One comment by id (defaults to `footer`) | `confluence comment get 67890` |
+| `comment replies <COMMENT_ID> [--location ...]` | The whole thread under one comment | `confluence comment replies 67890` |
+| `comment add/update/delete ...` | Footer comment writes | `confluence comment add 123456 "<p>Hi</p>" --reply-to 67890` |
 | `label list/add/remove <ID> [LABEL]` | Page labels | `confluence label add 123456 needs-review` |
 | `property list/set/delete <ID> [KEY] [JSON]` | Content properties (value is strict JSON) | `confluence property set 123456 review '{"status":"done"}'` |
 | `space list`, `space get <KEY>` | Spaces | `confluence space get TEAM` |

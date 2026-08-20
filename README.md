@@ -71,7 +71,7 @@ atlassian-cli jira epic assign EPIC-1 PROJ-1
 atlassian-cli confluence search "space = TEAM" --limit 10
 atlassian-cli confluence get 123456 --format markdown
 atlassian-cli confluence children 123456
-atlassian-cli confluence comment list 123456 --format markdown
+atlassian-cli confluence comment list 123456 --format markdown   # 대댓글·인라인 댓글 모두 포함
 
 # 페이지 (HTML storage format)
 atlassian-cli confluence create TEAM "Title" "<p>Content</p>"
@@ -79,6 +79,10 @@ atlassian-cli confluence update 123456 "Title" "<p>Updated</p>"
 atlassian-cli confluence delete 123456 --yes              # 휴지통 (--yes 필수)
 
 # 댓글 · 라벨 · 콘텐츠 속성
+atlassian-cli confluence comment list 123456 --location inline   # 본문에 앵커된 댓글만
+atlassian-cli confluence comment list 123456 --roots-only        # 최상위 댓글만
+atlassian-cli confluence comment get 67890                       # 댓글 id 로 단건 조회
+atlassian-cli confluence comment replies 67890                   # 한 스레드만
 atlassian-cli confluence comment add 123456 "<p>리뷰 완료</p>"
 atlassian-cli confluence comment add 123456 "<p>답글</p>" --reply-to 67890
 atlassian-cli confluence label add 123456 needs-review
@@ -104,18 +108,18 @@ atlassian-cli -v jira search "..."           # -v/-vv/-vvv: info/debug/trace
 ```bash
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | bash
 ```
-최신 릴리스의 사전 빌드 바이너리를 설치하고, `jira-confluence` Claude Code skill을 사용자 레벨(`~/.claude/skills`)로 설치할 수 있습니다. repo checkout 없이 실행해도 skill은 GitHub에서 직접 가져옵니다.
+최신 릴리스의 사전 빌드 바이너리를 설치하고, 그 바이너리가 자기 안에 담고 있는 `jira-confluence` Claude Code skill 을 `~/.claude/skills` 에 배포합니다.
 
 ```bash
 # 특정 릴리스 설치
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.9.0 bash
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.10.0 bash
 
-# 제거 (비대화형 기본값은 바이너리만 제거하고 skill/config는 보존)
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/uninstall.sh | bash
-
-# skill과 글로벌 설정까지 제거
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/uninstall.sh | bash -s -- --yes
+# 이후 업데이트·제거는 바이너리가 직접 한다 (설치 스크립트 재실행 불필요)
+atlassian-cli self update
+atlassian-cli self uninstall --yes
 ```
+
+설치 후 생명주기는 `self` 명령군이 담당합니다 — 아래 [설치 관리](#설치-관리) 참조.
 
 **소스 빌드**:
 ```bash
@@ -125,7 +129,23 @@ cargo build --release   # toolchain pinned by rust-toolchain.toml (1.97.1)
 cp target/release/atlassian-cli ~/.local/bin/
 ```
 
-**지원 플랫폼**: Linux (x86_64, aarch64), macOS (Intel, Apple Silicon), Windows (x86_64). `install.sh` 자동 설치는 Linux/macOS용이며, Windows는 Release 바이너리를 수동 설치합니다.
+**지원 플랫폼**: Linux (x86_64, aarch64), macOS (Intel, Apple Silicon), Windows (x86_64). `install.sh` 자동 설치는 Linux/macOS용이며, Windows는 Release 바이너리를 수동 설치합니다. 모든 플랫폼이 `.tar.gz` 를 발행하므로 `self update` 는 어디서나 동작합니다.
+
+### 설치 관리
+
+```bash
+atlassian-cli self status                     # 버전·경로·skill 상태·토큰을 가진 프로파일 (네트워크 없음)
+atlassian-cli self update                     # 최신 릴리스로 교체
+atlassian-cli self update --version 0.9.0     # 특정 버전 (다운그레이드는 명시할 때만 허용)
+atlassian-cli self update --verify-attestations   # GitHub build provenance 까지 검증 (gh CLI 필요)
+atlassian-cli self skill install               # skill 재배포
+atlassian-cli self skill remove --yes
+atlassian-cli self uninstall --yes [--keep-skill] [--keep-credentials] [--purge-config]
+```
+
+- skill 은 바이너리에 컴파일되어 들어갑니다. 버전이 어긋날 수 없고, `self status` 는 배포본을 **바이트 비교**로 판정하므로 직접 수정한 사본도 `stale` 로 잡힙니다.
+- `self update` 는 내려받은 바이너리를 **교체 전에** 실행해 버전을 확인합니다. 이 기계에서 돌지 않는 바이너리는 아무것도 건드리지 않고 실패합니다.
+- `self uninstall` 은 OS 키체인에 남은 OAuth 토큰까지 지웁니다 (`--keep-credentials` 로 보존). 글로벌 설정은 기본 보존이며 `--purge-config` 로 제거합니다. 프로젝트 로컬 설정(`.atlassian.toml`)은 건드리지 않습니다.
 **Requirement**: Rust 1.97.1+ (소스 빌드 시).
 
 ---
@@ -357,7 +377,11 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 | `update <ID> <TITLE> <CONTENT>` | 페이지 수정 (HTML) |
 | `delete <ID> --yes` | 페이지 삭제 (휴지통) |
 | `children <ID>` | 하위 페이지 |
-| `comment list/add/update/delete ...` | footer 댓글 (`add`은 page id·`--reply-to`, `update`/`delete`는 comment id) |
+| `comment list <ID> [--location footer\|inline] [--roots-only]` | 페이지 댓글 — 기본은 footer·inline 두 계열 전부, 대댓글 포함. 항목마다 `location`·`depth`·`parentCommentId` |
+| `comment get <COMMENT_ID> [--location ...]` | 댓글 단건 (기본 `footer`) |
+| `comment replies <COMMENT_ID> [--location ...]` | 한 댓글 아래 전체 스레드 |
+| `comment add <ID> <HTML> [--reply-to <COMMENT_ID>]` | footer 댓글 작성 (page id) |
+| `comment update/delete <COMMENT_ID> ...` | 댓글 수정 / 삭제 (comment id) |
 | `label list/add/remove <ID> [LABEL]` | 페이지 라벨 |
 | `property list/set/delete <ID> [KEY] [JSON]` | 콘텐츠 속성 (값은 strict JSON) |
 | `space list`, `space get <KEY>` | 스페이스 조회 |

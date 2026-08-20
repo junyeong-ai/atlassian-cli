@@ -506,7 +506,7 @@ enum ConfluenceSubcommand {
     },
     /// List the direct child pages of a page (metadata only)
     Children { page_id: String },
-    /// List, add, update, or delete footer comments on a page
+    /// Read a page's comments and threads, or write footer comments
     Comment {
         #[command(subcommand)]
         action: ConfluenceCommentAction,

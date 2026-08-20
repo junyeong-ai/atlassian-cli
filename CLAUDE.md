@@ -61,6 +61,7 @@ Profile search walks: global (`~/.config/atlassian-cli/config.toml`) → project
 - **Jira Agile**: board, sprint, epic endpoints use `/rest/agile/1.0/`. These route through the same Jira proxy (`/ex/jira/{cloud_id}/...`), so they use `Service::Jira` — no separate Service variant needed.
 - **Confluence search**: `GET /wiki/rest/api/search` (v1) — v2 has no CQL equivalent yet.
 - **Confluence pages, comments, labels, properties, spaces, attachments**: `/wiki/api/v2/*` for reads; label and attachment *writes* fall back to v1 (`/wiki/rest/api/content/...`) — see `src/confluence/CLAUDE.md`.
+- **Confluence comments** are two v2 families (footer, inline) with an identical path algebra, and a page endpoint returns only ROOT comments. Reads walk every level; see `src/confluence/CLAUDE.md`.
 
 This mix is deliberate — do not "modernize" the Confluence search path.
 
@@ -71,7 +72,21 @@ This mix is deliberate — do not "modernize" the Confluence search path.
 - `--stream` writes JSONL to stdout; progress/totals go to stderr. The function returns `Value::Null` so `output_json` suppresses any trailing output. Do not re-introduce a trailing summary line — it breaks `| jq`.
 - **Error contract**: a failed run prints a single-line JSON object to stderr — `{"error":{"message",...}}`, plus `status`/`operation`/`hint` fields when the failure is a typed `ApiError` — and exits with a stable code: 1 generic, 2 CLI usage (clap), 3 auth (401/403), 4 not found (404), 5 rate limited (429), 6 server error (5xx). Stdout carries results only.
 - **429 handling**: every API call routes through `ApiClient::execute`, which retries 429 up to 3 times (server `Retry-After` honored and capped at 60s, else exponential backoff from 500ms). Only 429 is retried — 5xx may have committed a write, so retrying it could duplicate the operation. Each retry re-derives the `Authorization` header (a backoff wait must never replay a token that expired during it). Multipart requests (attachment upload) cannot be cloned and are sent exactly once.
-- **Destructive-op guard**: whole-resource deletes (`jira delete`, `confluence delete`) require an explicit `--yes` at the CLI layer (the binary is non-interactive/JSON-first, so a prompt would hang pipelines — a required flag is the guard). The API functions (`delete_issue`/`delete_page`) stay pure; the `--yes` check lives in the `main.rs` handler. Targeted sub-resource removals that already require a specific id — Jira `comment delete`, `link remove`, `worklog remove`, `watcher remove`; Confluence `comment delete`, `label remove`, `property delete` — do **not** require `--yes`, because the id/name/key is the specificity guard. Jira issue delete is irreversible (no recycle bin); Confluence page delete goes to trash.
+- **Destructive-op guard**: whole-resource deletes (`jira delete`, `confluence delete`, `self uninstall`, `self skill remove`) require an explicit `--yes` at the CLI layer (the binary is non-interactive/JSON-first, so a prompt would hang pipelines — a required flag is the guard). The API functions (`delete_issue`/`delete_page`) stay pure; the `--yes` check lives in the `main.rs` handler. Targeted sub-resource removals that already require a specific id — Jira `comment delete`, `link remove`, `worklog remove`, `watcher remove`; Confluence `comment delete`, `label remove`, `property delete` — do **not** require `--yes`, because the id/name/key is the specificity guard. Jira issue delete is irreversible (no recycle bin); Confluence page delete goes to trash.
+
+## Installation lifecycle (`self`)
+
+```
+atlassian-cli self status                    # version, paths, skill byte-state, stored profiles — no network
+atlassian-cli self update [--version V] [--force] [--verify-attestations]
+atlassian-cli self skill install             # writes the skill this binary carries
+atlassian-cli self skill remove --yes
+atlassian-cli self uninstall --yes [--keep-skill] [--keep-credentials] [--purge-config]
+```
+
+`src/dist/` owns this and does not touch `ApiClient` — it talks to GitHub. The skill is compiled into the binary (`include_str!`), so binary and skill cannot be different versions and a deployed copy is checked byte-for-byte. `self update` proves the downloaded binary runs and reports the expected version **before** replacing anything, so there is no half-installed state to roll back from. `scripts/install.sh` and `scripts/uninstall.sh` delegate here rather than restating what an installation consists of. See `src/dist/CLAUDE.md`.
+
+`self status` deliberately makes no network call; "is there a newer one" is answered by `self update`, which changes nothing when the running binary is already current.
 
 ## Auto-injected filters
 
@@ -117,3 +132,4 @@ Multi-operation domains (`comment`, `transition`, `link`, `worklog`, `watcher`, 
 - OAuth `state` parameter is generated via CSPRNG (`CsrfToken::new_random`) and validated on the callback. Mismatch → reject + clean error.
 - PKCE is **always** used (S256). Atlassian permits public-client OAuth without PKCE but every CLI is a public client, so we enforce it.
 - `credentials.json` is 0600; parent directory 0700. Loader warns on looser perms. Atomic writes via `tempfile::persist` prevent partial files on crash.
+- `self update` verifies the published SHA-256 before the archive is used for anything, and never installs bytes that fail it. The archive is staged in a directory `tempfile` creates exclusively and this code narrows to 0700 — the system temp directory is world-writable and an archive's name is fully predictable, so a known path there could be pre-created as a symlink or swapped between the write and `gh attestation verify`. Nothing is unpacked: `read_from_tar_gz` returns one named member's bytes, so no path chosen by the archive reaches the filesystem.

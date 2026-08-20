@@ -4,8 +4,6 @@ set -euo pipefail
 BINARY_NAME="atlassian-cli"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 REPO="junyeong-ai/atlassian-cli"
-SKILL_NAME="jira-confluence"
-USER_SKILL_DIR="$HOME/.claude/skills/$SKILL_NAME"
 VERSION="${ATLASSIAN_CLI_VERSION:-}"
 SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
 ORIGINAL_DIR="$(pwd)"
@@ -23,14 +21,10 @@ if [ -f "$SCRIPT_DIR/../Cargo.toml" ] && grep -q '^name = "atlassian-cli"' "$SCR
     IS_CHECKOUT=true
 fi
 
-PROJECT_SKILL_DIR="$PROJECT_ROOT/.claude/skills/$SKILL_NAME"
-SKILL_SOURCE_DIR=""
-SKILL_TMP_DIR=""
 BINARY_TMP_DIR=""
 STAGED_BINARY=""
 
 cleanup() {
-    [ -n "$SKILL_TMP_DIR" ] && rm -rf "$SKILL_TMP_DIR"
     [ -n "$BINARY_TMP_DIR" ] && rm -rf "$BINARY_TMP_DIR"
     [ -n "$STAGED_BINARY" ] && rm -f "$STAGED_BINARY"
     return 0
@@ -261,180 +255,6 @@ install_binary() {
     echo "Installed to $INSTALL_DIR/$BINARY_NAME" >&2
 }
 
-get_skill_version() {
-    local skill_md="$1"
-    [ -f "$skill_md" ] && grep "^version:" "$skill_md" 2>/dev/null | sed 's/version: *//' || echo "unknown"
-}
-
-check_skill_exists() {
-    [ -d "$USER_SKILL_DIR" ] && [ -f "$USER_SKILL_DIR/SKILL.md" ]
-}
-
-compare_versions() {
-    local ver1="$1"
-    local ver2="$2"
-    local i
-    local a
-    local b
-    local parts1
-    local parts2
-
-    if [ "$ver1" = "$ver2" ]; then
-        echo "equal"
-        return 0
-    fi
-
-    if [ "$ver1" = "unknown" ] || [ "$ver2" = "unknown" ]; then
-        echo "unknown"
-        return 0
-    fi
-
-    if ! [[ "$ver1" =~ ^[0-9]+(\.[0-9]+)*$ && "$ver2" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
-        echo "unknown"
-        return 0
-    fi
-
-    IFS=. read -r -a parts1 <<< "$ver1"
-    IFS=. read -r -a parts2 <<< "$ver2"
-
-    for i in 0 1 2; do
-        a="${parts1[$i]:-0}"
-        b="${parts2[$i]:-0}"
-        if ((10#$a < 10#$b)); then
-            echo "older"
-            return 0
-        fi
-        if ((10#$a > 10#$b)); then
-            echo "newer"
-            return 0
-        fi
-    done
-
-    echo "equal"
-    return 0
-}
-
-backup_skill() {
-    local timestamp
-    local backup_dir
-    timestamp=$(date +%Y%m%d_%H%M%S)
-    backup_dir="$USER_SKILL_DIR.backup_$timestamp"
-
-    echo "Creating skill backup: $backup_dir" >&2
-    cp -r "$USER_SKILL_DIR" "$backup_dir"
-}
-
-install_skill() {
-    echo "Installing skill to $USER_SKILL_DIR" >&2
-    mkdir -p "$(dirname "$USER_SKILL_DIR")"
-    rm -rf "$USER_SKILL_DIR"
-    cp -r "$SKILL_SOURCE_DIR" "$USER_SKILL_DIR"
-    echo "Skill installed" >&2
-}
-
-prepare_skill_source() {
-    local ref="$1"
-    local skill_url
-    local fallback_url
-
-    if [ "$IS_CHECKOUT" = true ] && [ -f "$PROJECT_SKILL_DIR/SKILL.md" ]; then
-        SKILL_SOURCE_DIR="$PROJECT_SKILL_DIR"
-        return 0
-    fi
-
-    SKILL_TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/atlassian-cli-skill.XXXXXX")
-    SKILL_SOURCE_DIR="$SKILL_TMP_DIR/$SKILL_NAME"
-    mkdir -p "$SKILL_SOURCE_DIR"
-
-    skill_url="https://raw.githubusercontent.com/$REPO/$ref/.claude/skills/$SKILL_NAME/SKILL.md"
-    if curl -fsSL "$skill_url" -o "$SKILL_SOURCE_DIR/SKILL.md"; then
-        return 0
-    fi
-
-    if [ "$ref" != "main" ]; then
-        fallback_url="https://raw.githubusercontent.com/$REPO/main/.claude/skills/$SKILL_NAME/SKILL.md"
-        echo "Skill not found at $ref; trying main" >&2
-        if curl -fsSL "$fallback_url" -o "$SKILL_SOURCE_DIR/SKILL.md"; then
-            return 0
-        fi
-    fi
-
-    rm -rf "$SKILL_TMP_DIR"
-    SKILL_TMP_DIR=""
-    SKILL_SOURCE_DIR=""
-    return 1
-}
-
-prompt_skill_installation() {
-    local ref="$1"
-    local project_version
-    local existing_version
-    local comparison
-    local choice
-
-    if ! prepare_skill_source "$ref"; then
-        echo "Could not fetch $SKILL_NAME skill from $ref; skipping skill installation" >&2
-        return 0
-    fi
-
-    project_version=$(get_skill_version "$SKILL_SOURCE_DIR/SKILL.md")
-
-    echo "" >&2
-    echo "Claude Code skill: $SKILL_NAME (v$project_version)" >&2
-
-    if check_skill_exists; then
-        existing_version=$(get_skill_version "$USER_SKILL_DIR/SKILL.md")
-        comparison=$(compare_versions "$existing_version" "$project_version")
-        echo "Current skill: v$existing_version" >&2
-
-        case "$comparison" in
-            equal)
-                choice=$(prompt_choice "Reinstall skill? [y/N]: " "n")
-                if [[ "$choice" =~ ^[yY]$ ]]; then
-                    backup_skill
-                    install_skill
-                else
-                    echo "Keeping existing skill" >&2
-                fi
-                ;;
-            older)
-                choice=$(prompt_choice "Update skill? [Y/n]: " "y")
-                if [[ "$choice" =~ ^[nN]$ ]]; then
-                    echo "Keeping existing skill" >&2
-                else
-                    backup_skill
-                    install_skill
-                fi
-                ;;
-            newer)
-                choice=$(prompt_choice "Installed skill is newer. Replace it? [y/N]: " "n")
-                if [[ "$choice" =~ ^[yY]$ ]]; then
-                    backup_skill
-                    install_skill
-                else
-                    echo "Keeping existing skill" >&2
-                fi
-                ;;
-            *)
-                choice=$(prompt_choice "Install fetched skill over existing skill? [y/N]: " "n")
-                if [[ "$choice" =~ ^[yY]$ ]]; then
-                    backup_skill
-                    install_skill
-                else
-                    echo "Keeping existing skill" >&2
-                fi
-                ;;
-        esac
-    else
-        choice=$(prompt_choice "Install Claude Code skill to ~/.claude/skills? [Y/n]: " "y")
-        if [[ "$choice" =~ ^[nN]$ ]]; then
-            echo "Skipped skill installation" >&2
-        else
-            install_skill
-        fi
-    fi
-}
-
 main() {
     echo "Installing Atlassian CLI..." >&2
 
@@ -442,7 +262,6 @@ main() {
     local target
     local version="$VERSION"
     local explicit_version=false
-    local ref
     local method
     local display_install_dir
     local command_name
@@ -460,7 +279,6 @@ main() {
         if [ "$IS_CHECKOUT" = true ]; then
             echo "curl not found; building from source" >&2
             version=""
-            ref="main"
             method="2"
         else
             echo "curl is required to install a prebuilt binary" >&2
@@ -477,14 +295,12 @@ main() {
         fi
 
         if [ -n "$version" ]; then
-            ref="v$version"
             if [ "$explicit_version" = true ]; then
                 echo "Version: v$version" >&2
             else
                 echo "Latest release: v$version" >&2
             fi
         else
-            ref="main"
             echo "Could not determine latest release" >&2
         fi
 
@@ -533,7 +349,10 @@ main() {
         exit 1
     fi
 
-    prompt_skill_installation "$ref"
+    # The skill is compiled into the binary, so the binary deploys it — there
+    # is no version to compare and nothing to fetch separately.
+    "$INSTALL_DIR/$BINARY_NAME" self skill install >/dev/null || \
+        echo "Could not install the Claude Code skill; run '$command_name self skill install'" >&2
 
     echo "" >&2
     echo "Installation complete" >&2

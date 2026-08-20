@@ -1,6 +1,6 @@
 ---
 name: jira-confluence
-version: 0.9.0
+version: 0.10.0
 description: Run Jira/Confluence operations through atlassian-cli — JQL/CQL search, issue CRUD, comments, transitions, issue links, worklogs, watchers, sprint/board/epic moves; Confluence page CRUD, footer comments, labels, content properties, spaces, and attachment upload, with ADF/HTML body editing. Also handles OAuth sign-in flows (`auth login/status/refresh`) when the user reports an auth problem or asks to switch accounts.
 when_to_use: Trigger on Jira tickets, Confluence pages, sprint planning, time logging, "내 이슈", "위키 검색", auth trouble or account switching, or any Atlassian workspace request.
 allowed-tools: Bash
@@ -114,7 +114,7 @@ A string arg is treated as ADF **only** if it parses to a complete valid ADF doc
 atlassian-cli confluence get 12345 --format markdown
 atlassian-cli confluence search "space = TEAM" --limit 20
 atlassian-cli confluence children 12345          # children is JSON only (no --format)
-atlassian-cli confluence comment list 12345 --format markdown
+atlassian-cli confluence comment list 12345 --format markdown   # every reply, footer and inline
 
 # Large reads — cursor pagination (list endpoints auto-follow cursors to completion)
 atlassian-cli confluence search "space = TEAM" --all --stream > pages.jsonl
@@ -126,7 +126,12 @@ atlassian-cli confluence update 12345 "Title" "<p>Updated</p>"
 atlassian-cli confluence update 12345 "Title" "<p>Updated</p>" --parent 67890  # re-parent
 atlassian-cli confluence delete 12345 --yes      # moves to trash (recoverable)
 
-# Footer comments — storage HTML body; --reply-to threads under a comment
+# Comments — reads cover both families and every reply; writes are footer-only
+atlassian-cli confluence comment list 12345 --location inline   # just the anchored ones
+atlassian-cli confluence comment list 12345 --roots-only        # top level only
+atlassian-cli confluence comment get 67890                      # one comment by id
+atlassian-cli confluence comment replies 67890                  # one thread
+atlassian-cli confluence comment get 67890 --location inline
 atlassian-cli confluence comment add 12345 "<p>Looks good</p>"
 atlassian-cli confluence comment add 12345 "<p>Reply</p>" --reply-to 67890
 atlassian-cli confluence comment update 67890 "<p>Edited</p>"   # by comment id, not page id
@@ -150,7 +155,9 @@ atlassian-cli confluence attachment upload 12345 ./diagram.png --comment "v2"
 atlassian-cli confluence attachment upload 12345 ./icon.svg --content-type image/svg+xml
 ```
 
-- `comment update`/`delete` take the **comment id** (globally addressable); `comment add` takes the **page id**.
+- `comment list` returns one flat, depth-first array covering both comment families and every level of every thread. Each entry carries `location` (`footer`/`inline`), `depth`, and `parentCommentId` (`null` at a root), so rebuild the tree from those rather than assuming the array is top-level only.
+- `comment get`/`replies`/`update`/`delete` take the **comment id**; `comment list`/`add` take the **page id**. Passing a comment id to `comment list` is a 400.
+- `--location` defaults to `footer` on `comment get`/`replies` — an id from an inline thread needs `--location inline`, and every entry `comment list` returns already states which it is. A wrong `--location` is a 404, not a fallback.
 - `property set` values are **strict JSON** — quote bare strings as `'"text"'`, not `text`.
 - `attachment upload` upserts by filename; add `--minor` to suppress watcher notifications on re-upload. The `Content-Type` is mapped from the file extension (so `diagram.png` → `image/png` and renders inline instead of becoming an opaque download); pass `--content-type <mime>` to override. Note: Confluence Cloud often blocks **inline SVG** rendering for security, so embed diagrams as PNG when you need them to display.
 - Under OAuth, Confluence v2 writes need granular scopes on the token, not just classic ones. A `401 "scope does not match"` means the scope was never requested at login: add it to the profile's `scopes` in config and re-run `auth login` (having it enabled on the OAuth app is not enough — the token only carries scopes the login *requested*). The write↔scope map: comment → `write:comment:confluence`, property → `write:content:confluence`, attachment → `write:attachment:confluence`, page create/update → `write:page:confluence`, page delete → `delete:page:confluence`, `space`/page-create space lookup → `read:space:confluence`.
