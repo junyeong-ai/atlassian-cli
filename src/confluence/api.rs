@@ -489,10 +489,11 @@ impl<'a> ThreadWalk<'a> {
     /// Take one comment into the listing: read its id, refuse one already seen,
     /// and record what the traversal knows about it.
     ///
-    /// `parentCommentId` is the collection the comment was read out of and
-    /// `location` the path that was requested, so neither is a response field
-    /// to trust. A root gets an explicit `null`, keeping "answers nothing"
-    /// distinct from "not reported". `depth` counts from this listing's roots.
+    /// `parentCommentId` is the collection the comment was read out of,
+    /// `location` the path that was requested and `pageId` the page the listing
+    /// was opened on, so none of them is a response field to trust. A root gets
+    /// an explicit `null` parent, keeping "answers nothing" distinct from "not
+    /// reported". `depth` counts from this listing's roots.
     fn admit(
         &mut self,
         what: &str,
@@ -516,11 +517,7 @@ impl<'a> ThreadWalk<'a> {
             "parentCommentId".into(),
             parent.map_or(Value::Null, Value::String),
         );
-        // Only on replies: the page endpoint already reports it on a root, and
-        // a reply's own model carries no container at all.
-        if depth > 0
-            && let Some(page_id) = self.page_id
-        {
+        if let Some(page_id) = self.page_id {
             object.insert("pageId".into(), json!(page_id));
         }
         Ok(id)
@@ -2261,7 +2258,7 @@ mod tests {
         assert_eq!(
             thread_shape(&result),
             vec![
-                ("r1", 0, None, "footer", None),
+                ("r1", 0, None, "footer", Some("5")),
                 ("a1", 1, Some("r1"), "footer", Some("5")),
                 ("a2", 1, Some("r1"), "footer", Some("5")),
             ]
@@ -2288,7 +2285,10 @@ mod tests {
         let result = get_comments("5", &[CommentFamily::Footer], false, false, &client)
             .await
             .unwrap();
-        assert_eq!(thread_shape(&result), vec![("r1", 0, None, "footer", None)]);
+        assert_eq!(
+            thread_shape(&result),
+            vec![("r1", 0, None, "footer", Some("5"))]
+        );
     }
 
     #[tokio::test]
@@ -2370,8 +2370,8 @@ mod tests {
         assert_eq!(
             thread_shape(&result),
             vec![
-                ("f1", 0, None, "footer", None),
-                ("i1", 0, None, "inline", None),
+                ("f1", 0, None, "footer", Some("5")),
+                ("i1", 0, None, "inline", Some("5")),
                 ("i2", 1, Some("i1"), "inline", Some("5")),
             ]
         );

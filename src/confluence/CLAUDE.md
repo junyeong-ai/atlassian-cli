@@ -22,16 +22,16 @@ v2 splits comments into two families — footer and inline — and addresses bot
 
 **A page endpoint returns ROOT comments only.** The spec says so in as many words, and a reply is reachable solely through its parent's `children` collection. `ThreadWalk` therefore walks every level — each one a full `fetch_all_v2_results` cursor walk — and flattens the tree depth-first. Listing only the roots is the same failure the pagination helpers exist to prevent: an incomplete set handed back as a complete one.
 
-Each emitted comment carries four fields the **walk** determined, never the response:
+Each emitted comment carries four fields the **walk** determined, never the response — so a row has the same shape at every depth:
 
 | field | value |
 |---|---|
 | `location` | the family whose path was requested |
 | `depth` | 0 at the roots of *this* listing, +1 per level |
 | `parentCommentId` | the comment whose `children` collection this was read out of; explicit `null` at a root, so "answers nothing" and "not reported" stay distinguishable |
-| `pageId` | stamped on replies only — the page endpoint already reports it on a root, and a reply's model (`ChildrenCommentModel`) carries no container at all |
+| `pageId` | the page this listing was opened on, at every depth — a reply's model (`ChildrenCommentModel`) carries no container at all, and taking a root's from the response would make the row shape depend on what the server chose to include. Absent only when the walk was opened on a comment id rather than a page |
 
-`ThreadWalk` keeps a `seen` set of ids. A tree cannot reach a comment twice, so an id returning as its own descendant is drift and bails — the same posture `CursorTrail` takes toward a cursor that stops advancing. There is no depth cap; one would turn a legitimately deep thread into a failure. What `seen` cannot terminate is a server answering every `children` request with ids it has not used before, so `MAX_THREAD_COMMENTS` bounds the walk as a whole — the comments admitted plus the replies still queued, because each admitted comment can add a whole page to the queue and bounding the admitted set alone would let it exhaust memory first. Set far beyond any real page, and failing loudly like `paginate`'s `MAX_PAGES` rather than truncating. It is a per-walk budget, so a listing covering both families carries one each.
+`ThreadWalk` keeps a `seen` set of ids. A tree cannot reach a comment twice, so an id returning as its own descendant is drift and bails — the same posture `CursorTrail` takes toward a cursor that stops advancing. There is no depth cap; one would turn a legitimately deep thread into a failure. What `seen` cannot terminate is a server answering every `children` request with ids it has not used before, so `MAX_THREAD_COMMENTS` bounds the walk as a whole — the comments admitted plus the replies still queued, because each admitted comment can add a whole reply collection to the queue and bounding the admitted set alone would let it exhaust memory first. Set far beyond any real page, and failing loudly like `paginate`'s `MAX_PAGES` rather than truncating. It is a per-walk budget, so a listing covering both families carries one each.
 
 **The family is part of a comment's address, not something to discover.** `get_comment`/`get_comment_replies` take it explicitly (CLI: `--location`, default `footer`). Retrying in the other family on a 404 would collapse "wrong family", "deleted" and "not visible to you" into one answer. Every comment this module emits carries its `location`, so an id it handed out is always complete.
 
