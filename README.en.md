@@ -191,7 +191,7 @@ cp target/release/atlassian-cli ~/.local/bin/
 
 ### 🤖 Claude Code Skill
 
-`scripts/install.sh` deploys it to `~/.claude/skills/jira-confluence`, where it is available in every project. Manage it afterwards with `self skill install` / `self skill remove`.
+`scripts/install.sh` deploys it to `~/.claude/skills/jira-confluence`, where it is available in every project — and where it cannot, it warns and the install still completes. Manage it afterwards with `self skill install` / `self skill remove`.
 
 ---
 

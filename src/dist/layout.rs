@@ -26,6 +26,9 @@ impl Installation {
         Ok(Self {
             // Follows a shim: a version manager puts one on `PATH` and the real
             // file is what a report has to name and a removal has to unlink.
+            // Where it cannot be resolved, `current_exe` still names a path to
+            // the running binary — the shim, if there is one — which is a worse
+            // answer than the real file and a better one than no installation.
             binary: binary.canonicalize().unwrap_or(binary),
             home: dirs::home_dir(),
         })

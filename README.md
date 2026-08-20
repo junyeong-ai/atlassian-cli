@@ -448,7 +448,7 @@ atlassian-cli completions bash > /etc/bash_completion.d/atlassian-cli
 
 ## Claude Code Skill
 
-설치 스크립트는 `jira-confluence` 스킬을 사용자 레벨(`~/.claude/skills/jira-confluence`)에 배포합니다. 스킬은 바이너리에 컴파일되어 들어 있고 배포는 `self skill install` 이 합니다 — 어디서 실행하든 배포된 사본은 정의상 그 바이너리의 것입니다.
+설치 스크립트는 `jira-confluence` 스킬을 사용자 레벨(`~/.claude/skills/jira-confluence`)에 배포하며, 배포하지 못하면 경고만 남기고 설치 자체는 계속됩니다. 스킬은 바이너리에 컴파일되어 들어 있고 배포는 `self skill install` 이 합니다 — 어디서 실행하든 배포된 사본은 정의상 그 바이너리의 것입니다.
 
 ---
 
