@@ -87,6 +87,11 @@ impl<T> std::fmt::Display for Keychain<T> {
 /// single entry go through [`TokenStore::keyring_op`]; a search addresses the
 /// service instead, so it comes here directly rather than through an entry it
 /// has no profile for.
+///
+/// Nothing store-shaped may be carried back out. An `Entry` looks like data and
+/// is not: on Linux, reading one blocks on the session bus through a private
+/// tokio runtime, and `Runtime::block_on` panics on a thread already driving
+/// futures. Whatever a caller needs from an entry is read inside `op`.
 async fn keychain<T, F>(op: F) -> Keychain<T>
 where
     F: FnOnce() -> std::result::Result<T, KeyringError> + Send + 'static,
@@ -260,12 +265,16 @@ impl TokenStore {
             .await
         {
             Keychain::Done(()) => {
-                let _ = self.file_delete();
+                self.file_delete()?;
                 Ok(TokenStorageBackend::Keyring)
             }
             outcome => {
                 tracing::debug!("Keyring save unavailable ({outcome}), using the file store");
                 self.file_save(&json)?;
+                // The keychain is unreachable — that is why this is the file
+                // path — so it cannot be asked to drop a stale entry. `load`
+                // reads it first, so one left there wins until it is cleared;
+                // `auth logout` without whatever made it unreachable does that.
                 let _ = self.keyring_op(|e| e.delete_credential()).await;
                 Ok(TokenStorageBackend::File)
             }
@@ -343,7 +352,10 @@ impl TokenStore {
             let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
         }
 
-        let mut all = self.file_read_all().unwrap_or_default();
+        owned_credentials_file(&self.file_path)?;
+        // Not `unwrap_or_default`: a file that will not parse still holds the
+        // other profiles, and writing over it would take them.
+        let mut all = self.file_read_all()?;
         let parsed: OnDisk = serde_json::from_str(json_for_profile)
             .context("Internal: failed to round-trip on-disk token JSON")?;
         all.insert(self.profile.clone(), parsed);
@@ -540,30 +552,32 @@ pub async fn stored_profiles(credentials_file: &std::path::Path) -> StoredProfil
 
     let keyring = match keychain(|| {
         let (key, value) = search_spec();
-        Entry::search(&HashMap::from([(key, value.as_str())]))
+        let entries = Entry::search(&HashMap::from([(key, value.as_str())]))?;
+        let mut named = BTreeSet::new();
+        let mut unnamed = 0usize;
+        for entry in &entries {
+            match entry.get_specifiers() {
+                Some((service, user)) if service == KEYRING_SERVICE => {
+                    named.insert(user);
+                }
+                // Another service's entry, which a store that searches by
+                // name rather than by attribute returns alongside ours.
+                Some(_) => {}
+                None => unnamed += 1,
+            }
+        }
+        Ok((named, unnamed))
     })
     .await
     {
-        Keychain::Done(entries) => {
-            let mut named = BTreeSet::new();
-            let mut unnamed = 0usize;
-            for entry in &entries {
-                match entry.get_specifiers() {
-                    Some((service, user)) if service == KEYRING_SERVICE => {
-                        named.insert(user);
-                    }
-                    // Another service's entry, which a store that searches by
-                    // name rather than by attribute returns alongside ours.
-                    Some(_) => {}
-                    None => unnamed += 1,
-                }
-            }
+        Keychain::Done((named, unnamed)) => {
             profiles.extend(named);
             if unnamed == 0 {
                 KeyringEnumeration::Listed
             } else {
                 KeyringEnumeration::Failed(format!(
-                    "{unnamed} keychain entries would not say which profile they belong to"
+                    "the keychain holds {unnamed} entries that would not say which profile they \
+                     belong to"
                 ))
             }
         }
@@ -889,6 +903,50 @@ mod tests {
             stored.file_error.is_some(),
             "a file that would not open passed for an empty one"
         );
+    }
+
+    /// The rewrite is a rename, so through a link it replaces the link and
+    /// leaves the tokens at the far end. Saving and clearing hold the file to
+    /// the same shape; guarding only one of them is how a login came to
+    /// silently take the redirect a logout refused to follow.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn saving_through_a_link_is_refused_as_clearing_through_one_is() {
+        set_default_store(keyring_core::mock::Store::new().unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("elsewhere.json");
+        let link = dir.path().join("credentials.json");
+        fs::write(&real, "{}").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let err = TokenStore::at("linked-save", link.clone())
+            .file_save("{}")
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("not a regular file"), "{err}");
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    /// The write rewrites the whole map, so reading it as empty when it will
+    /// not parse replaces every other profile's tokens with this one's.
+    #[test]
+    fn saving_beside_a_file_that_will_not_parse_takes_nothing_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        fs::write(&path, "{ not json").unwrap();
+
+        let err = TokenStore::at("newcomer", path.clone())
+            .file_save("{}")
+            .unwrap_err();
+
+        assert!(format!("{err:#}").contains("credentials"), "{err:#}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{ not json");
     }
 
     /// Unlinking a symlink removes the link. The tokens stay readable where it

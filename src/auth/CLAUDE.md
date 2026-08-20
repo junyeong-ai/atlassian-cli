@@ -146,9 +146,17 @@ spells the separator the same way so both builders read identically.
   and an entry that will not name itself leaves the listing incomplete rather
   than shortened.
 - The fallback file is rewritten and removed whole, so `owned_credentials_file`
-  requires it to be the regular file this tool wrote. Through a symlink the
-  rewrite replaces the link and the unlink removes the link, either way leaving
-  every token readable at the far end of a call that reported them cleared.
+  requires it to be a regular file — on the write as well as the removal. The
+  rewrite is a rename, so through a symlink it replaces the link, and the unlink
+  removes the link; either way every token stays readable at the far end. It
+  reads absence from `NotFound` alone, as `read_all_from` does: a path that
+  cannot be stat'd is not an empty one, and taking it for one is what let an
+  uninstall report a profile cleared without having read it.
+- **Nothing store-shaped leaves `keychain`.** A `keyring_core::Entry` looks like
+  data and is not: on Linux, reading one blocks on the session bus through
+  zbus's private tokio runtime, and `Runtime::block_on` panics on a thread that
+  is already driving futures. `stored_profiles` therefore reads each entry's
+  specifiers inside the closure and returns the profile names, not the entries.
 - `strategy.rs` holds the `OAuthStrategy`. `tokens: Mutex<TokenSet>` so
   concurrent callers serialize on refresh — at most one token-endpoint
   round trip when the cache is stale. Refresh tokens **rotate** on every
