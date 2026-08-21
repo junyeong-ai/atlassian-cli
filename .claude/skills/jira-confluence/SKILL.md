@@ -1,8 +1,8 @@
 ---
 name: jira-confluence
 version: 0.10.0
-description: Run Jira/Confluence operations through atlassian-cli — JQL/CQL search, issue CRUD, comments, transitions, issue links, worklogs, watchers, sprint/board/epic moves; Confluence page CRUD, comment threads (footer and inline, replies included), labels, content properties, spaces, and attachment upload, with ADF/HTML body editing. Also handles OAuth sign-in flows (`auth login/status/refresh`) when the user reports an auth problem or asks to switch accounts.
-when_to_use: Trigger on Jira tickets, Confluence pages, sprint planning, time logging, "내 이슈", "위키 검색", auth trouble or account switching, or any Atlassian workspace request.
+description: Run Jira/Confluence operations through atlassian-cli — JQL/CQL search, issue CRUD, comments, transitions, issue links, worklogs, watchers, sprint/board/epic moves; Confluence page CRUD, comment threads (footer and inline, replies included), labels, content properties, spaces, and attachment upload, with ADF/HTML body editing. Also handles OAuth sign-in flows (`auth login/status/refresh`) when the user reports an auth problem or asks to switch accounts, and the tool's own installation (`self status/update/skill install`).
+when_to_use: Trigger on Jira tickets, Confluence pages, sprint planning, time logging, "내 이슈", "위키 검색", auth trouble or account switching, updating atlassian-cli itself, or any Atlassian workspace request.
 allowed-tools: Bash
 ---
 
@@ -59,10 +59,13 @@ atlassian-cli jira link remove PROJ-1 PROJ-2 --type Blocks   # by issue pair, no
 # Worklogs — time format is "2h 30m" / "1d" / "45m"
 atlassian-cli jira worklog add PROJ-123 "2h 30m" --comment "Investigation"
 atlassian-cli jira worklog list PROJ-123
+atlassian-cli jira worklog update PROJ-123 10001 "3h"   # worklog id from `worklog list`
+atlassian-cli jira worklog remove PROJ-123 10001
 
 # Watchers — operate on the signed-in user
 atlassian-cli jira watcher add PROJ-123
 atlassian-cli jira watcher list PROJ-123
+atlassian-cli jira watcher remove PROJ-123
 ```
 
 ### Discovery (global metadata)
@@ -157,6 +160,7 @@ atlassian-cli confluence attachment upload 12345 ./icon.svg --content-type image
 
 - `comment list` returns one flat, depth-first array covering both comment families and every level of every thread. Each entry carries `location` (`footer`/`inline`), `depth`, and `parentCommentId` (`null` at a root), so rebuild the tree from those rather than assuming the array is top-level only.
 - `comment get`/`replies`/`update`/`delete` take the **comment id**; `comment list`/`add` take the **page id**.
+- Inline entries carry `resolutionStatus` (`open`/`reopened`/`resolved`/`dangling`) and `properties.inlineOriginalSelection`, the text they anchor to. Filter on `resolutionStatus` for "unresolved comments"; footer entries have neither field.
 - `--location` defaults to `footer` on `comment get`/`replies` — an id from an inline thread needs `--location inline`, and every entry `comment list` returns already states which it is. A wrong `--location` is a 404, not a fallback.
 - `property set` values are **strict JSON** — quote bare strings as `'"text"'`, not `text`.
 - `attachment upload` upserts by filename; add `--minor` to suppress watcher notifications on re-upload. The `Content-Type` is mapped from the file extension (so `diagram.png` → `image/png` and renders inline instead of becoming an opaque download); pass `--content-type <mime>` to override. Note: Confluence Cloud often blocks **inline SVG** rendering for security, so embed diagrams as PNG when you need them to display.
@@ -209,10 +213,21 @@ atlassian-cli auth status                # expiry, scopes, storage backend
 atlassian-cli auth login                 # OAuth 3LO; opens browser
 atlassian-cli auth login --no-browser    # SSH session — prints the URL
 atlassian-cli auth refresh               # force token refresh (debugging)
-atlassian-cli auth logout                # clears OAuth tokens; no-op on non-oauth profiles
+atlassian-cli auth logout                # clears the stored session, whatever method the profile is on
 ```
 
 Switch profiles with `--profile <name>`; never invent profile names — list them via `atlassian-cli config list`.
+
+## The installation itself
+
+```bash
+atlassian-cli self status                # version, binary path, skill state, profiles holding tokens — no network
+atlassian-cli self update                # checks GitHub, replaces only after the download runs and reports the expected version
+atlassian-cli self update --version 0.9.0   # a downgrade needs the version named
+atlassian-cli self skill install         # rewrite this skill from the running binary
+```
+
+The skill is compiled into the binary, so `self status` reporting `stale` means the deployed copy differs byte-for-byte from what this binary carries — `self skill install` is the fix, and the two can never be different versions. `self update` changes nothing when the binary is already current. `self uninstall` and `self skill remove` remove things and take `--yes`; leave them to the user rather than running them on your own initiative.
 
 ## Behaviour worth knowing
 
