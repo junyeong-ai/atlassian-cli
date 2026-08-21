@@ -529,12 +529,20 @@ pub async fn add_link(
     Ok(json!({}))
 }
 
-/// Whether some `--type` would narrow these matches to one. Fewer than all of
-/// them is not enough — the command removes where one is left, so a set of
-/// `Blocks, Blocks, Relates, Relates` is a dead end under either name. A match
-/// carrying no type name is one no `--type` selects, and it makes every name a
-/// dead end with it.
-fn a_type_would_narrow_to_one(matching: &[&Value]) -> bool {
+/// Whether naming some type would leave one match and nothing unread — the
+/// state this command removes in, and so the only state the advice may promise.
+///
+/// A name is a way out where exactly one match carries it. Fewer than all of
+/// them is not enough: `Blocks, Blocks, Relates, Relates` is a dead end under
+/// either name. A match carrying no name is one no `--type` selects, and it
+/// makes every name a dead end with it.
+///
+/// An entry the walk could not read does not rule the advice out by itself.
+/// The type exclusion runs before anything else is read of an entry, so naming
+/// a type takes out every unread one carrying a different name. Two do survive
+/// it: one carrying no name, which no `--type` reads, and one carrying the very
+/// name that would be named, which stays unread beside the match it leaves.
+fn a_type_would_narrow_to_one(matching: &[&Value], unread: &[(&str, Option<&str>)]) -> bool {
     let mut names = Vec::with_capacity(matching.len());
     for link in matching {
         match link["type"]["name"].as_str() {
@@ -542,9 +550,12 @@ fn a_type_would_narrow_to_one(matching: &[&Value]) -> bool {
             Some(name) => names.push(name),
         }
     }
-    names
-        .iter()
-        .any(|name| names.iter().filter(|other| *other == name).count() == 1)
+    names.iter().any(|name| {
+        names.iter().filter(|other| *other == name).count() == 1
+            && unread
+                .iter()
+                .all(|(_, unread_name)| unread_name.is_some_and(|n| n != *name))
+    })
 }
 
 pub async fn remove_link(
@@ -563,8 +574,10 @@ pub async fn remove_link(
     // matters.
     let mut matching: Vec<&Value> = Vec::new();
     // What each entry left open, not merely how many did: the reasons differ,
-    // and a fixed one would be describing entries it never saw.
-    let mut unreadable: Vec<&'static str> = Vec::new();
+    // and a fixed one would be describing entries it never saw. The type it
+    // carried rides along, because naming a type takes out an unread entry
+    // carrying a different one.
+    let mut unreadable: Vec<(&'static str, Option<&str>)> = Vec::new();
     let mut reverse = 0usize;
     for link in &items {
         let type_name = link["type"]["name"].as_str();
@@ -594,7 +607,7 @@ pub async fn remove_link(
         // side would settle direction on something never read.
         let side_unreadable = |side: &Value| !side.is_null() && !side.is_object();
         if side_unreadable(&link["outwardIssue"]) || side_unreadable(&link["inwardIssue"]) {
-            unreadable.push("carries a side that is not an issue");
+            unreadable.push(("carries a side that is not an issue", type_name));
             continue;
         }
 
@@ -631,7 +644,7 @@ pub async fn remove_link(
         // inward side being the other end, runs the other way and never is.
         // What ruled the entry out under all three has already gone above.
         if has_outward && has_inward {
-            unreadable.push("carries both ends");
+            unreadable.push(("carries both ends", type_name));
             continue;
         }
 
@@ -655,7 +668,7 @@ pub async fn remove_link(
         // the entry may be the second link from here to the issue asked
         // about, which is what would make the removal a guess.
         if !names_target {
-            unreadable.push("names no issue");
+            unreadable.push(("names no issue", type_name));
             continue;
         }
 
@@ -664,7 +677,7 @@ pub async fn remove_link(
         // refuses two it can read and cannot tell apart, so one it cannot read
         // leaves that same question open.
         if link_type.is_some() && type_name.is_none() {
-            unreadable.push("names no type");
+            unreadable.push(("names no type", type_name));
             continue;
         }
 
@@ -677,7 +690,7 @@ pub async fn remove_link(
     // already answered.
     if !unreadable.is_empty() && matching.len() < 2 {
         let mut reasons: Vec<&str> = Vec::new();
-        for reason in &unreadable {
+        for (reason, _) in &unreadable {
             if !reasons.contains(reason) {
                 reasons.push(reason);
             }
@@ -699,6 +712,15 @@ pub async fn remove_link(
             }
         );
     }
+
+    // The count is of what the walk could read. An entry it could not may be
+    // another of them, and where one is there the answer says how many it got
+    // to rather than how many there are.
+    let found = if unreadable.is_empty() {
+        format!("Found {} links", matching.len())
+    } else {
+        format!("Found at least {} links", matching.len())
+    };
 
     match matching.len() {
         // What this counted is links running the other way that the requested
@@ -735,44 +757,31 @@ pub async fn remove_link(
         // walk could not read is one no `--type` reads either, and it withholds
         // the removal once the matches are down to one. Anywhere else the
         // advice narrows to a set this same refusal answers again.
-        n if link_type.is_none()
-            && unreadable.is_empty()
-            && a_type_would_narrow_to_one(&matching) =>
-        {
+        _ if link_type.is_none() && a_type_would_narrow_to_one(&matching, &unreadable) => {
             anyhow::bail!(
-                "Found {} links from {} to {}. Specify --type to disambiguate.",
-                n,
+                "{} from {} to {}. Specify --type to disambiguate.",
+                found,
                 source_key,
                 target_key
             )
         }
-        // The count is of what the walk could read. An entry it could not may
-        // be another of them, and where one is there the answer says how many
-        // it got to rather than how many there are.
-        n => {
-            let found = if unreadable.is_empty() {
-                format!("Found {n} links")
-            } else {
-                format!("Found at least {n} links")
-            };
-            match link_type {
-                None => anyhow::bail!(
-                    "{} from {} to {}, and no type tells them apart. This command removes by \
+        _ => match link_type {
+            None => anyhow::bail!(
+                "{} from {} to {}, and no type tells them apart. This command removes by \
                      issue pair and type, so it cannot choose between them.",
-                    found,
-                    source_key,
-                    target_key
-                ),
-                Some(t) => anyhow::bail!(
-                    "{} from {} to {} with type '{}'. This command removes by issue pair and \
+                found,
+                source_key,
+                target_key
+            ),
+            Some(t) => anyhow::bail!(
+                "{} from {} to {} with type '{}'. This command removes by issue pair and \
                      type, so it cannot choose between them.",
-                    found,
-                    source_key,
-                    target_key,
-                    t
-                ),
-            }
-        }
+                found,
+                source_key,
+                target_key,
+                t
+            ),
+        },
     }
 
     let link_id = matching[0]["id"]
@@ -2750,42 +2759,58 @@ mod tests {
         assert!(err.to_string().contains("Specify --type"));
     }
 
-    /// Two links of the same type answer to the same `--type`, so naming one
-    /// narrows nothing and sending the caller to do it is advice that returns
-    /// them here. The same where one of the two carries no type name: no
-    /// `--type` selects it either.
+    /// The advice is a promise: name a type and this command removes one. It
+    /// is checked by keeping it — every type in the response is tried, and the
+    /// advice is given exactly where one of them gets there.
+    ///
+    /// Naming a type does not merely narrow the matches. It also takes out
+    /// every entry the walk could not read that carries a different name, and
+    /// leaves the ones carrying none or the same. Both directions are here.
     #[tokio::test]
-    async fn integ_remove_link_offers_a_type_only_where_one_would_tell_them_apart() {
+    async fn integ_remove_link_offers_a_type_only_where_naming_one_removes_a_link() {
+        let outward = json!({ "key": "B-1" });
         for links in [
+            // Two of the same name: neither name leaves one.
             json!([
-                { "id": "1", "type": { "name": "Blocks" }, "outwardIssue": { "key": "B-1" } },
-                { "id": "2", "type": { "name": "Blocks" }, "outwardIssue": { "key": "B-1" } }
+                { "id": "1", "type": { "name": "Blocks" }, "outwardIssue": outward },
+                { "id": "2", "type": { "name": "Blocks" }, "outwardIssue": outward }
             ]),
+            // Two names, each on two: neither leaves one either.
             json!([
-                { "id": "1", "type": { "name": "Blocks" }, "outwardIssue": { "key": "B-1" } },
-                { "id": "2", "type": { "id": "10000" }, "outwardIssue": { "key": "B-1" } }
+                { "id": "1", "type": { "name": "Blocks" }, "outwardIssue": outward },
+                { "id": "2", "type": { "name": "Blocks" }, "outwardIssue": outward },
+                { "id": "3", "type": { "name": "Relates" }, "outwardIssue": outward },
+                { "id": "4", "type": { "name": "Relates" }, "outwardIssue": outward }
             ]),
-            // Two that a type would tell apart, beside one that answers to no
-            // type at all: naming a type still cannot get down to one.
+            // A match carrying no name: no `--type` selects it.
             json!([
-                { "id": "1", "type": { "name": "Blocks" }, "outwardIssue": { "key": "B-1" } },
-                { "id": "2", "type": { "name": "Relates" }, "outwardIssue": { "key": "B-1" } },
-                { "id": "3", "type": { "id": "10000" }, "outwardIssue": { "key": "B-1" } }
+                { "id": "1", "type": { "name": "Blocks" }, "outwardIssue": outward },
+                { "id": "2", "type": { "id": "10000" }, "outwardIssue": outward }
             ]),
-            // Names that differ, and neither leaves one alone.
+            // An unread entry carrying no name: no `--type` reads it either.
             json!([
-                { "id": "1", "type": { "name": "Blocks" }, "outwardIssue": { "key": "B-1" } },
-                { "id": "2", "type": { "name": "Blocks" }, "outwardIssue": { "key": "B-1" } },
-                { "id": "3", "type": { "name": "Relates" }, "outwardIssue": { "key": "B-1" } },
-                { "id": "4", "type": { "name": "Relates" }, "outwardIssue": { "key": "B-1" } }
+                { "id": "1", "type": { "name": "Blocks" }, "outwardIssue": outward },
+                { "id": "2", "type": { "name": "Relates" }, "outwardIssue": outward },
+                { "id": "3", "type": { "id": "10000" } }
             ]),
-            // A name that would leave one alone, beside an entry this walk
-            // could not read: no `--type` reads that one either, so once the
-            // matches are down to one it withholds instead of removing.
+            // Two names, and one leaves the other's match alone.
             json!([
-                { "id": "1", "type": { "name": "Blocks" }, "outwardIssue": { "key": "B-1" } },
-                { "id": "2", "type": { "name": "Relates" }, "outwardIssue": { "key": "B-1" } },
+                { "id": "1", "type": { "name": "Blocks" }, "outwardIssue": outward },
+                { "id": "2", "type": { "name": "Relates" }, "outwardIssue": outward }
+            ]),
+            // An unread entry a name reaches past: `Relates` excludes it by
+            // type and leaves the one match it does not.
+            json!([
+                { "id": "1", "type": { "name": "Blocks" }, "outwardIssue": outward },
+                { "id": "2", "type": { "name": "Relates" }, "outwardIssue": outward },
                 { "id": "3", "type": { "name": "Blocks" } }
+            ]),
+            // The same entry under the name it carries: `Blocks` leaves one
+            // match and that entry still unread, so neither name gets there.
+            json!([
+                { "id": "1", "type": { "name": "Blocks" }, "outwardIssue": outward },
+                { "id": "2", "type": { "name": "Relates" }, "outwardIssue": outward },
+                { "id": "3", "type": { "name": "Relates" } }
             ]),
         ] {
             let server = MockServer::start().await;
@@ -2799,16 +2824,28 @@ mod tests {
                 .await;
             Mock::given(method("DELETE"))
                 .respond_with(ResponseTemplate::new(204))
-                .expect(0)
                 .mount(&server)
                 .await;
-
             let client = mock_client(server.uri());
-            let err = remove_link("A-1", "B-1", None, &client)
+
+            let advised = remove_link("A-1", "B-1", None, &client)
                 .await
                 .unwrap_err()
-                .to_string();
-            assert!(!err.contains("Specify --type"), "{links}: {err}");
+                .to_string()
+                .contains("Specify --type");
+
+            let mut removed_by = Vec::new();
+            for name in ["Blocks", "Relates"] {
+                if remove_link("A-1", "B-1", Some(name), &client).await.is_ok() {
+                    removed_by.push(name);
+                }
+            }
+
+            assert_eq!(
+                advised,
+                !removed_by.is_empty(),
+                "advice {advised} but {removed_by:?} removed one: {links}"
+            );
         }
     }
 
