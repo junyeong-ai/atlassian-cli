@@ -239,6 +239,15 @@ pub async fn search_all(
                 "search succeeded but its 'nextPageToken' was not a string: {next_signal}"
             );
         };
+        // Absent is this endpoint's end signal and nothing else is. An empty
+        // string names no page, and sent back it would either repeat one or
+        // fail a request later under a token that reads like our own bug.
+        if token.is_empty() {
+            anyhow::bail!(
+                "search returned an empty 'nextPageToken', which is neither a page to fetch nor \
+                 the absent field that ends the walk"
+            );
+        }
         if !seen_tokens.insert(token.to_string()) {
             anyhow::bail!(
                 "search returned a page token it had already used ({token}), so the walk would \
@@ -528,13 +537,10 @@ pub async fn remove_link(
 ) -> Result<Value> {
     let items = fetch_links(source_key, client).await?;
 
-    // A link names the issue at its other end, and its type when one was asked
-    // for. An entry carrying neither is a shape this code cannot read, and one
-    // that no exclusion has already ruled out may be a second link to the same
-    // issue of the same type. This command removes only where exactly one
-    // answers to the pair and the type — it refuses two it can read — so an
-    // entry that might be the second leaves that unestablished whether or not
-    // a readable match sits beside it.
+    // A link names the issue at its other end, its direction by which side
+    // names it, and its type when one was asked for. Each is read only where
+    // the one before it did not settle the entry, so no answer rests on a
+    // field that was never there.
     let mut matching: Vec<&Value> = Vec::new();
     let mut unreadable = 0usize;
     let mut reverse = 0usize;
@@ -544,35 +550,40 @@ pub async fn remove_link(
             .or_else(|| link["inwardIssue"]["key"].as_str());
         let type_name = link["type"]["name"].as_str();
 
-        // Four answers, and the order below is which one a caller is told:
-        // a field that is there and does not match settles the entry outright;
-        // then one missing a field the answer still needed is undecided; then
-        // what matches but runs the other way is a different link; what
-        // survives all three matched.
-        //
-        // Undecided comes before direction because direction alone does not
-        // make a link the one asked about: an inward entry with no type name,
-        // under a `--type` query, would otherwise be reported as that type
-        // running the other way when its type was never read.
-        //
-        // Direction is part of the match, not a tie-break. `add` puts the
-        // source on the outward side, so on this issue the link it created
-        // names the other one through `outwardIssue`; a link running the other
-        // way is a different link, removed from the issue that is its source.
-        // Deciding it only where several matched is how a lone reverse link
-        // ends up deleted for a request that never named it.
-        let inward_only = link["outwardIssue"]["key"].as_str().is_none();
+        // A present field that disagrees settles the entry outright, whichever
+        // field it is.
         let key_excludes = other_key.is_some_and(|k| k != target_key);
         let type_excludes = link_type.is_some_and(|t| type_name.is_some_and(|n| n != t));
         if key_excludes || type_excludes {
             continue;
         }
-        if other_key.is_none() || (link_type.is_some() && type_name.is_none()) {
+
+        // Naming no issue leaves everything about the entry open, direction
+        // included: it may be the second link to this one that would make the
+        // removal a guess.
+        if other_key.is_none() {
             unreadable += 1;
             continue;
         }
-        if inward_only {
+
+        // Direction is part of the match, not a tie-break. `add` puts the
+        // source on the outward side, so on this issue the link it created
+        // names the other one through `outwardIssue`; a link running the other
+        // way is a different link, removed from the issue that is its source.
+        // Reading it here settles the entry whatever its type turns out to be
+        // — it is not removable from this issue under any of them — so the
+        // type below is only ever read where it could still change the answer.
+        if link["outwardIssue"]["key"].as_str().is_none() {
             reverse += 1;
+            continue;
+        }
+
+        // Outward, to the issue asked about, and the type asked for is not in
+        // the response: this may be a second link of that type. The command
+        // refuses two it can read and cannot tell apart, so one it cannot read
+        // leaves that same question open.
+        if link_type.is_some() && type_name.is_none() {
+            unreadable += 1;
             continue;
         }
 
@@ -601,15 +612,22 @@ pub async fn remove_link(
     }
 
     match matching.len() {
+        // The reverse links are counted by direction, which every one of them
+        // named. Their type is whatever survived the exclusion above — the one
+        // asked for, or one the response never named — so the count is stated
+        // as links between the two issues and not as links of that type.
         0 if reverse > 0 => anyhow::bail!(
-            "No link runs from {} to {}{}, but {} of them run the other way. Remove one from \
-             {}, the issue it starts at.",
+            "No link runs from {} to {}{}, but {}. Remove one from {}, the issue it starts at.",
             source_key,
             target_key,
             link_type
                 .map(|t| format!(" with type '{}'", t))
                 .unwrap_or_default(),
-            reverse,
+            if reverse == 1 {
+                format!("one link between {source_key} and {target_key} runs the other way")
+            } else {
+                format!("{reverse} links between {source_key} and {target_key} run the other way")
+            },
             target_key
         ),
         0 => anyhow::bail!(
@@ -1443,6 +1461,40 @@ mod tests {
         assert!(err.contains("whether one to PROJ-9 is among them"), "{err}");
     }
 
+    /// Direction is an exclusion too. An inward entry is not removable from
+    /// this issue whatever its unread type turns out to be, so it is not the
+    /// second link that would make the removal a guess, and withholding on it
+    /// would refuse where every answer says proceed.
+    #[tokio::test]
+    async fn integ_remove_link_does_not_withhold_for_an_entry_direction_rules_out() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/PROJ-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "fields": { "issuelinks": [
+                    { "id": "77", "type": { "name": "Blocks" },
+                      "outwardIssue": { "key": "PROJ-2" } },
+                    // Runs the other way, and names no type — but the direction
+                    // it does name is enough to rule it out.
+                    { "id": "88", "type": { "id": "10003" },
+                      "inwardIssue": { "key": "PROJ-2" } }
+                ]}
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/issueLink/77"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        remove_link("PROJ-1", "PROJ-2", Some("Blocks"), &client)
+            .await
+            .expect("the link `add` created, beside one that runs the other way");
+    }
+
     /// An entry an exclusion already ruled out is not a candidate, so it does
     /// not withhold the removal — one link the caller cannot resolve must not
     /// refuse every other link on the issue.
@@ -1539,10 +1591,10 @@ mod tests {
         assert!(err.contains("cannot choose"), "{err}");
     }
 
-    /// Direction alone does not make a link the one asked about. An inward
-    /// entry whose type was never read is undecided, not "that type running the
-    /// other way" — the schema does not require `type.name`, and reporting the
-    /// direction would claim its type had been checked.
+    /// The schema does not require `type.name`, so an inward entry can name
+    /// its direction and not its type. Direction settles it either way — it is
+    /// not removable from this issue under any type — and the answer says so
+    /// without calling it a link of the type asked for.
     #[tokio::test]
     async fn integ_remove_link_does_not_claim_a_direction_for_a_type_it_never_read() {
         let server = MockServer::start().await;
@@ -1562,7 +1614,13 @@ mod tests {
             .await
             .unwrap_err()
             .to_string();
-        assert!(err.contains("cannot be told"), "{err}");
+        // Its direction is named, because the entry named it. Its type is not,
+        // because the entry did not.
+        assert!(
+            err.contains("one link between PROJ-1 and PROJ-2 runs the other way"),
+            "{err}"
+        );
+        assert!(!err.contains("Blocks running"), "{err}");
     }
 
     /// A lone link running the other way is a different link. Removing it for a
@@ -1593,8 +1651,11 @@ mod tests {
             .await
             .unwrap_err()
             .to_string();
-        assert!(err.contains("run the other way"), "{err}");
-        assert!(err.contains("PROJ-2"), "{err}");
+        assert!(
+            err.contains("one link between PROJ-1 and PROJ-2 runs the other way"),
+            "{err}"
+        );
+        assert!(err.contains("Remove one from PROJ-2"), "{err}");
     }
 
     /// An entry a present field already excludes is decided, not undecided: it
@@ -1894,6 +1955,32 @@ mod tests {
             .to_string();
 
         assert!(err.contains("'nextPageToken' was not a string"), "{err}");
+    }
+
+    /// An empty token is neither. Sent back it would fetch a page again or fail
+    /// a request under a token that reads like this tool's own bug, so it is
+    /// refused where it arrives — the posture the two Confluence walks take
+    /// toward an empty `_links.next`.
+    #[tokio::test]
+    async fn integ_search_all_bails_on_an_empty_page_token() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/rest/api/3/search/jql"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "issues": [{ "key": "X-1" }], "nextPageToken": "" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = search_all("project = X", None, false, false, &client)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("empty 'nextPageToken'"), "{err}");
     }
 
     /// The discovery endpoints answer with their list and no envelope around
