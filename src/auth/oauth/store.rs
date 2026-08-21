@@ -125,31 +125,6 @@ where
     .unwrap_or_else(|join_err| Keychain::Unreachable(join_err.to_string()))
 }
 
-/// The keychain would not answer, so whether a session is stored is unknown.
-///
-/// A type rather than a message, because the one caller that reports this
-/// instead of raising it has to tell it apart from every other failure —
-/// matching on prose is the guess this codebase refuses everywhere else.
-#[derive(Debug)]
-pub struct SessionUnknown {
-    pub profile: String,
-    pub reason: String,
-}
-
-impl std::fmt::Display for SessionUnknown {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "The keychain would not answer for profile '{}' ({}), so whether a session is stored \
-             there is unknown. Unlock it and retry, set ATLASSIAN_NO_KEYCHAIN=1 to use the file \
-             store alone, or run `atlassian-cli auth login` if there is no session to reach.",
-            self.profile, self.reason
-        )
-    }
-}
-
-impl std::error::Error for SessionUnknown {}
-
 /// Where the persisted tokens for the active profile currently live.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenStorageBackend {
@@ -339,8 +314,8 @@ impl TokenStore {
     /// the answer came from.
     ///
     /// `Ok(None)` means neither holds a session, which only a keychain that
-    /// answered can establish. One that would not answer gives
-    /// [`SessionUnknown`] instead.
+    /// answered can establish. One that would not answer is an error naming
+    /// its reason.
     pub async fn load(&self) -> Result<Option<LoadedTokens>> {
         let outcome = self.keyring_op(|e| e.get_password()).await;
         if let Keychain::Done(json) = &outcome {
@@ -366,10 +341,13 @@ impl TokenStore {
         // run `auth login`", advice that replaces a session rather than
         // reaching the one that is there.
         match outcome {
-            Keychain::Unreachable(reason) => Err(anyhow::Error::new(SessionUnknown {
-                profile: self.profile.clone(),
-                reason,
-            })),
+            Keychain::Unreachable(reason) => Err(anyhow::anyhow!(
+                "The keychain would not answer for profile '{}' ({reason}), so whether a session \
+                 is stored there is unknown. Unlock it and retry, set ATLASSIAN_NO_KEYCHAIN=1 to \
+                 use the file store alone, or run `atlassian-cli auth login` if there is no \
+                 session to reach.",
+                self.profile
+            )),
             _ => Ok(None),
         }
     }
@@ -439,9 +417,18 @@ impl TokenStore {
         let buf = serde_json::to_vec_pretty(&all).context("Failed to serialize credentials")?;
         tmp.write_all(&buf)
             .context("Failed to write credentials tmpfile")?;
-        tmp.as_file()
-            .sync_all()
-            .context("Failed to flush credentials tmpfile")?;
+        // Reported, not raised. The rename below still lands the tokens, and
+        // by the time a refresh reaches here the refresh token it replaces is
+        // already spent — so failing the save on a filesystem whose `fsync`
+        // does not work would lose the session rather than protect it. What
+        // was wrong before was that this said nothing at all.
+        if let Err(e) = tmp.as_file().sync_all() {
+            tracing::warn!(
+                "Credentials for '{}' were written but not flushed to disk ({e}); they may not \
+                 survive a crash.",
+                self.profile
+            );
+        }
 
         #[cfg(unix)]
         {
@@ -485,9 +472,19 @@ impl TokenStore {
                     .file_path
                     .parent()
                     .context("credentials file path has no parent")?;
-                let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
-                let buf = serde_json::to_vec_pretty(&all)?;
-                tmp.write_all(&buf)?;
+                let mut tmp = tempfile::NamedTempFile::new_in(parent)
+                    .context("Failed to create credentials tmpfile")?;
+                let buf =
+                    serde_json::to_vec_pretty(&all).context("Failed to serialize credentials")?;
+                tmp.write_all(&buf)
+                    .context("Failed to write credentials tmpfile")?;
+                if let Err(e) = tmp.as_file().sync_all() {
+                    tracing::warn!(
+                        "Credentials were rewritten without '{}' but not flushed to disk ({e}); \
+                         the cleared session may reappear after a crash.",
+                        self.profile
+                    );
+                }
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
@@ -916,15 +913,11 @@ mod tests {
                 std::io::Error::other("the keychain is locked"),
             )));
 
-        let err = store.load().await.unwrap_err();
+        let err = store.load().await.unwrap_err().to_string();
 
-        // Downcast, not prose: `auth status` reports this one outcome and
-        // raises every other, and it tells them apart by type.
-        let unknown = err
-            .downcast_ref::<SessionUnknown>()
-            .expect("the one outcome a caller reports rather than raises");
-        assert_eq!(unknown.profile, "locked-read");
-        assert!(unknown.reason.contains("locked"), "{unknown}");
+        assert!(err.contains("would not answer"), "{err}");
+        assert!(err.contains("locked-read"), "{err}");
+        assert!(err.contains("locked"), "{err}");
     }
 
     /// The same reading on the way in: a link whose target is away answers
