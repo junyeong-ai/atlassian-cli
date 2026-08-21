@@ -312,6 +312,12 @@ mod tests {
         );
     }
 
+    /// Which failure a file that is not a binary produces is the platform's:
+    /// Linux refuses to exec one with no recognizable header, while macOS's
+    /// `execvp` retries it as a shell script and reports the exit instead. Both
+    /// are the same answer — it did not run, so `self_replace` is never reached
+    /// — and the error names the file either way, which is what an operator
+    /// needs and what this asserts.
     #[cfg(unix)]
     #[test]
     fn a_binary_that_does_not_run_replaces_nothing() {
@@ -320,7 +326,10 @@ mod tests {
             .write("atlassian-cli", b"not an executable at all")
             .unwrap();
         let err = install(&staged, &v("0.11.0")).unwrap_err();
-        assert!(matches!(err, DistError::Integrity(_)), "{err}");
+        assert!(
+            err.to_string().contains(&staged.display().to_string()),
+            "{err}"
+        );
     }
 
     #[cfg(unix)]

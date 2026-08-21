@@ -2127,6 +2127,12 @@ mod tests {
 
     /// An installation whose every path lands under a temporary home, so the
     /// removal steps can run for real without touching the machine.
+    /// An installation whose binary is a placeholder file. Tests that let
+    /// `self_uninstall` reach the binary are `#[cfg(unix)]` for it: on Windows
+    /// `self_replace::self_delete_at` removes a file by spawning a copy of it
+    /// that waits for this process to exit, so it needs a real self-replace
+    /// executable in the first place and would finish after the test either
+    /// way. The steps before it are covered on every platform.
     fn installation(home: &std::path::Path) -> Installation {
         let binary = home.join("bin").join("atlassian-cli");
         std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
@@ -2134,12 +2140,14 @@ mod tests {
         Installation::at(binary, Some(home.to_path_buf()))
     }
 
+    #[cfg(unix)]
     fn write_config(installation: &Installation) {
         let dir = installation.config_dir().unwrap();
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(installation.config_file().unwrap(), "[default.auth]\n").unwrap();
     }
 
+    #[cfg(unix)]
     fn kinds(report: &serde_json::Value) -> Vec<&str> {
         report["removed"]
             .as_array()
@@ -2149,6 +2157,7 @@ mod tests {
             .collect()
     }
 
+    #[cfg(unix)]
     fn kept(report: &serde_json::Value) -> Vec<&str> {
         report["kept"]
             .as_array()
@@ -2160,6 +2169,7 @@ mod tests {
 
     /// `--keep-credentials` is what keeps the keychain out of these tests: it
     /// is the one step whose backend belongs to the machine.
+    #[cfg(unix)]
     #[tokio::test]
     async fn uninstall_removes_the_skill_and_the_binary_and_keeps_the_config() {
         let home = tempfile::tempdir().unwrap();
@@ -2178,6 +2188,7 @@ mod tests {
         assert!(installation.config_file().unwrap().is_file());
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn keep_skill_leaves_it_and_says_so() {
         let home = tempfile::tempdir().unwrap();
@@ -2195,6 +2206,7 @@ mod tests {
 
     /// `credentials.json` sits in the directory `--purge-config` removes, so a
     /// whole-directory delete would take it whatever `--keep-credentials` said.
+    #[cfg(unix)]
     #[tokio::test]
     async fn purge_config_leaves_the_credentials_file_alone() {
         let home = tempfile::tempdir().unwrap();
@@ -2215,6 +2227,7 @@ mod tests {
         assert!(kept(&report).contains(&"config-directory"));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn purge_config_removes_a_directory_it_empties() {
         let home = tempfile::tempdir().unwrap();
@@ -2264,6 +2277,7 @@ mod tests {
 
     /// A file this tool did not write keeps the directory alive; deleting it
     /// would be taking something that is not ours.
+    #[cfg(unix)]
     #[tokio::test]
     async fn purge_config_spares_a_file_this_tool_did_not_write() {
         let home = tempfile::tempdir().unwrap();
@@ -2339,6 +2353,7 @@ mod tests {
     /// The file names the profiles it holds, so enumerating has to happen
     /// before it is deleted or those profiles go unreported — which is what the
     /// whole `removed` record exists to prevent.
+    #[cfg(unix)]
     #[tokio::test]
     async fn every_file_backed_profile_is_named_in_what_was_removed() {
         mock_keychain();
