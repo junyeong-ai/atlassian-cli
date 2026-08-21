@@ -578,7 +578,17 @@ pub async fn remove_link(
         // the shape the standalone link resource has, where the sides are
         // absolute rather than relative to this issue: taking one of them as
         // "the other end" is a guess, and this guess decides a delete.
+        //
+        // Only two readings of it could be the link asked for — the outward
+        // side is this issue's other end and it is the target, or the sides
+        // are absolute and they are this issue and the target. An outward side
+        // that named a third issue leaves neither: it is that issue's link,
+        // whichever way it runs. The third reading, the inward side being the
+        // other end, runs the other way and never is the link asked for.
         if has_outward && has_inward {
+            if outward_key.is_some_and(|k| k != target_key && k != source_key) {
+                continue;
+            }
             unreadable.push("carries both ends");
             continue;
         }
@@ -1505,15 +1515,16 @@ mod tests {
     /// is a guess, and here that guess deletes.
     #[tokio::test]
     async fn integ_remove_link_will_not_read_a_direction_off_an_entry_naming_both_ends() {
-        // Both sides named, and the issue asked about is on either one of
-        // them: whichever side is read first, the entry names the pair and
-        // cannot be dropped for naming something else.
+        // The two arrangements a reading could still make the link asked for:
+        // the outward side is this issue's other end and it is the target, and
+        // the sides taken absolutely as this issue and the target. Whichever
+        // side is read first, the entry carries the pair.
         for entry in [
             json!({ "id": "77", "type": { "name": "Blocks" },
                     "outwardIssue": { "key": "PROJ-1" },
                     "inwardIssue": { "key": "PROJ-2" } }),
             json!({ "id": "88", "type": { "name": "Blocks" },
-                    "outwardIssue": { "key": "PROJ-9" },
+                    "outwardIssue": { "key": "PROJ-2" },
                     "inwardIssue": { "key": "PROJ-1" } }),
         ] {
             let server = MockServer::start().await;
@@ -1614,17 +1625,49 @@ mod tests {
                 .respond_with(ResponseTemplate::new(204))
                 .mount(&server)
                 .await;
+            // Without this the wrong link being deleted 404s and reads as a
+            // refusal, which is what half these cells expect anyway.
+            Mock::given(method("DELETE"))
+                .and(path("/rest/api/3/issueLink/OTHER"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(0)
+                .mount(&server)
+                .await;
 
             let client = mock_client(server.uri());
             let removed = remove_link("PROJ-1", "PROJ-2", requested, &client)
                 .await
                 .is_ok();
-            let every_side_said_which = outward != "no readable key" && inward != "no readable key";
-            let carries_a_side = outward != "absent" || inward != "absent";
-            let names_target = outward == "names the target" || inward == "names the target";
-            let ruled_out = (every_side_said_which && carries_a_side && !names_target)
-                || (requested.is_some() && kind == "differs")
-                || (outward == "absent" && inward != "absent");
+            // Could this entry be a second link from the source to the
+            // target of the type asked for, under any reading of what it left
+            // unsaid? Where it could not, the match beside it is the only one
+            // and must go.
+            let ruled_out = if requested.is_some() && kind == "differs" {
+                true
+            } else if outward != "absent" && inward != "absent" {
+                // Both ends carried, so which side is this issue's other end
+                // is not readable. Two readings could still make it the link
+                // asked for: the outward side is the other end and it is the
+                // target, or the sides are absolute and they are the source
+                // and the target. The third — the inward side is the other
+                // end — runs the other way and never is.
+                let could_be = match outward {
+                    "names the target" | "no readable key" => true,
+                    "names the source" => {
+                        inward == "names the target" || inward == "no readable key"
+                    }
+                    _ => false,
+                };
+                !could_be
+            } else if outward == "absent" && inward == "absent" {
+                false
+            } else if inward != "absent" {
+                // Inward only: reads as running the other way.
+                true
+            } else {
+                // Outward only: it is this issue's other end, and it said so.
+                outward == "names another issue" || outward == "names the source"
+            };
 
             assert_eq!(
                 removed, ruled_out,
@@ -1652,9 +1695,10 @@ mod tests {
     /// Every entry the two checks above are run over, labelled by what each
     /// part of it says.
     fn shape_space() -> Vec<Shape> {
-        const SIDES: [Part; 4] = [
+        const SIDES: [Part; 5] = [
             ("absent", || json!(null)),
             ("names the target", || json!({ "key": "PROJ-2" })),
+            ("names the source", || json!({ "key": "PROJ-1" })),
             ("names another issue", || json!({ "key": "PROJ-9" })),
             ("no readable key", || json!({ "key": 42 })),
         ];
