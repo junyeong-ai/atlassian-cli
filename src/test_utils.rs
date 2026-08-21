@@ -122,6 +122,15 @@ pub fn mock_client(base_url: impl Into<String>) -> ApiClient {
     ApiClient::new_with_strategy(strategy, create_test_config())
 }
 
+/// `mock_client` for a caller that needs a config of its own — the response
+/// filter is caller-configured, so a test of how it interacts with a read has
+/// to set it.
+#[cfg(test)]
+pub fn mock_client_with_config(base_url: impl Into<String>, config: Config) -> ApiClient {
+    let strategy: Arc<dyn AuthStrategy> = Arc::new(MockAuthStrategy::new(base_url));
+    ApiClient::new_with_strategy(strategy, config)
+}
+
 /// `mock_client` for a caller that needs the client to report a given method.
 #[cfg(test)]
 pub fn mock_client_with_method(base_url: impl Into<String>, method: AuthMethod) -> ApiClient {

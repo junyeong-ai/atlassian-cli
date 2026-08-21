@@ -326,10 +326,12 @@ mod tests {
             .write("atlassian-cli", b"not an executable at all")
             .unwrap();
         let err = install(&staged, &v("0.11.0")).unwrap_err();
-        assert!(
-            err.to_string().contains(&staged.display().to_string()),
-            "{err}"
-        );
+        let message = err.to_string();
+        assert!(message.contains(&staged.display().to_string()), "{err}");
+        // Replacing is the step after the version check, and reaching it here
+        // would have overwritten the test binary — so an error that is not the
+        // replace's is how "nothing was replaced" is observable from inside.
+        assert!(!message.contains("replacing the running binary"), "{err}");
     }
 
     #[cfg(unix)]

@@ -246,10 +246,16 @@ pub async fn search_all(
     }
 
     if !finished {
+        let page_size = effective_search_limit(limit);
+        // Only where there is room to raise it. At the cap the advice would be
+        // an instruction the caller has already followed.
+        let remedy = if page_size < MAX_SEARCH_LIMIT {
+            format!(" — raise --limit, up to {MAX_SEARCH_LIMIT}, to cover more per page")
+        } else {
+            String::new()
+        };
         anyhow::bail!(
-            "search did not finish within {MAX_PAGES} pages of {} results — raise --limit to \
-             cover more results per page",
-            effective_search_limit(limit)
+            "search did not finish within {MAX_PAGES} pages of {page_size} results{remedy}"
         );
     }
 

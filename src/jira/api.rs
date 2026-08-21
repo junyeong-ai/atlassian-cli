@@ -175,28 +175,29 @@ pub async fn search_all(
             .json(&body);
         let response = client.execute("search", request).await?;
 
-        let mut data: Value = response.json().await?;
-        filter::apply(&mut data, client.config());
+        let data: Value = response.json().await?;
 
-        // Same as the single-page read: a 2xx that lost the array is drift,
-        // and reporting it as a page of no matches is the truncation this walk
-        // exists to prevent.
+        // The walk takes its items and its end signal off the body before
+        // anything filters it, as `paginate` and both Confluence walks do:
+        // `response_exclude_fields` is the caller's list, and a name in it that
+        // matches a control field would delete the answer this loop reads.
+        // Filtering one issue at a time reaches exactly what it is for.
         let Some(issues) = data["issues"].as_array().cloned() else {
             anyhow::bail!("search succeeded but its response had no 'issues' array: {data}");
         };
+        let next_signal = data["nextPageToken"].clone();
         let count = issues.len();
 
-        let processed_issues: Vec<Value> = if as_markdown {
-            issues
-                .into_iter()
-                .map(|mut issue| {
+        let processed_issues: Vec<Value> = issues
+            .into_iter()
+            .map(|mut issue| {
+                filter::apply(&mut issue, client.config());
+                if as_markdown {
                     convert_issue_to_markdown(&mut issue);
-                    issue
-                })
-                .collect()
-        } else {
-            issues
-        };
+                }
+                issue
+            })
+            .collect();
 
         if stream {
             for issue in &processed_issues {
@@ -220,16 +221,17 @@ pub async fn search_all(
         // that is there and is not a string is drift, the same distinction the
         // Confluence walk draws on `_links.next`. An empty page is neither —
         // with a token still live, breaking on one drops every page after it.
-        let candidate = &data["nextPageToken"];
-        if candidate.is_null() {
+        if next_signal.is_null() {
             // Cleared rather than merely broken out of: the check after the
             // loop reads this to tell "the endpoint said stop" from "the page
             // bound ran out".
             next_page_token = None;
             break;
         }
-        let Some(token) = candidate.as_str() else {
-            anyhow::bail!("search succeeded but its 'nextPageToken' was not a string: {candidate}");
+        let Some(token) = next_signal.as_str() else {
+            anyhow::bail!(
+                "search succeeded but its 'nextPageToken' was not a string: {next_signal}"
+            );
         };
         if !seen_tokens.insert(token.to_string()) {
             anyhow::bail!(
@@ -1372,6 +1374,47 @@ mod tests {
         assert!(err.contains("no 'transitions' array"), "{err}");
     }
 
+    /// `response_exclude_fields` is the caller's, so a name in it that matches
+    /// a control field must not reach the body this loop reads its own end
+    /// signal from — filtered first, an excluded `nextPageToken` says the
+    /// endpoint had finished and the walk returns page one as the whole result.
+    #[tokio::test]
+    async fn integ_search_all_does_not_read_its_end_signal_from_a_filtered_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/rest/api/3/search/jql"))
+            .and(body_string_contains("nextPageToken"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "issues": [{ "key": "X-2" }] })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/rest/api/3/search/jql"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "issues": [{ "key": "X-1" }], "nextPageToken": "P2" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut config = crate::test_utils::create_test_config();
+        config.optimization.response_exclude_fields =
+            Some(vec!["nextPageToken".to_string(), "avatarUrls".to_string()]);
+        let client = crate::test_utils::mock_client_with_config(server.uri(), config);
+
+        let result = search_all("project = X", None, false, false, &client)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result["total"], 2,
+            "the walk stopped at the filtered field: {result}"
+        );
+    }
+
     /// Absent ends the walk; present-and-not-a-string is neither an end signal
     /// nor a token, so returning the pages fetched so far would report a
     /// truncated search as the whole result set.
@@ -1425,6 +1468,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/ABC-1/worklog"))
             .and(query_param("startAt", "0"))
+            .and(query_param("maxResults", "50"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "startAt": 0,
                 "total": 3,
@@ -1436,6 +1480,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/ABC-1/worklog"))
             .and(query_param("startAt", "2"))
+            .and(query_param("maxResults", "50"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "startAt": 2,
                 "total": 3,

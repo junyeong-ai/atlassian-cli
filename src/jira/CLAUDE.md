@@ -40,4 +40,6 @@ Under `Total` the count is the whole contract, so a page that adds nothing while
 
 Add a new endpoint by adding a `PageContract` constant, never a second loop.
 
-The endpoints outside `paginate` are the ones that are not paginated: `/rest/api/3/issue/{key}/watchers` answers a whole set, and the three discovery reads (`/issuetype`, `/priority`, `/status`) answer with their list and no envelope around it — `require_array(&data, WHOLE_BODY, …)` is how the `{"items": [...]}` contract is held there.
+`search_all` sits outside this helper because `/search/jql` is token-paginated rather than offset-paginated; it carries its own loop and its own bound. Everything else outside it is not paginated at all — `/issue/{key}/watchers`, `/issue/{key}` for links, and `/issue/{key}/transitions` each answer with a whole set, and the three discovery reads (`/issuetype`, `/priority`, `/status`) answer with their list and no envelope around it, where `require_array(&data, WHOLE_BODY, …)` is what holds the `{"items": [...]}` contract.
+
+Every walk takes its items and its end signal off the response **before** `filter::apply` sees it. `response_exclude_fields` is the caller's list, so a name in it matching a control field would delete the answer the loop reads — and a walk that concluded from that deletion would hand back its first page as the whole result. Filtering is per item, which is all it was ever for.
