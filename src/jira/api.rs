@@ -71,12 +71,16 @@ pub async fn get_issue(
     client: &ApiClient,
 ) -> Result<Value> {
     let path = format!("/rest/api/3/issue/{}", encode_path_segment(issue_key));
-    let selected = fields::resolve_get_fields(api_fields, client.config());
-    let url = fields::apply_field_filtering_to_url(&path, &selected);
+    let selected = fields::resolve_get_fields(api_fields, client.config()).join(",");
 
     let request = client
-        .get(Service::Jira, &url)
+        .get(Service::Jira, &path)
         .await?
+        // Through the query builder, not into the URL string: the selector is
+        // the caller's `--fields`, and a value carrying `&` or `#` written into
+        // the URL would start a parameter of its own or a fragment, changing
+        // the request the server answers.
+        .query(&[("fields", selected.as_str()), ("expand", "-renderedFields")])
         .header("Accept", "application/json");
     let response = client.execute("get issue", request).await?;
 
@@ -1383,6 +1387,33 @@ mod tests {
             .to_string();
 
         assert!(err.contains("no 'transitions' array"), "{err}");
+    }
+
+    /// `--fields` is the caller's, so it goes through the query builder. Written
+    /// into the URL, a value carrying `&` would start a parameter of its own and
+    /// change the request — here it must stay one encoded `fields` value.
+    #[tokio::test]
+    async fn integ_get_issue_sends_a_field_selector_the_caller_cannot_break_out_of() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/PROJ-1"))
+            .and(query_param("fields", "summary&expand=changelog"))
+            .and(query_param("expand", "-renderedFields"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "key": "PROJ-1" })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let result = get_issue(
+            "PROJ-1",
+            Some(vec!["summary&expand=changelog".to_string()]),
+            false,
+            &client,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["key"], "PROJ-1");
     }
 
     /// `response_exclude_fields` trims what a read prints. `remove_link` picks

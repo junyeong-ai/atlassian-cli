@@ -87,22 +87,6 @@ pub fn resolve_get_fields(
     fields
 }
 
-/// Append a `fields=` selector and suppress the heavy rendered-fields expansion
-/// on an issue URL. The selector is the caller's resolved field list (joined),
-/// so a single hardwired whitelist no longer caps what `get` can return.
-pub fn apply_field_filtering_to_url(base_url: &str, fields: &[String]) -> String {
-    let fields = fields.join(",");
-
-    let url_with_fields = if base_url.contains('?') {
-        format!("{}&fields={}", base_url, fields)
-    } else {
-        format!("{}?fields={}", base_url, fields)
-    };
-
-    // Exclude heavy rendered fields
-    format!("{}&expand=-renderedFields", url_with_fields)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,34 +161,6 @@ mod tests {
         assert_eq!(ESSENTIAL_FIELDS.len(), 11);
         assert!(ESSENTIAL_FIELDS.contains(&"description"));
         assert!(ESSENTIAL_FIELDS.contains(&"key"));
-    }
-
-    fn essential() -> Vec<String> {
-        ESSENTIAL_FIELDS.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn test_apply_field_filtering_to_url() {
-        let base_url = "https://test.atlassian.net/rest/api/3/issue/TEST-123";
-        let result = apply_field_filtering_to_url(base_url, &essential());
-        assert!(result.contains("?fields="));
-        assert!(result.contains("&expand=-renderedFields"));
-        assert!(result.contains("key,summary,description"));
-    }
-
-    #[test]
-    fn test_apply_field_filtering_with_existing_query() {
-        let base_url = "https://test.atlassian.net/rest/api/3/issue/TEST-123?foo=bar";
-        let result = apply_field_filtering_to_url(base_url, &essential());
-        assert!(result.contains("&fields="));
-        assert!(result.contains("foo=bar"));
-    }
-
-    #[test]
-    fn test_apply_field_filtering_honors_explicit_selection() {
-        // An explicit selection (e.g. `*all`) overrides the essential whitelist.
-        let result = apply_field_filtering_to_url("/rest/api/3/issue/T-1", &["*all".to_string()]);
-        assert!(result.contains("fields=*all"));
     }
 
     #[test]

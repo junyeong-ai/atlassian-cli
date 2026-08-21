@@ -460,6 +460,28 @@ pub(crate) fn validate_cloud_id(raw: &str) -> Result<()> {
     Ok(())
 }
 
+/// A TOML parse failure named by position and reason, never by content.
+///
+/// `toml::de::Error` renders the offending source line, and a config file is
+/// exactly where the secrets are: a malformed `client_secret = "…" x` would put
+/// that value into the single-line error object this CLI prints on stderr, and
+/// from there into a shell history or a CI log. The line and column are derived
+/// from the span instead, so the diagnosis keeps its location and loses only the
+/// text.
+fn parse_failure(path: &Path, content: &str, mut error: toml::de::Error) -> anyhow::Error {
+    let position = error
+        .span()
+        .map(|span| {
+            let before = &content[..span.start.min(content.len())];
+            let line = before.matches('\n').count() + 1;
+            let column = before.rsplit('\n').next().unwrap_or("").chars().count() + 1;
+            format!(" at line {line}, column {column}")
+        })
+        .unwrap_or_default();
+    error.set_input(None);
+    anyhow::anyhow!("Failed to parse config file {path:?}{position}: {error}")
+}
+
 impl Config {
     /// Extract OAuth flow parameters for this profile.
     /// Errors with an actionable message when the profile is not OAuth-configured.
@@ -608,8 +630,8 @@ impl Config {
         let content = fs::read_to_string(path)
             .with_context(|| format!("Failed to read config file: {:?}", path))?;
 
-        let config_file: ConfigFile = toml::from_str(&content)
-            .with_context(|| format!("Failed to parse config file: {:?}", path))?;
+        let config_file: ConfigFile =
+            toml::from_str(&content).map_err(|e| parse_failure(path, &content, e))?;
 
         let mut names: Vec<String> = config_file.profiles.keys().cloned().collect();
         names.sort();
@@ -629,8 +651,8 @@ impl Config {
         let content = fs::read_to_string(path)
             .with_context(|| format!("Failed to read config file: {:?}", path))?;
 
-        let config_file: ConfigFile = toml::from_str(&content)
-            .with_context(|| format!("Failed to parse config file: {:?}", path))?;
+        let config_file: ConfigFile =
+            toml::from_str(&content).map_err(|e| parse_failure(path, &content, e))?;
 
         match profile {
             Some(profile_name) => Ok(config_file.profiles.get(profile_name).cloned()),
@@ -1968,6 +1990,34 @@ domain = "x.atlassian.net"
     /// one it merely could not stat as absent runs the command against a parent
     /// directory's site instead of the one the user put in this one.
     #[cfg(unix)]
+    /// A config file is where the secrets are, so a parse failure must name
+    /// where it is and not what is there — `toml`'s own rendering quotes the
+    /// offending line, which would put a malformed secret into the error object
+    /// this CLI prints on stderr.
+    #[test]
+    fn a_parse_failure_names_the_place_and_not_the_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[default.auth]\nclient_secret = \"supersecret\" trailing\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600))
+            .unwrap();
+
+        let err = format!("{:#}", Config::profile_names(&path).unwrap_err());
+        assert!(
+            !err.contains("supersecret"),
+            "the secret reached the error: {err}"
+        );
+        assert!(
+            err.contains("line 2"),
+            "the failure lost its position: {err}"
+        );
+    }
+
     #[test]
     fn a_dangling_project_config_link_is_something_at_the_path() {
         let dir = tempfile::tempdir().unwrap();
