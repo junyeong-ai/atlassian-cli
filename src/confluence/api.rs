@@ -798,15 +798,21 @@ async fn fetch_space_by_key(space_key: &str, client: &ApiClient) -> Result<Optio
     let Some(results) = data["results"].as_array() else {
         anyhow::bail!("lookup succeeded but its response had no 'results' array: {data}");
     };
-    // As with a property lookup: the `keys` filter is the server's, and the id
-    // taken from here decides which space a page is created in. A result naming
-    // another key is not the space that was asked for.
+    // The `keys` filter is the server's, and the id taken from here decides
+    // which space a page is created in. A result that names another key
+    // contradicts the request and is refused; one that names none does not
+    // contradict anything, and the v2 schema does not require `key` — reading
+    // its absence as a mismatch would be the same error in the other direction.
+    // Creating in the wrong space is undone by deleting the page, which is why
+    // this is not the property lookup's rule.
     match results.first() {
         None => Ok(None),
-        Some(found) if found["key"].as_str() == Some(space_key) => Ok(Some(found.clone())),
+        Some(found) if found["key"].as_str().is_none_or(|k| k == space_key) => {
+            Ok(Some(found.clone()))
+        }
         Some(found) => anyhow::bail!(
             "looked up space '{space_key}' and the response named '{}' instead: {found}",
-            found["key"].as_str().unwrap_or("nothing")
+            found["key"].as_str().unwrap_or_default()
         ),
     }
 }
@@ -1170,16 +1176,22 @@ async fn fetch_property_by_key(
     let Some(results) = data["results"].as_array() else {
         anyhow::bail!("lookup succeeded but its response had no 'results' array: {data}");
     };
-    // The filter is the server's, and what comes back is what `delete_property`
-    // deletes by id. A result that names a different key is not the property
-    // that was asked for, and deleting it would take data nobody named — so the
-    // key is read back rather than assumed.
+    // The filter is the server's, and the id that comes back is what
+    // `set_property` overwrites and `delete_property` deletes. Both are
+    // irreversible for whatever the id actually names, so this refuses anything
+    // it cannot confirm — a key that contradicts, and equally one that is
+    // absent, since the v2 schema does not require it and an unconfirmed match
+    // is what would take data nobody named.
     match results.first() {
         None => Ok(None),
         Some(found) if found["key"].as_str() == Some(key) => Ok(Some(found.clone())),
         Some(found) => anyhow::bail!(
-            "looked up property '{key}' and the response named '{}' instead: {found}",
-            found["key"].as_str().unwrap_or("nothing")
+            "looked up property '{key}' and the result {}, so which property its id names is \
+             not established: {found}",
+            match found["key"].as_str() {
+                Some(other) => format!("names '{other}' instead"),
+                None => "names no key".to_string(),
+            }
         ),
     }
 }
@@ -3066,7 +3078,55 @@ mod tests {
             .await
             .unwrap_err()
             .to_string();
-        assert!(err.contains("named 'owner'"), "{err}");
+        assert!(err.contains("names 'owner'"), "{err}");
+    }
+
+    /// The v2 schema does not require `key`, and a space lookup's id feeds a
+    /// create — undone by deleting the page. A result that names nothing
+    /// contradicts nothing, so it is used.
+    #[tokio::test]
+    async fn integ_a_space_lookup_accepts_a_result_that_names_no_key() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/api/v2/spaces"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "results": [{ "id": "sid" }] })),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/wiki/api/v2/pages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "p1" })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        create_page("ENG", "T", "<p>x</p>", None, None, None, &client)
+            .await
+            .expect("a result naming no key contradicts nothing");
+    }
+
+    /// A property id is overwritten by `set_property` and removed by
+    /// `delete_property`, so an unconfirmed match is refused — a key that
+    /// contradicts and equally one that is absent.
+    #[tokio::test]
+    async fn integ_a_property_lookup_refuses_a_result_that_names_no_key() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/api/v2/pages/9/properties"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "results": [{ "id": "p1" }] })),
+            )
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = delete_property("9", "state", &client)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("names no key"), "{err}");
     }
 
     /// The same for a space: its id decides where a page is created.
