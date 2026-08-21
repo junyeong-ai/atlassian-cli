@@ -460,19 +460,6 @@ pub(crate) fn validate_cloud_id(raw: &str) -> Result<()> {
     Ok(())
 }
 
-/// Whether a config file is at this path.
-///
-/// `Path::exists` answers false to both "not there" and "could not tell", and
-/// resolves a link besides — so a dangling `.atlassian.toml` reads as no
-/// project config at all.
-fn config_file_present(path: &Path) -> Result<bool> {
-    match fs::symlink_metadata(path) {
-        Ok(_) => Ok(true),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(e) => Err(anyhow::Error::from(e).context(format!("Failed to read config {path:?}"))),
-    }
-}
-
 impl Config {
     /// Extract OAuth flow parameters for this profile.
     /// Errors with an actionable message when the profile is not OAuth-configured.
@@ -520,7 +507,7 @@ impl Config {
 
         // 1. Load global config
         if let Some(global_path) = Self::global_config_path()
-            && config_file_present(&global_path)?
+            && crate::path_present(&global_path)?
         {
             tracing::debug!("Loading global config: {:?}", global_path);
             if let Some(profile_config) = Self::load_from_file(&global_path, profile)? {
@@ -655,7 +642,10 @@ impl Config {
     fn check_permissions(path: &Path) -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
 
-        let metadata = fs::metadata(path)?;
+        // Reached for a path discovery found, which includes a link with
+        // nothing at the other end — so this is where that is named.
+        let metadata =
+            fs::metadata(path).with_context(|| format!("Failed to read config file: {path:?}"))?;
         let permissions = metadata.permissions();
         let mode = permissions.mode();
 
@@ -862,7 +852,7 @@ impl Config {
                 dir.join(".atlassian.toml"),
                 dir.join(".atlassian/config.toml"),
             ] {
-                if config_file_present(&candidate)? {
+                if crate::path_present(&candidate)? {
                     return Ok(Some(candidate));
                 }
             }
@@ -881,7 +871,7 @@ impl Config {
             PathBuf::from(".atlassian.toml")
         };
 
-        if config_file_present(&path)? {
+        if crate::path_present(&path)? {
             bail!("Config file already exists: {:?}", path);
         }
 
@@ -1961,6 +1951,19 @@ domain = "x.atlassian.net"
         };
         assert!(config.validate().is_ok());
     }
+    /// `.atlassian/config.toml` under a regular file named `.atlassian`
+    /// answers `NotADirectory`, and the walk passes through every ancestor up
+    /// to `/` — so reading that as a failure lets any such file, anyone's, stop
+    /// every command.
+    #[test]
+    fn a_config_dir_that_is_a_plain_file_holds_no_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join(".atlassian");
+        std::fs::write(&blocker, "not a directory").unwrap();
+
+        assert!(!crate::path_present(&blocker.join("config.toml")).unwrap());
+    }
+
     /// The walk continues upward past a candidate it does not find, so reading
     /// one it merely could not stat as absent runs the command against a parent
     /// directory's site instead of the one the user put in this one.
@@ -1970,14 +1973,14 @@ domain = "x.atlassian.net"
         let dir = tempfile::tempdir().unwrap();
         let candidate = dir.path().join(".atlassian.toml");
         std::fs::write(&candidate, "").unwrap();
-        assert!(config_file_present(&candidate).unwrap());
+        assert!(crate::path_present(&candidate).unwrap());
 
         let missing = dir.path().join("nothing.toml");
-        assert!(!config_file_present(&missing).unwrap());
+        assert!(!crate::path_present(&missing).unwrap());
 
         // A dangling link is something at the path, not nothing.
         let link = dir.path().join("dangling.toml");
         std::os::unix::fs::symlink(dir.path().join("gone"), &link).unwrap();
-        assert!(config_file_present(&link).unwrap());
+        assert!(crate::path_present(&link).unwrap());
     }
 }
