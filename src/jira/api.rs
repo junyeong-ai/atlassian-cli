@@ -239,9 +239,9 @@ pub async fn search_all(
                 "search succeeded but its 'nextPageToken' was not a string: {next_signal}"
             );
         };
-        // Absent is this endpoint's end signal and nothing else is. An empty
-        // string names no page, and sent back it would either repeat one or
-        // fail a request later under a token that reads like our own bug.
+        // Absent or null is this endpoint's end signal and nothing else is. An
+        // empty string names no page, and sent back it would either repeat one
+        // or fail a request later under a token that reads like our own bug.
         if token.is_empty() {
             anyhow::bail!(
                 "search returned an empty 'nextPageToken', which is neither a page to fetch nor \
@@ -612,22 +612,19 @@ pub async fn remove_link(
     }
 
     match matching.len() {
-        // The reverse links are counted by direction, which every one of them
-        // named. Their type is whatever survived the exclusion above — the one
-        // asked for, or one the response never named — so the count is stated
-        // as links between the two issues and not as links of that type.
+        // What this counted is links running the other way that the requested
+        // type did not rule out — not every link between the two issues, and
+        // not every link of that type either, since one may have gone unread.
+        // A total stated here would be either. Existence is what was
+        // established, and existence is what the caller needs to act.
         0 if reverse > 0 => anyhow::bail!(
-            "No link runs from {} to {}{}, but {}. Remove one from {}, the issue it starts at.",
+            "No link runs from {} to {}{}, but at least one link between them runs the other \
+             way. Remove it from {}, the issue it starts at.",
             source_key,
             target_key,
             link_type
                 .map(|t| format!(" with type '{}'", t))
                 .unwrap_or_default(),
-            if reverse == 1 {
-                format!("one link between {source_key} and {target_key} runs the other way")
-            } else {
-                format!("{reverse} links between {source_key} and {target_key} run the other way")
-            },
             target_key
         ),
         0 => anyhow::bail!(
@@ -1617,7 +1614,7 @@ mod tests {
         // Its direction is named, because the entry named it. Its type is not,
         // because the entry did not.
         assert!(
-            err.contains("one link between PROJ-1 and PROJ-2 runs the other way"),
+            err.contains("at least one link between them runs the other way"),
             "{err}"
         );
         assert!(!err.contains("Blocks running"), "{err}");
@@ -1652,10 +1649,48 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("one link between PROJ-1 and PROJ-2 runs the other way"),
+            err.contains("at least one link between them runs the other way"),
             "{err}"
         );
-        assert!(err.contains("Remove one from PROJ-2"), "{err}");
+        assert!(err.contains("Remove it from PROJ-2"), "{err}");
+    }
+
+    /// A reverse link the requested type rules out is not counted, so any
+    /// total the answer stated would be one the exclusion could falsify. The
+    /// answer says the same thing with that link present and absent.
+    #[tokio::test]
+    async fn integ_remove_link_says_the_same_whether_or_not_a_type_rules_a_reverse_link_out() {
+        async fn answer(links: Value) -> String {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/rest/api/3/issue/PROJ-1"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({ "fields": { "issuelinks": links } })),
+                )
+                .mount(&server)
+                .await;
+            let client = mock_client(server.uri());
+            remove_link("PROJ-1", "PROJ-2", Some("Blocks"), &client)
+                .await
+                .unwrap_err()
+                .to_string()
+        }
+
+        let blocks = json!({ "id": "b", "type": { "name": "Blocks" },
+                             "inwardIssue": { "key": "PROJ-2" } });
+        let relates = json!({ "id": "r", "type": { "name": "Relates" },
+                              "inwardIssue": { "key": "PROJ-2" } });
+
+        let alone = answer(json!([blocks.clone()])).await;
+        // Two links between the issues run the other way and one was ruled
+        // out, so any total here would be a number the exclusion falsifies.
+        // Existence is what survives it.
+        assert!(
+            alone.contains("at least one link between them runs the other way"),
+            "{alone}"
+        );
+        assert_eq!(alone, answer(json!([blocks, relates])).await);
     }
 
     /// An entry a present field already excludes is decided, not undecided: it
