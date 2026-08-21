@@ -549,36 +549,45 @@ pub async fn remove_link(
     let mut unreadable: Vec<&'static str> = Vec::new();
     let mut reverse = 0usize;
     for link in &items {
+        // Which sides the entry carries, and separately what they say. A side
+        // that is there with an unreadable key still tells us the entry has
+        // that end; reading only the key would take it for a side that is not
+        // there at all, and the two mean opposite things here.
+        let has_outward = !link["outwardIssue"].is_null();
+        let has_inward = !link["inwardIssue"].is_null();
         let outward_key = link["outwardIssue"]["key"].as_str();
         let inward_key = link["inwardIssue"]["key"].as_str();
         let type_name = link["type"]["name"].as_str();
 
         // A present field that disagrees settles the entry outright, whichever
-        // field it is. An entry naming two issues is excluded only when
-        // neither of them is the one asked about — the pair is what the
-        // request names, and either side carrying it makes the entry relevant.
+        // field it is — but only where every side it carries said which issue
+        // it is. An entry naming two issues is excluded when neither of them
+        // is the one asked about: the pair is what the request names, and
+        // either side carrying it makes the entry relevant.
+        let keys_readable =
+            (!has_outward || outward_key.is_some()) && (!has_inward || inward_key.is_some());
         let names_target = outward_key == Some(target_key) || inward_key == Some(target_key);
-        let key_excludes = (outward_key.is_some() || inward_key.is_some()) && !names_target;
+        let key_excludes = keys_readable && (has_outward || has_inward) && !names_target;
         let type_excludes = link_type.is_some_and(|t| type_name.is_some_and(|n| n != t));
         if key_excludes || type_excludes {
             continue;
         }
 
-        // Naming no issue leaves everything about the entry open, direction
-        // included: it may be the second link to this one that would make the
-        // removal a guess.
-        if !names_target {
-            unreadable.push("names no issue");
+        // An issue's own links carry the other end and only the other end, so
+        // which side carries it is the direction. An entry carrying both is
+        // the shape the standalone link resource has, where the sides are
+        // absolute rather than relative to this issue: taking one of them as
+        // "the other end" is a guess, and this guess decides a delete.
+        if has_outward && has_inward {
+            unreadable.push("names an issue at both ends");
             continue;
         }
 
-        // An issue's own links name the other end and only the other end, so
-        // which side names it is the direction. An entry naming both sides is
-        // the shape the standalone link resource has, where they are absolute
-        // rather than relative to this issue: taking one of them as "the other
-        // end" is a guess, and this guess decides a delete.
-        if outward_key.is_some() && inward_key.is_some() {
-            unreadable.push("names an issue at both ends");
+        // One side, and it did not say which issue — or no side at all.
+        // Either way the entry may be the second link to this one that would
+        // make the removal a guess.
+        if !names_target {
+            unreadable.push("names no issue");
             continue;
         }
 
@@ -590,7 +599,7 @@ pub async fn remove_link(
         // — it is not removable from this issue under any of them — so a type
         // the response left out is only ever weighed below, where it could
         // still change the answer.
-        if outward_key.is_none() {
+        if !has_outward {
             reverse += 1;
             continue;
         }
@@ -620,11 +629,13 @@ pub async fn remove_link(
             source_key,
             reasons.join("; "),
             if matching.is_empty() {
-                format!("whether one to {target_key} is among them cannot be told")
+                format!(
+                    "whether one from {source_key} to {target_key} is among them cannot be told"
+                )
             } else {
                 format!(
-                    "whether one of them is a second link to {target_key} cannot be told, and \
-                     this command removes only where there is one"
+                    "whether one of them is a second link from {source_key} to {target_key} \
+                     cannot be told, and this command removes only where there is one"
                 )
             }
         );
@@ -1468,7 +1479,7 @@ mod tests {
             .await
             .unwrap_err()
             .to_string();
-        assert!(err.contains("a second link to PROJ-2"), "{err}");
+        assert!(err.contains("a second link from PROJ-1 to PROJ-2"), "{err}");
         // Two entries left it open and for different reasons; a fixed
         // parenthetical would describe one of them wrongly.
         assert!(err.contains("(names no type; names no issue)"), "{err}");
@@ -1478,7 +1489,10 @@ mod tests {
             .await
             .unwrap_err()
             .to_string();
-        assert!(err.contains("whether one to PROJ-9 is among them"), "{err}");
+        assert!(
+            err.contains("whether one from PROJ-1 to PROJ-9 is among them"),
+            "{err}"
+        );
         assert!(err.contains("(names no issue)"), "{err}");
     }
 
@@ -1524,6 +1538,75 @@ mod tests {
                 "{entry}: {err}"
             );
         }
+    }
+
+    /// A side that is there and did not say which issue is still a side that
+    /// is there. Reading only the key takes it for a side that is absent, and
+    /// the entry then looks like the clean one-ended shape it is not.
+    #[tokio::test]
+    async fn integ_remove_link_reads_a_side_that_is_there_but_says_nothing() {
+        for second_side in [json!({ "key": 42 }), json!({}), json!({ "key": null })] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/rest/api/3/issue/PROJ-1"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "fields": { "issuelinks": [
+                        { "id": "7", "type": { "name": "Blocks" },
+                          "outwardIssue": { "key": "PROJ-2" },
+                          "inwardIssue": second_side }
+                    ]}
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(0)
+                .mount(&server)
+                .await;
+
+            let client = mock_client(server.uri());
+            let err = remove_link("PROJ-1", "PROJ-2", None, &client)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("left the question open (names an issue at both ends)"),
+                "{second_side}: {err}"
+            );
+        }
+    }
+
+    /// The same on the other side: an outward side that says nothing cannot be
+    /// ruled out by the key it did not give, so it is not a definite absence
+    /// and it is not a link running the other way either.
+    #[tokio::test]
+    async fn integ_remove_link_does_not_rule_out_a_side_by_a_key_it_never_gave() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/PROJ-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "fields": { "issuelinks": [
+                    { "id": "9", "type": { "name": "Blocks" },
+                      "outwardIssue": { "key": 42 } }
+                ]}
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = remove_link("PROJ-1", "PROJ-2", None, &client)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("left the question open (names no issue)"),
+            "{err}"
+        );
     }
 
     /// Direction is an exclusion too. An inward entry is not removable from
