@@ -92,22 +92,44 @@ fn params(cloud_id: Option<&str>) -> OAuthParams {
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn resume_refuses_a_pin_that_differs_from_the_stored_id_only_in_case() {
+/// Not `#[tokio::test]`: the environment is settled before a runtime exists,
+/// which is the only point at which writing it is sound.
+///
+/// `ATLASSIAN_NO_KEYCHAIN` in the inherited environment would send `load` past
+/// the mock to the file store, and the file store's path is the one this
+/// machine's sessions are kept at — a test that reads it is reading the user's
+/// credentials to decide its own result. Cleared here, and the home the path is
+/// built from is a temporary directory, so the fallback has nothing of anyone's
+/// to find either way.
+#[test]
+fn resume_refuses_a_pin_that_differs_from_the_stored_id_only_in_case() {
+    let home = tempfile::tempdir().expect("temporary home");
+    unsafe {
+        std::env::remove_var("ATLASSIAN_NO_KEYCHAIN");
+        std::env::set_var("HOME", home.path());
+        std::env::set_var("USERPROFILE", home.path());
+    }
     keyring_core::set_default_store(Arc::new(StoredSessionStore));
 
-    let err = OAuthStrategy::resume(params(Some(&STORED_CLOUD_ID.to_uppercase())), "recased")
-        .await
-        .unwrap_err()
-        .to_string();
-    assert!(err.contains("only in case"), "{err}");
-    assert!(err.contains(STORED_CLOUD_ID), "{err}");
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime")
+        .block_on(async {
+            let err =
+                OAuthStrategy::resume(params(Some(&STORED_CLOUD_ID.to_uppercase())), "recased")
+                    .await
+                    .unwrap_err()
+                    .to_string();
+            assert!(err.contains("only in case"), "{err}");
+            assert!(err.contains(STORED_CLOUD_ID), "{err}");
 
-    // The pin the login stored, and no pin at all, both resume.
-    OAuthStrategy::resume(params(Some(STORED_CLOUD_ID)), "pinned")
-        .await
-        .expect("the stored id, pinned as it was stored");
-    OAuthStrategy::resume(params(None), "unpinned")
-        .await
-        .expect("no pin leaves the stored id to stand");
+            // The pin the login stored, and no pin at all, both resume.
+            OAuthStrategy::resume(params(Some(STORED_CLOUD_ID)), "pinned")
+                .await
+                .expect("the stored id, pinned as it was stored");
+            OAuthStrategy::resume(params(None), "unpinned")
+                .await
+                .expect("no pin leaves the stored id to stand");
+        });
 }
