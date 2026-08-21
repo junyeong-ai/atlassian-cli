@@ -2805,12 +2805,14 @@ mod tests {
                 { "id": "2", "type": { "name": "Relates" }, "outwardIssue": outward },
                 { "id": "3", "type": { "name": "Blocks" } }
             ]),
-            // The same entry under the name it carries: `Blocks` leaves one
-            // match and that entry still unread, so neither name gets there.
+            // One unread entry under each name: whichever is named, the entry
+            // carrying it stays unread beside the one match left, so neither
+            // name gets there.
             json!([
                 { "id": "1", "type": { "name": "Blocks" }, "outwardIssue": outward },
                 { "id": "2", "type": { "name": "Relates" }, "outwardIssue": outward },
-                { "id": "3", "type": { "name": "Relates" } }
+                { "id": "3", "type": { "name": "Blocks" } },
+                { "id": "4", "type": { "name": "Relates" } }
             ]),
         ] {
             let server = MockServer::start().await;
