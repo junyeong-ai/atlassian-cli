@@ -216,12 +216,17 @@ pub async fn search_all(
 
         // _links.next is our signal to continue paginating; absence means we're done.
         // `let-else` keeps the happy path flat and removes the unwraps below.
-        let Some(link) = data["_links"]["next"].as_str() else {
-            break;
-        };
-        if count == 0 {
+        // Absent or null is the API's end-of-results signal; a `next` that is
+        // there and is not a string is drift, the same distinction `link_path`
+        // draws one step later. An empty page is neither — with `next` still
+        // live, breaking on one drops every page after it.
+        let next = &data["_links"]["next"];
+        if next.is_null() {
             break;
         }
+        let Some(link) = next.as_str() else {
+            anyhow::bail!("search succeeded but its '_links.next' was not a string: {next}");
+        };
 
         next_url = Some(trail.step("search", &v1_next_link(&data["_links"], link))?);
 
@@ -758,10 +763,16 @@ async fn fetch_space_by_key(space_key: &str, client: &ApiClient) -> Result<Optio
 /// Resolve a Confluence space key to its numeric space id. The single
 /// space-key→id lookup, shared by `create_page` and the `space` commands.
 pub async fn resolve_space_id(space_key: &str, client: &ApiClient) -> Result<String> {
-    fetch_space_by_key(space_key, client)
-        .await?
-        .and_then(|space| space["id"].as_str().map(|s| s.to_string()))
-        .ok_or_else(|| anyhow::anyhow!("Space '{}' not found", space_key))
+    // Two facts, kept apart: no space by that key, and a space whose `id` the
+    // response did not carry. Collapsing them reports an absence never
+    // established — the property lookup below already keeps them separate.
+    let Some(space) = fetch_space_by_key(space_key, client).await? else {
+        anyhow::bail!("Space '{space_key}' not found");
+    };
+    space["id"]
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("Space '{space_key}' has no string 'id': {space}"))
 }
 
 /// Read the current `version.number` of a versioned v2 resource (page or
@@ -829,9 +840,16 @@ async fn fetch_all_v2_results(
         })?;
         results.extend(page.iter().cloned());
 
-        match data["_links"]["next"].as_str() {
-            Some(link) if !link.is_empty() => next = Some(trail.step(what, link)?),
-            _ => return Ok(results),
+        // As above: absent, null or empty ends the collection; a `next` of any
+        // other shape is drift rather than an answer.
+        let candidate = &data["_links"]["next"];
+        if candidate.is_null() {
+            return Ok(results);
+        }
+        match candidate.as_str() {
+            Some("") => return Ok(results),
+            Some(link) => next = Some(trail.step(what, link)?),
+            None => anyhow::bail!("Failed to {what}: '_links.next' was not a string: {candidate}"),
         }
     }
 
@@ -1200,8 +1218,14 @@ fn extract_content_from_results(data: &mut Value, as_markdown: bool) -> Result<V
 
     Ok(results
         .iter_mut()
-        .filter_map(|item| {
-            let mut content = item.get_mut("content")?.take();
+        .map(|item| {
+            // A result with no `content` is not a content hit — v1 search also
+            // answers with space and user entities — and dropping it reported
+            // no matches for a query that had them. It is returned as it came.
+            let Some(content) = item.get_mut("content") else {
+                return item.take();
+            };
+            let mut content = content.take();
 
             if as_markdown
                 && let Some(html) = content
@@ -1214,7 +1238,7 @@ fn extract_content_from_results(data: &mut Value, as_markdown: bool) -> Result<V
                 content["body"]["storage"]["value"] = Value::String(confluence_to_markdown(&html));
             }
 
-            Some(content)
+            content
         })
         .collect())
 }
@@ -1328,6 +1352,71 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("no 'results' array"), "got: {err}");
+    }
+
+    /// A lookup's 2xx without a `results` array is drift; reading it as "not
+    /// found" reports an absence nothing established — and `set_property`
+    /// picks its create path on that answer.
+    #[tokio::test]
+    async fn integ_space_lookup_bails_on_missing_results() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/api/v2/spaces"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "_links": {} })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = resolve_space_id("ENG", &client)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no 'results' array"), "got: {err}");
+    }
+
+    /// A space that came back without an `id` is not a space that is not there.
+    #[tokio::test]
+    async fn integ_a_space_without_an_id_is_not_a_missing_space() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/api/v2/spaces"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "results": [{ "key": "ENG" }] })),
+            )
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = resolve_space_id("ENG", &client)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no string 'id'"), "got: {err}");
+        assert!(!err.contains("not found"), "got: {err}");
+    }
+
+    /// v1 search answers space and user entities without a `content` object.
+    /// Dropping them reported no matches for a query that had them, and the
+    /// count it left behind then ended the `--all` crawl.
+    #[tokio::test]
+    async fn integ_search_keeps_a_result_that_carries_no_content() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/rest/api/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{ "space": { "key": "ENG" }, "title": "Engineering" }],
+                "totalSize": 1
+            })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let result = search("type = space", 10, None, None, false, &client)
+            .await
+            .unwrap();
+
+        assert_eq!(result["count"], 1, "{result}");
+        assert_eq!(result["items"][0]["title"], "Engineering", "{result}");
     }
 
     #[tokio::test]

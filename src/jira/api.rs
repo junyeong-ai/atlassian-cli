@@ -147,11 +147,17 @@ pub async fn search_all(
     let url = "/rest/api/3/search/jql";
     let resolved_fields = fields::resolve_search_fields(fields, as_markdown, client.config());
 
+    // The same bound `paginate` carries, for the same reason: the walk ends
+    // when the server stops handing out a token, and only a server that never
+    // does runs this to exhaustion — which then bails below rather than
+    // looping forever. A token it has already used is drift, the token-shaped
+    // counterpart of `CursorTrail`'s repeated path.
+    const MAX_PAGES: u32 = 10_000;
     let mut all_issues: Vec<Value> = Vec::new();
-    let mut page_num = 1;
     let mut next_page_token: Option<String> = None;
+    let mut seen_tokens: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    loop {
+    for page_num in 1..=MAX_PAGES {
         let mut body = json!({
             "jql": final_jql,
             "maxResults": MAX_RESULTS_PER_PAGE,
@@ -209,16 +215,27 @@ pub async fn search_all(
             all_issues.len()
         );
 
-        next_page_token = data["nextPageToken"].as_str().map(String::from);
-        if next_page_token.is_none() || count == 0 {
-            break;
-        }
+        // Absence of a token is the endpoint's own end-of-results signal. An
+        // empty page is not: with a token still live, breaking on one drops
+        // every page after it, which is the truncation the contract bails on
+        // one field over.
+        next_page_token = match data["nextPageToken"].as_str() {
+            None => break,
+            Some(token) if seen_tokens.insert(token.to_string()) => Some(token.to_string()),
+            Some(token) => anyhow::bail!(
+                "search returned a page token it had already used ({token}), so the walk would \
+                 not advance"
+            ),
+        };
 
-        page_num += 1;
         sleep(Duration::from_millis(
             client.config().performance.rate_limit_delay_ms,
         ))
         .await;
+    }
+
+    if next_page_token.is_some() {
+        anyhow::bail!("search did not finish within {MAX_PAGES} pages");
     }
 
     eprintln!("\nTotal: {} issues fetched", all_issues.len());
@@ -444,7 +461,9 @@ pub async fn get_link_types(client: &ApiClient) -> Result<Value> {
 
     let mut data: Value = response.json().await?;
     filter::apply(&mut data, client.config());
-    Ok(json!({ "items": data["issueLinkTypes"] }))
+    // The envelope contract is `{"items": [...]}`; a 2xx that lost the array
+    // would hand a `jq` pipeline `null` and a caller "there are none".
+    Ok(json!({ "items": require_field(&data, "/issueLinkTypes", "get link types")? }))
 }
 
 pub async fn add_link(
@@ -482,9 +501,9 @@ pub async fn remove_link(
     client: &ApiClient,
 ) -> Result<Value> {
     let links = get_links(source_key, client).await?;
-    let items = links["items"]
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("No links found on {}", source_key))?;
+    let items = links["items"].as_array().ok_or_else(|| {
+        anyhow::anyhow!("get links returned a non-array 'items' for {source_key}")
+    })?;
 
     let matching: Vec<&Value> = items
         .iter()
@@ -545,7 +564,10 @@ pub async fn get_links(issue_key: &str, client: &ApiClient) -> Result<Value> {
 
     let mut data: Value = response.json().await?;
     filter::apply(&mut data, client.config());
-    Ok(json!({ "items": data["fields"]["issuelinks"] }))
+    // The envelope contract is `{"items": [...]}`; a 2xx that lost the array
+    // would hand a `jq` pipeline `null` — and `remove_link` reads it back
+    // as "no links on this issue".
+    Ok(json!({ "items": require_field(&data, "/fields/issuelinks", "get links")? }))
 }
 
 pub async fn get_transitions(issue_key: &str, client: &ApiClient) -> Result<Value> {
@@ -562,7 +584,9 @@ pub async fn get_transitions(issue_key: &str, client: &ApiClient) -> Result<Valu
 
     let mut data: Value = response.json().await?;
     filter::apply(&mut data, client.config());
-    Ok(json!({ "items": data["transitions"] }))
+    // The envelope contract is `{"items": [...]}`; a 2xx that lost the array
+    // would hand a `jq` pipeline `null` and a caller "there are none".
+    Ok(json!({ "items": require_field(&data, "/transitions", "get transitions")? }))
 }
 
 pub async fn add_worklog(
@@ -1283,8 +1307,66 @@ mod tests {
     // would hit; synthetic data-only tests for these endpoints have been removed.
 
     use crate::test_utils::mock_client;
-    use wiremock::matchers::{body_json, body_string, method, path, query_param};
+    use wiremock::matchers::{
+        body_json, body_string, body_string_contains, method, path, query_param,
+    };
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// A 2xx without an `issues` array is drift, and `search_all` ends its walk
+    /// on an empty page — so reading it as no matches truncated the rest.
+    #[tokio::test]
+    async fn integ_search_bails_when_the_body_lost_its_issues_array() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/rest/api/3/search/jql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "total": 3 })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = search("project = X", 50, None, false, &client)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("no 'issues' array"), "{err}");
+    }
+
+    /// An empty page with a live token is not the end of the results; a token
+    /// the walk has already used is drift.
+    #[tokio::test]
+    async fn integ_search_all_walks_past_an_empty_page_and_refuses_a_repeated_token() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/rest/api/3/search/jql"))
+            .and(body_string_contains("nextPageToken"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "issues": [{ "key": "X-1" }], "nextPageToken": "P2" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/rest/api/3/search/jql"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "issues": [], "nextPageToken": "P2" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = search_all("project = X", None, false, false, &client)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        // Reaching the second page at all proves the empty one did not end it.
+        assert!(err.contains("already used"), "{err}");
+    }
 
     #[tokio::test]
     async fn integ_add_link_maps_source_to_outward() {
