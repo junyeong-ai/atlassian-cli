@@ -420,8 +420,7 @@ impl TokenStore {
         // Reported, not raised. The rename below still lands the tokens, and
         // by the time a refresh reaches here the refresh token it replaces is
         // already spent — so failing the save on a filesystem whose `fsync`
-        // does not work would lose the session rather than protect it. What
-        // was wrong before was that this said nothing at all.
+        // does not work would lose the session rather than protect it.
         if let Err(e) = tmp.as_file().sync_all() {
             tracing::warn!(
                 "Credentials for '{}' were written but not flushed to disk ({e}); they may not \
@@ -482,7 +481,9 @@ impl TokenStore {
                 // discards tokens the server has already rotated to, so there
                 // the flush is reported; a delete that aborts leaves the file
                 // exactly as it was, and "cleared" is a claim about a session
-                // being gone — one a crash could take back.
+                // being gone. Unflushed, the rename can land over contents
+                // that were never written, so the name a token was removed
+                // from carries whatever a crash left behind it.
                 tmp.as_file()
                     .sync_all()
                     .context("Failed to flush the rewritten credentials file")?;

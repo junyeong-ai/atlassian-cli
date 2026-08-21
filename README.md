@@ -413,7 +413,7 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 
 ### 에러와 종료 코드
 
-실패 시 **stderr**로 한 줄짜리 JSON 객체를 출력합니다 (stdout은 결과 전용 — `| jq` 파이프라인이 깨지지 않습니다):
+실패 시 **stderr**로 한 줄짜리 JSON 객체를 출력하고, stdout은 결과 전용입니다. 이미 출력을 시작한 명령도 실패할 수 있습니다 — `--stream` 은 페이지를 받는 대로 내보내고, `auth status` 는 확인한 부분까지 보고한 뒤 나머지에서 실패합니다. 출력이 있는지가 아니라 종료 코드를 읽으세요:
 
 ```json
 {"error":{"message":"Failed to get issue (404 Not Found): ...","operation":"get issue","status":404}}
