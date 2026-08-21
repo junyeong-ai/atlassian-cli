@@ -32,8 +32,8 @@ fn keychain_disabled() -> bool {
 }
 
 /// Whether the opt-out is in force, for a caller reporting what was not done.
-/// The one place the flag is read stays [`keychain_disabled`]; this is that
-/// answer, not a second reading of the environment.
+/// This is the same answer every operation here acts on, not a second reading
+/// of the environment.
 pub fn keychain_opt_out() -> bool {
     keychain_disabled()
 }
