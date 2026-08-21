@@ -2186,6 +2186,25 @@ mod tests {
     #[cfg(unix)]
     use atlassian_cli::dist::skill;
 
+    /// Where every home-managed artifact is kept by name, only the binary is
+    /// to go and its path is known — the guard has nothing to protect.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_unknown_home_still_removes_a_binary_nothing_else_is_asked_of() {
+        let home = tempfile::tempdir().unwrap();
+        let binary = home.path().join("bin").join("atlassian-cli");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, "#!/bin/sh\nexit 0\n").unwrap();
+        let installation = Installation::at(binary.clone(), None);
+
+        let report = self_uninstall(&installation, true, true, false)
+            .await
+            .expect("nothing home-managed was asked for");
+
+        assert_eq!(kinds(&report), vec!["binary"]);
+        assert!(!binary.exists());
+    }
+
     /// The binary is the only thing that knows where the skill and the config
     /// are. Where the home directory cannot be found, skipping them silently
     /// and removing it anyway leaves them with nothing to find them by.

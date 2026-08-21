@@ -232,7 +232,12 @@ fn resolve_cloud_id(pin: Option<&str>, sites: &[SiteInfo]) -> Result<String> {
         // `accessible-resources` is the list of sites this grant covers, so a
         // pin outside it stores a session every later request sends to a site
         // the token was never authorized for.
-        (Some(p), sites) if sites.iter().any(|s| s.id == p) => checked(p.to_string()),
+        // Case-insensitively: cloud ids are lowercase UUIDs, and a pin pasted
+        // in upper case is the same site — refusing it while printing the
+        // same id back in the reachable list would be a puzzle.
+        (Some(p), sites) if sites.iter().any(|s| s.id.eq_ignore_ascii_case(p)) => {
+            checked(p.to_string())
+        }
         (Some(p), []) => {
             bail!("cloud_id is pinned to {p}, but this login can reach no Atlassian sites at all")
         }
