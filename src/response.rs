@@ -6,7 +6,8 @@
 //! body. Substituting a placeholder `null` would hand a JSON-first caller a
 //! resource identifier that does not exist, so it chains a confusing 404 far
 //! from the real cause. Every write therefore extracts its identifiers through
-//! [`require_field`] (string/structured ids) or [`require_u64`] (counts and
+//! [`require_field`] (string/structured ids), [`require_array`] (the lists an
+//! `{"items": [...]}` envelope is built from) or [`require_u64`] (counts and
 //! version numbers), which fail loud — the same posture the pagination helpers
 //! take when `values`/`results` is missing.
 
@@ -22,6 +23,22 @@ pub(crate) fn require_field(body: &Value, pointer: &str, operation: &str) -> Res
         Some(value) if !value.is_null() => Ok(value.clone()),
         _ => anyhow::bail!(
             "{operation} succeeded but its response had no '{}': {body}",
+            pointer.trim_start_matches('/')
+        ),
+    }
+}
+
+/// Read a required array field by JSON Pointer, returning it by value.
+///
+/// [`require_field`] only rejects absent and `null`, so it would let a
+/// `{"transitions": {}}` through into an `{"items": ...}` envelope this
+/// project documents as a list. Every list endpoint's array goes through here
+/// instead, so the envelope's shape is the one the contract names.
+pub(crate) fn require_array(body: &Value, pointer: &str, operation: &str) -> Result<Value> {
+    match body.pointer(pointer) {
+        Some(value) if value.is_array() => Ok(value.clone()),
+        _ => anyhow::bail!(
+            "{operation} succeeded but its response had no '{}' array: {body}",
             pointer.trim_start_matches('/')
         ),
     }

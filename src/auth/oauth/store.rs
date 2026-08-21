@@ -478,13 +478,14 @@ impl TokenStore {
                     serde_json::to_vec_pretty(&all).context("Failed to serialize credentials")?;
                 tmp.write_all(&buf)
                     .context("Failed to write credentials tmpfile")?;
-                if let Err(e) = tmp.as_file().sync_all() {
-                    tracing::warn!(
-                        "Credentials were rewritten without '{}' but not flushed to disk ({e}); \
-                         the cleared session may reappear after a crash.",
-                        self.profile
-                    );
-                }
+                // Raised here, unlike on the save path. A save that aborts
+                // discards tokens the server has already rotated to, so there
+                // the flush is reported; a delete that aborts leaves the file
+                // exactly as it was, and "cleared" is a claim about a session
+                // being gone — one a crash could take back.
+                tmp.as_file()
+                    .sync_all()
+                    .context("Failed to flush the rewritten credentials file")?;
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;

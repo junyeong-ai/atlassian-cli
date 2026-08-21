@@ -6,7 +6,7 @@ use crate::jira::adf;
 use crate::jira::fields;
 use crate::markdown::adf_to_markdown;
 use crate::query_utils::{clause_detector, inject_filter};
-use crate::response::require_field;
+use crate::response::{require_array, require_field};
 use anyhow::Result;
 use regex::Regex;
 use serde_json::{Value, json};
@@ -471,7 +471,7 @@ pub async fn get_link_types(client: &ApiClient) -> Result<Value> {
     filter::apply(&mut data, client.config());
     // The envelope contract is `{"items": [...]}`; a 2xx that lost the array
     // would hand a `jq` pipeline `null` and a caller "there are none".
-    Ok(json!({ "items": require_field(&data, "/issueLinkTypes", "get link types")? }))
+    Ok(json!({ "items": require_array(&data, "/issueLinkTypes", "get link types")? }))
 }
 
 pub async fn add_link(
@@ -577,7 +577,7 @@ pub async fn get_links(issue_key: &str, client: &ApiClient) -> Result<Value> {
     // as "no links on this issue". A link-free issue still carries `[]`; the
     // field goes missing only where the site has issue linking turned off.
     Ok(json!({
-        "items": require_field(
+        "items": require_array(
             &data,
             "/fields/issuelinks",
             "get links (is issue linking enabled for this site?)",
@@ -601,7 +601,7 @@ pub async fn get_transitions(issue_key: &str, client: &ApiClient) -> Result<Valu
     filter::apply(&mut data, client.config());
     // The envelope contract is `{"items": [...]}`; a 2xx that lost the array
     // would hand a `jq` pipeline `null` and a caller "there are none".
-    Ok(json!({ "items": require_field(&data, "/transitions", "get transitions")? }))
+    Ok(json!({ "items": require_array(&data, "/transitions", "get transitions")? }))
 }
 
 pub async fn add_worklog(
@@ -651,7 +651,7 @@ pub async fn get_worklogs(issue_key: &str, client: &ApiClient) -> Result<Value> 
 
     let mut data: Value = response.json().await?;
     filter::apply(&mut data, client.config());
-    Ok(json!({ "items": require_field(&data, "/worklogs", "get worklogs")? }))
+    Ok(json!({ "items": require_array(&data, "/worklogs", "get worklogs")? }))
 }
 
 pub async fn update_worklog(
@@ -757,7 +757,7 @@ pub async fn get_watchers(issue_key: &str, client: &ApiClient) -> Result<Value> 
 
     let mut data: Value = response.json().await?;
     filter::apply(&mut data, client.config());
-    Ok(json!({ "items": require_field(&data, "/watchers", "get watchers")? }))
+    Ok(json!({ "items": require_array(&data, "/watchers", "get watchers")? }))
 }
 
 /// How a Jira collection reports that a page is the last one.
@@ -1346,6 +1346,27 @@ mod tests {
             .to_string();
 
         assert!(err.contains("no 'issues' array"), "{err}");
+    }
+
+    /// The envelope is documented as a list, and `require_field` would let any
+    /// non-null shape through into it — `{"items": {}}` reads as a list to
+    /// nothing and as "none" to `jq`.
+    #[tokio::test]
+    async fn integ_transitions_envelope_must_be_a_list() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/PROJ-1/transitions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "transitions": {} })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = get_transitions("PROJ-1", &client)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("no 'transitions' array"), "{err}");
     }
 
     /// The walk that actually happens: more than one page, ending when the

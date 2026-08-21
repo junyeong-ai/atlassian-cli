@@ -450,8 +450,10 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 
 ### Errors & exit codes
 
-Failures print a single-line JSON object to **stderr** (stdout carries results
-only, so `| jq` pipelines never see partial output):
+Failures print a single-line JSON object to **stderr**; stdout carries results
+only. A command that has already printed can still fail — `--stream` emits each
+page as it arrives, `auth status` reports what it could establish before failing
+on the rest — so read the exit code rather than the presence of output:
 
 ```json
 {"error":{"message":"Failed to get issue (404 Not Found): ...","operation":"get issue","status":404}}
