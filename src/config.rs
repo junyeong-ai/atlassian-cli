@@ -236,6 +236,12 @@ fn non_blank_owned(s: String) -> Option<String> {
     if s.trim().is_empty() { None } else { Some(s) }
 }
 
+/// An env override, or `None` where there is nothing usable to override with.
+///
+/// `.ok()` folds `VarError::NotUnicode` in with `NotPresent` deliberately: a
+/// value whose bytes are not UTF-8 cannot be any of the things these variables
+/// hold, and reading it as unset lands on the same side as the blank-value
+/// policy above — malformed input does not shadow the file.
 fn non_blank_env(env_name: &str) -> Option<String> {
     std::env::var(env_name).ok().and_then(non_blank_owned)
 }

@@ -119,19 +119,18 @@ pub async fn search(
         .json(&body);
     let response = client.execute("search", request).await?;
 
-    let mut data: Value = response.json().await?;
-    filter::apply(&mut data, client.config());
+    let data: Value = response.json().await?;
 
     // A 2xx whose body has no `issues` array is schema drift, and reporting it
-    // as no matches is the silent truncation `paginate` exists to prevent.
+    // as no matches is the silent truncation `paginate` exists to prevent. Read
+    // before filtering, as every other list does, so the error can only mean
+    // the response lacked the array rather than that a caller excluded it.
     let Some(issues) = data["issues"].as_array().cloned() else {
         anyhow::bail!("search succeeded but its response had no 'issues' array: {data}");
     };
     let count = issues.len();
-    let mut result = json!({
-        "items": issues,
-        "count": count
-    });
+    let mut result = list_envelope(issues, client);
+    result["count"] = json!(count);
 
     if as_markdown {
         convert_issues_to_markdown(&mut result);
@@ -1433,8 +1432,13 @@ mod tests {
             .await;
 
         let mut config = crate::test_utils::create_test_config();
-        config.optimization.response_exclude_fields =
-            Some(vec!["items".to_string(), "avatarUrls".to_string()]);
+        // `id` is in the list on purpose: the resolver picks a board by it, so
+        // this is what fails if `paginate` ever filters on the way out again.
+        config.optimization.response_exclude_fields = Some(vec![
+            "items".to_string(),
+            "id".to_string(),
+            "avatarUrls".to_string(),
+        ]);
         let client = crate::test_utils::mock_client_with_config(server.uri(), config);
 
         let result = get_boards("PROJ", &client).await.unwrap();

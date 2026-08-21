@@ -2107,6 +2107,14 @@ async fn handle_auth(
                     ),
                 },
                 (Some(method), _) => {
+                    if atlassian_cli::auth::keychain_opt_out() {
+                        // Same reason as the OAuth arm above: a session stored
+                        // before the flag is in a place this run did not look.
+                        println!(
+                            "ATLASSIAN_NO_KEYCHAIN is set, so the keychain was not consulted; \
+                             a session stored there before the flag is untouched."
+                        );
+                    }
                     println!(
                         "Profile '{}' uses '{}' auth — credentials are read from config/env, \
                          not a stored session.",
