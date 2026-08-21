@@ -2123,7 +2123,10 @@ async fn handle_auth(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use atlassian_cli::dist::{Installation, skill};
+    use atlassian_cli::dist::Installation;
+    // Only the `#[cfg(unix)]` tests below deploy a skill.
+    #[cfg(unix)]
+    use atlassian_cli::dist::skill;
 
     /// An installation whose every path lands under a temporary home, so the
     /// removal steps can run for real without touching the machine.
