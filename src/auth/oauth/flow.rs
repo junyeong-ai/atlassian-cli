@@ -366,13 +366,20 @@ mod tests {
     /// trusted for where it came from.
     #[test]
     fn a_cloud_id_that_cannot_reach_the_proxy_fails_the_login() {
-        assert!(resolve_cloud_id(Some("../evil"), &[]).is_err());
-        let sites = vec![SiteInfo {
+        // The pin has to be one the grant covers, or the refusal comes from
+        // the pin being unreachable and the validation is never reached.
+        let pinned = vec![SiteInfo {
+            id: "../evil".into(),
+            url: "https://x.atlassian.net".into(),
+            name: None,
+        }];
+        assert!(resolve_cloud_id(Some("../evil"), &pinned).is_err());
+        let discovered = vec![SiteInfo {
             id: "bad/id".into(),
             url: "https://x.atlassian.net".into(),
             name: None,
         }];
-        assert!(resolve_cloud_id(None, &sites).is_err());
+        assert!(resolve_cloud_id(None, &discovered).is_err());
     }
 
     #[test]

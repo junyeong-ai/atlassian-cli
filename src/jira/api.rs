@@ -538,21 +538,25 @@ pub async fn remove_link(
     let items = fetch_links(source_key, client).await?;
 
     // A link names the issue at its other end, its direction by which side
-    // names it, and its type when one was asked for. Each is read only where
-    // the one before it did not settle the entry, so no answer rests on a
-    // field that was never there.
+    // names it, and its type when one was asked for. Any of those that is
+    // present and disagrees excludes the entry outright; among what is left,
+    // the answer is decided in that order, so none of them rests on a field
+    // that was never there and none is withheld over one that no longer
+    // matters.
     let mut matching: Vec<&Value> = Vec::new();
     let mut unreadable = 0usize;
     let mut reverse = 0usize;
     for link in &items {
-        let other_key = link["outwardIssue"]["key"]
-            .as_str()
-            .or_else(|| link["inwardIssue"]["key"].as_str());
+        let outward_key = link["outwardIssue"]["key"].as_str();
+        let inward_key = link["inwardIssue"]["key"].as_str();
         let type_name = link["type"]["name"].as_str();
 
         // A present field that disagrees settles the entry outright, whichever
-        // field it is.
-        let key_excludes = other_key.is_some_and(|k| k != target_key);
+        // field it is. An entry naming two issues is excluded only when
+        // neither of them is the one asked about — the pair is what the
+        // request names, and either side carrying it makes the entry relevant.
+        let names_target = outward_key == Some(target_key) || inward_key == Some(target_key);
+        let key_excludes = (outward_key.is_some() || inward_key.is_some()) && !names_target;
         let type_excludes = link_type.is_some_and(|t| type_name.is_some_and(|n| n != t));
         if key_excludes || type_excludes {
             continue;
@@ -561,7 +565,17 @@ pub async fn remove_link(
         // Naming no issue leaves everything about the entry open, direction
         // included: it may be the second link to this one that would make the
         // removal a guess.
-        if other_key.is_none() {
+        if !names_target {
+            unreadable += 1;
+            continue;
+        }
+
+        // An issue's own links name the other end and only the other end, so
+        // which side names it is the direction. An entry naming both sides is
+        // the shape the standalone link resource has, where they are absolute
+        // rather than relative to this issue: taking one of them as "the other
+        // end" is a guess, and this guess decides a delete.
+        if outward_key.is_some() && inward_key.is_some() {
             unreadable += 1;
             continue;
         }
@@ -570,10 +584,11 @@ pub async fn remove_link(
         // source on the outward side, so on this issue the link it created
         // names the other one through `outwardIssue`; a link running the other
         // way is a different link, removed from the issue that is its source.
-        // Reading it here settles the entry whatever its type turns out to be
-        // — it is not removable from this issue under any of them — so the
-        // type below is only ever read where it could still change the answer.
-        if link["outwardIssue"]["key"].as_str().is_none() {
+        // Settling it here settles the entry whatever its type turns out to be
+        // — it is not removable from this issue under any of them — so a type
+        // the response left out is only ever weighed below, where it could
+        // still change the answer.
+        if outward_key.is_none() {
             reverse += 1;
             continue;
         }
@@ -615,11 +630,12 @@ pub async fn remove_link(
         // What this counted is links running the other way that the requested
         // type did not rule out — not every link between the two issues, and
         // not every link of that type either, since one may have gone unread.
-        // A total stated here would be either. Existence is what was
-        // established, and existence is what the caller needs to act.
+        // A total stated here would be either, and naming one of them to
+        // remove would claim a uniqueness the walk did not establish. What it
+        // did establish is that the request belongs on the other issue.
         0 if reverse > 0 => anyhow::bail!(
             "No link runs from {} to {}{}, but at least one link between them runs the other \
-             way. Remove it from {}, the issue it starts at.",
+             way. A link is removed from the issue it starts at, so run this on {}.",
             source_key,
             target_key,
             link_type
@@ -1458,6 +1474,47 @@ mod tests {
         assert!(err.contains("whether one to PROJ-9 is among them"), "{err}");
     }
 
+    /// An issue's own links name one end. An entry naming both is the shape
+    /// the standalone link resource has, where the sides are absolute and not
+    /// relative to the issue the list came from — so which end is "the other"
+    /// is a guess, and here that guess deletes.
+    #[tokio::test]
+    async fn integ_remove_link_will_not_read_a_direction_off_an_entry_naming_both_ends() {
+        // Both sides named, and the issue asked about is on either one of
+        // them: whichever side is read first, the entry names the pair and
+        // cannot be dropped for naming something else.
+        for entry in [
+            json!({ "id": "77", "type": { "name": "Blocks" },
+                    "outwardIssue": { "key": "PROJ-1" },
+                    "inwardIssue": { "key": "PROJ-2" } }),
+            json!({ "id": "88", "type": { "name": "Blocks" },
+                    "outwardIssue": { "key": "PROJ-9" },
+                    "inwardIssue": { "key": "PROJ-1" } }),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/rest/api/3/issue/PROJ-2"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({ "fields": { "issuelinks": [entry.clone()] } })),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(0)
+                .mount(&server)
+                .await;
+
+            let client = mock_client(server.uri());
+            let err = remove_link("PROJ-2", "PROJ-1", Some("Blocks"), &client)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("left the question open"), "{entry}: {err}");
+        }
+    }
+
     /// Direction is an exclusion too. An inward entry is not removable from
     /// this issue whatever its unread type turns out to be, so it is not the
     /// second link that would make the removal a guess, and withholding on it
@@ -1652,7 +1709,7 @@ mod tests {
             err.contains("at least one link between them runs the other way"),
             "{err}"
         );
-        assert!(err.contains("Remove it from PROJ-2"), "{err}");
+        assert!(err.contains("run this on PROJ-2"), "{err}");
     }
 
     /// A reverse link the requested type rules out is not counted, so any

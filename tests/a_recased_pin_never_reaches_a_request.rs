@@ -92,46 +92,35 @@ fn params(cloud_id: Option<&str>) -> OAuthParams {
     }
 }
 
-/// Not `#[tokio::test]`: the environment is settled before a runtime exists,
-/// which is the only point at which writing it is sound.
-///
-/// `ATLASSIAN_NO_KEYCHAIN` in the inherited environment would send `load` past
-/// the mock to the file store, and the file store's path is the one this
-/// machine's sessions are kept at — a test that reads it is reading the user's
-/// credentials to decide its own result. Clearing it is what keeps the read
-/// inside the mock. The temporary home moves that fallback path as well, on
-/// the platforms where it is derived from the environment at all; Windows
-/// resolves the profile through a known folder, so there the mock answering
-/// is the whole of it.
-#[test]
-fn resume_refuses_a_pin_that_differs_from_the_stored_id_only_in_case() {
-    let home = tempfile::tempdir().expect("temporary home");
-    unsafe {
-        std::env::remove_var("ATLASSIAN_NO_KEYCHAIN");
-        std::env::set_var("HOME", home.path());
-        std::env::set_var("USERPROFILE", home.path());
-    }
+/// The store below answers before the file store is reached, so nothing on
+/// this machine is read — but only while the keychain is in play at all.
+/// `ATLASSIAN_NO_KEYCHAIN` short-circuits the dispatcher ahead of it, and the
+/// path `load` falls through to is where this machine's own sessions are kept:
+/// a test that gets there is reading the user's credentials to decide its
+/// result. The environment is checked rather than rewritten — writing it is
+/// sound only in a single-threaded process, and the harness has already spawned
+/// a thread by the time a test body runs.
+#[tokio::test(flavor = "multi_thread")]
+async fn resume_refuses_a_pin_that_differs_from_the_stored_id_only_in_case() {
+    assert!(
+        !atlassian_cli::auth::keychain_opt_out(),
+        "ATLASSIAN_NO_KEYCHAIN is set, which disables the path this test drives — \
+         unset it to run the suite"
+    );
     keyring_core::set_default_store(Arc::new(StoredSessionStore));
 
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("test runtime")
-        .block_on(async {
-            let err =
-                OAuthStrategy::resume(params(Some(&STORED_CLOUD_ID.to_uppercase())), "recased")
-                    .await
-                    .unwrap_err()
-                    .to_string();
-            assert!(err.contains("only in case"), "{err}");
-            assert!(err.contains(STORED_CLOUD_ID), "{err}");
+    let err = OAuthStrategy::resume(params(Some(&STORED_CLOUD_ID.to_uppercase())), "recased")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("only in case"), "{err}");
+    assert!(err.contains(STORED_CLOUD_ID), "{err}");
 
-            // The pin the login stored, and no pin at all, both resume.
-            OAuthStrategy::resume(params(Some(STORED_CLOUD_ID)), "pinned")
-                .await
-                .expect("the stored id, pinned as it was stored");
-            OAuthStrategy::resume(params(None), "unpinned")
-                .await
-                .expect("no pin leaves the stored id to stand");
-        });
+    // The pin the login stored, and no pin at all, both resume.
+    OAuthStrategy::resume(params(Some(STORED_CLOUD_ID)), "pinned")
+        .await
+        .expect("the stored id, pinned as it was stored");
+    OAuthStrategy::resume(params(None), "unpinned")
+        .await
+        .expect("no pin leaves the stored id to stand");
 }
