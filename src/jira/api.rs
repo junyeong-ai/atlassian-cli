@@ -746,23 +746,33 @@ pub async fn remove_link(
                 target_key
             )
         }
-        n => match link_type {
-            None => anyhow::bail!(
-                "Found {} links from {} to {}, and no type tells them apart. This command \
-                 removes by issue pair and type, so it cannot choose between them.",
-                n,
-                source_key,
-                target_key
-            ),
-            Some(t) => anyhow::bail!(
-                "Found {} links from {} to {} with type '{}'. This command removes by issue pair \
-                 and type, so it cannot choose between them.",
-                n,
-                source_key,
-                target_key,
-                t
-            ),
-        },
+        // The count is of what the walk could read. An entry it could not may
+        // be another of them, and where one is there the answer says how many
+        // it got to rather than how many there are.
+        n => {
+            let found = if unreadable.is_empty() {
+                format!("Found {n} links")
+            } else {
+                format!("Found at least {n} links")
+            };
+            match link_type {
+                None => anyhow::bail!(
+                    "{} from {} to {}, and no type tells them apart. This command removes by \
+                     issue pair and type, so it cannot choose between them.",
+                    found,
+                    source_key,
+                    target_key
+                ),
+                Some(t) => anyhow::bail!(
+                    "{} from {} to {} with type '{}'. This command removes by issue pair and \
+                     type, so it cannot choose between them.",
+                    found,
+                    source_key,
+                    target_key,
+                    t
+                ),
+            }
+        }
     }
 
     let link_id = matching[0]["id"]
@@ -2830,7 +2840,8 @@ mod tests {
             .await
             .unwrap_err()
             .to_string();
-        assert!(err.contains("Found 2 links"), "{err}");
+        // Two were read and one was not, so two is a floor and not a total.
+        assert!(err.contains("Found at least 2 links"), "{err}");
         assert!(!err.contains("cannot be told"), "{err}");
     }
 
