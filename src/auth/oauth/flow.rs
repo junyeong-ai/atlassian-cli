@@ -214,10 +214,16 @@ async fn fetch_accessible_resources(
 }
 
 fn resolve_cloud_id(pin: Option<&str>, sites: &[SiteInfo]) -> Result<String> {
+    // Validated here, where both a pinned and a discovered id pass through:
+    // `OAuthStrategy::resume` checks it too, but that is the next command. A
+    // login that stored an id the proxy path will reject reports success and
+    // leaves a session nothing can use — and an id from `accessible-resources`
+    // is no more trusted for having come from an API than a pinned one is.
+    let checked = |id: String| crate::config::validate_cloud_id(&id).map(|()| id);
     match (pin, sites) {
-        (Some(p), _) => Ok(p.to_string()),
+        (Some(p), _) => checked(p.to_string()),
         (None, []) => bail!("Login succeeded but no Atlassian sites are accessible to this user"),
-        (None, [only]) => Ok(only.id.clone()),
+        (None, [only]) => checked(only.id.clone()),
         (None, many) => {
             let list = many
                 .iter()
@@ -331,6 +337,20 @@ mod tests {
         // Following the redirect would replay the client credentials to the
         // Location target; the 302 must surface as-is instead.
         assert_eq!(response.status(), 302);
+    }
+
+    /// A login that stored an id the proxy path rejects would report success
+    /// and leave a session the next command cannot use. Neither source is
+    /// trusted for where it came from.
+    #[test]
+    fn a_cloud_id_that_cannot_reach_the_proxy_fails_the_login() {
+        assert!(resolve_cloud_id(Some("../evil"), &[]).is_err());
+        let sites = vec![SiteInfo {
+            id: "bad/id".into(),
+            url: "https://x.atlassian.net".into(),
+            name: None,
+        }];
+        assert!(resolve_cloud_id(None, &sites).is_err());
     }
 
     #[test]

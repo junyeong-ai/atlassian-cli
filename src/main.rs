@@ -1055,6 +1055,18 @@ async fn self_uninstall(
 ) -> Result<serde_json::Value> {
     use atlassian_cli::dist::skill;
 
+    // Before anything goes. Without a home directory the skill and the global
+    // config cannot be located, and every step below would skip them silently
+    // and then take the binary that knows where they are — the same reason a
+    // keychain that will not answer refuses here rather than proceeding.
+    if installation.skill_dir().is_none() || installation.config_dir().is_none() {
+        anyhow::bail!(
+            "Cannot locate the home directory, so the deployed skill and the global config \
+             cannot be found — removing the binary would leave them behind with nothing that \
+             knows where they are. Set HOME and re-run."
+        );
+    }
+
     let mut removed: Vec<serde_json::Value> = Vec::new();
     let mut kept: Vec<&str> = Vec::new();
 
@@ -2080,6 +2092,16 @@ async fn handle_auth(
                 }
                 (Some(AuthMethod::OAuth), None) => match &unreadable {
                     Some(e) => println!("Session unknown (profile: {}): {e}", config.profile),
+                    // Under the opt-out the keychain was never asked, so "not
+                    // logged in" would be a claim about a place this run did
+                    // not look — and a session stored there before the flag is
+                    // exactly what `auth login` would shadow rather than reach.
+                    None if atlassian_cli::auth::keychain_opt_out() => println!(
+                        "No session in the file store (profile: {}). ATLASSIAN_NO_KEYCHAIN is \
+                         set, so the keychain was not consulted; unset it for one run to see \
+                         or clear what it holds.",
+                        config.profile
+                    ),
                     None => println!(
                         "Not logged in (profile: {}). Run `atlassian-cli auth login`.",
                         config.profile
@@ -2146,6 +2168,27 @@ mod tests {
     // Only the `#[cfg(unix)]` tests below deploy a skill.
     #[cfg(unix)]
     use atlassian_cli::dist::skill;
+
+    /// The binary is the only thing that knows where the skill and the config
+    /// are. Where the home directory cannot be found, skipping them silently
+    /// and removing it anyway leaves them with nothing to find them by.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_unknown_home_refuses_before_anything_goes() {
+        let home = tempfile::tempdir().unwrap();
+        let binary = home.path().join("bin").join("atlassian-cli");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, "#!/bin/sh\nexit 0\n").unwrap();
+        let installation = Installation::at(binary.clone(), None);
+
+        let err = self_uninstall(&installation, false, true, true)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("home directory"), "{err}");
+        assert!(binary.is_file(), "the binary went with the home unknown");
+    }
 
     /// A successor that answers `self --help` and one that does not. The
     /// second is what `--version <old>` installs, and the report has to say
