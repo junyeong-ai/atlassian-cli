@@ -22,6 +22,8 @@ Deliberately absent: fetching the skill from a git ref, and detecting a source c
 
 The decision of *whether* to redeploy is made by the binary being replaced, since that is the process running `self update`; only the deploy itself runs through the successor. So a change to what `state` answers reaches an affected installation on the update after the one that ships it, or through `self skill install` by hand.
 
+A successor that predates `self` — only `--version <old>` installs one — carries no skill and no subcommand to deploy it with. It is probed for rather than diagnosed from the usage error it would answer with, so the report says the deployed skill was left alone instead of naming a command that binary does not have.
+
 ## Update order: verify before replacing
 
 `self update` runs download → checksum → extract → **run the staged binary and compare the version it prints** → replace. The version check happens before anything is touched, so a download that will not run on this machine (wrong architecture, failed code signing, truncated archive) ends with the installation untouched.

@@ -975,7 +975,26 @@ fn redeploy_skill(installation: &atlassian_cli::dist::Installation) -> &'static 
     if skill::state(&dir) == SkillState::Absent {
         return "absent";
     }
-    match std::process::Command::new(installation.binary())
+    let binary = installation.binary();
+    // Probed, not read off the failure: a release from before `self` answers
+    // the deploy with a usage error, and an operator told to run `self skill
+    // install` on a binary that has no such subcommand gets the same error
+    // again. Only naming an old `--version` reaches one of those, and there
+    // the predecessor's skill is what stays.
+    let carries_self = std::process::Command::new(binary)
+        .args(["self", "--help"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    if !carries_self {
+        eprintln!(
+            "warning: the version now installed predates `self skill install`, so the deployed \
+             skill was left as it is"
+        );
+        return "unsupported";
+    }
+    match std::process::Command::new(binary)
         .args(["self", "skill", "install"])
         .stdout(std::process::Stdio::null())
         .status()
@@ -2130,6 +2149,39 @@ mod tests {
 
     /// An installation whose every path lands under a temporary home, so the
     /// removal steps can run for real without touching the machine.
+    /// A successor that answers `self --help` and one that does not. The
+    /// second is what `--version <old>` installs, and the report has to say
+    /// the deployed skill was left alone rather than name a subcommand that
+    /// binary does not carry.
+    #[cfg(unix)]
+    #[test]
+    fn a_successor_without_self_leaves_the_deployed_skill_alone() {
+        use atlassian_cli::dist::skill;
+
+        for (script, expected) in [
+            ("#!/bin/sh\nexit 0\n", "redeployed"),
+            (
+                "#!/bin/sh\necho \"error: unrecognized subcommand\" >&2\nexit 2\n",
+                "unsupported",
+            ),
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let binary = home.path().join("bin").join("atlassian-cli");
+            std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+            std::fs::write(&binary, script).unwrap();
+            std::fs::set_permissions(&binary, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+                .unwrap();
+            let installation = Installation::at(binary, Some(home.path().to_path_buf()));
+            let dir = installation.skill_dir().unwrap();
+            skill::deploy(&dir).unwrap();
+
+            assert_eq!(redeploy_skill(&installation), expected);
+            // Either way the skill that was there is still there: the first
+            // case redeployed it, the second declined to touch it.
+            assert!(dir.join("SKILL.md").is_file());
+        }
+    }
+
     /// An installation whose binary is a placeholder file. Tests that let
     /// `self_uninstall` reach the binary are `#[cfg(unix)]` for it: on Windows
     /// `self_replace::self_delete_at` removes a file by spawning a copy of it

@@ -350,9 +350,15 @@ main() {
     fi
 
     # The skill is compiled into the binary, so the binary deploys it — there
-    # is no version to compare and nothing to fetch separately.
-    "$INSTALL_DIR/$BINARY_NAME" self skill install >/dev/null || \
+    # is no version to compare and nothing to fetch separately. A release from
+    # before `self` carries no skill to deploy, which only a pinned
+    # ATLASSIAN_CLI_VERSION reaches; naming a command that binary does not have
+    # is advice that fails the same way twice.
+    if ! "$INSTALL_DIR/$BINARY_NAME" self --help >/dev/null 2>&1; then
+        echo "$command_name predates 'self skill install'; the Claude Code skill was not installed." >&2
+    elif ! "$INSTALL_DIR/$BINARY_NAME" self skill install >/dev/null; then
         echo "Could not install the Claude Code skill; run '$command_name self skill install'" >&2
+    fi
 
     echo "" >&2
     echo "Installation complete" >&2
