@@ -529,6 +529,24 @@ pub async fn add_link(
     Ok(json!({}))
 }
 
+/// Whether naming a type would narrow these matches to fewer than all of them.
+/// It would not where one carries no type name — that one answers to no `--type`
+/// at all — nor where they all carry the same one.
+fn distinguishable_by_type(matching: &[&Value]) -> bool {
+    let mut names = matching.iter().map(|link| link["type"]["name"].as_str());
+    let Some(Some(first)) = names.next() else {
+        return false;
+    };
+    let mut differs = false;
+    for name in names {
+        match name {
+            None => return false,
+            Some(other) => differs |= other != first,
+        }
+    }
+    differs
+}
+
 pub async fn remove_link(
     source_key: &str,
     target_key: &str,
@@ -629,7 +647,11 @@ pub async fn remove_link(
         matching.push(link);
     }
 
-    if !unreadable.is_empty() {
+    // Where two the walk could read already match, an entry it could not read
+    // changes nothing: the command cannot choose among the ones it has, and
+    // saying the question cannot be told would be saying it of a question
+    // already answered.
+    if !unreadable.is_empty() && matching.len() < 2 {
         let mut reasons: Vec<&str> = Vec::new();
         for reason in &unreadable {
             if !reasons.contains(reason) {
@@ -684,9 +706,19 @@ pub async fn remove_link(
         // Without a type, naming one is the way out. With one, the pair and the
         // type are everything this command takes, so it has nothing left to
         // choose by and says so rather than picking.
+        // Naming a type is the way out only where the matches carry types that
+        // tell them apart. Where they do not, `--type` narrows to the same set
+        // and the advice sends the caller round the same refusal.
+        n if link_type.is_none() && distinguishable_by_type(&matching) => anyhow::bail!(
+            "Found {} links from {} to {}. Specify --type to disambiguate.",
+            n,
+            source_key,
+            target_key
+        ),
         n => match link_type {
             None => anyhow::bail!(
-                "Found {} links from {} to {}. Specify --type to disambiguate.",
+                "Found {} links from {} to {}, and no type tells them apart. This command \
+                 removes by issue pair and type, so it cannot choose between them.",
                 n,
                 source_key,
                 target_key
@@ -2667,6 +2699,86 @@ mod tests {
         let client = mock_client(server.uri());
         let err = remove_link("A-1", "B-1", None, &client).await.unwrap_err();
         assert!(err.to_string().contains("Specify --type"));
+    }
+
+    /// Two links of the same type answer to the same `--type`, so naming one
+    /// narrows nothing and sending the caller to do it is advice that returns
+    /// them here. The same where one of the two carries no type name: no
+    /// `--type` selects it either.
+    #[tokio::test]
+    async fn integ_remove_link_offers_a_type_only_where_one_would_tell_them_apart() {
+        for links in [
+            json!([
+                { "id": "1", "type": { "name": "Blocks" }, "outwardIssue": { "key": "B-1" } },
+                { "id": "2", "type": { "name": "Blocks" }, "outwardIssue": { "key": "B-1" } }
+            ]),
+            json!([
+                { "id": "1", "type": { "name": "Blocks" }, "outwardIssue": { "key": "B-1" } },
+                { "id": "2", "type": { "id": "10000" }, "outwardIssue": { "key": "B-1" } }
+            ]),
+            // Two that a type would tell apart, beside one that answers to no
+            // type at all: naming a type still cannot get down to one.
+            json!([
+                { "id": "1", "type": { "name": "Blocks" }, "outwardIssue": { "key": "B-1" } },
+                { "id": "2", "type": { "name": "Relates" }, "outwardIssue": { "key": "B-1" } },
+                { "id": "3", "type": { "id": "10000" }, "outwardIssue": { "key": "B-1" } }
+            ]),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/rest/api/3/issue/A-1"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({ "fields": { "issuelinks": links.clone() } })),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(0)
+                .mount(&server)
+                .await;
+
+            let client = mock_client(server.uri());
+            let err = remove_link("A-1", "B-1", None, &client)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(!err.contains("Specify --type"), "{links}: {err}");
+            assert!(err.contains("no type tells them apart"), "{links}: {err}");
+        }
+    }
+
+    /// An entry the walk could not read leaves open whether there is a second
+    /// link — but not where two it could read already match. That question is
+    /// answered, and the refusal is the one that says so.
+    #[tokio::test]
+    async fn integ_remove_link_does_not_reopen_an_ambiguity_it_has_already_settled() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/A-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "fields": { "issuelinks": [
+                    { "id": "a", "type": { "name": "Blocks" }, "outwardIssue": { "key": "B-1" } },
+                    { "id": "b", "type": { "name": "Blocks" }, "outwardIssue": { "key": "B-1" } },
+                    { "id": "x", "type": { "name": "Blocks" } }
+                ]}
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = remove_link("A-1", "B-1", Some("Blocks"), &client)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Found 2 links"), "{err}");
+        assert!(!err.contains("cannot be told"), "{err}");
     }
 
     #[tokio::test]

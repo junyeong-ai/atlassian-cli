@@ -463,7 +463,7 @@ pub(crate) fn validate_cloud_id(raw: &str) -> Result<()> {
     Ok(())
 }
 
-/// A TOML parse failure named by position and reason, never by content.
+/// A TOML parse failure named by position alone, never by reason or content.
 ///
 /// `toml::de::Error` renders the offending source line, and a config file is
 /// exactly where the secrets are: a malformed `client_secret = "…" x` would put
