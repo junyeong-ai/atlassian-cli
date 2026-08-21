@@ -1484,6 +1484,74 @@ mod tests {
         );
     }
 
+    /// A plain-text description becomes ADF on the way out, and the envelope a
+    /// caller chains on is required rather than passed through — a 2xx that
+    /// lost `key` would otherwise hand back `null` and fail somewhere later.
+    #[tokio::test]
+    async fn integ_create_issue_converts_the_description_and_requires_its_envelope() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/rest/api/3/issue"))
+            .and(body_string_contains("\"type\":\"doc\""))
+            .and(body_string_contains("\"key\":\"PROJ\""))
+            .and(body_string_contains("\"name\":\"Task\""))
+            .respond_with(
+                ResponseTemplate::new(201)
+                    .set_body_json(json!({ "id": "10001", "key": "PROJ-1", "self": "…" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let created = create_issue("PROJ", "Summary", "Task", json!("plain text"), &client)
+            .await
+            .unwrap();
+        assert_eq!(created, json!({ "key": "PROJ-1", "id": "10001" }));
+    }
+
+    #[tokio::test]
+    async fn integ_create_issue_bails_when_the_envelope_lost_its_key() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/rest/api/3/issue"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({ "id": "10001" })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = create_issue("PROJ", "S", "Task", json!("x"), &client)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no 'key'"), "{err}");
+    }
+
+    /// The happy path of the single-page read: what it asks for, and the
+    /// `{items, count}` envelope it promises.
+    #[tokio::test]
+    async fn integ_search_asks_for_a_page_and_answers_with_the_envelope() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/rest/api/3/search/jql"))
+            .and(body_string_contains("\"maxResults\":25"))
+            .and(body_string_contains("project = X"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "issues": [{ "key": "X-1" }, { "key": "X-2" }] })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let result = search("project = X", 25, None, false, &client)
+            .await
+            .unwrap();
+        assert_eq!(result["count"], 2, "{result}");
+        assert_eq!(result["items"][1]["key"], "X-2", "{result}");
+    }
+
     /// `--fields` is the caller's, so it goes through the query builder. Written
     /// into the URL, a value carrying `&` would start a parameter of its own and
     /// change the request — here it must stay one encoded `fields` value.
