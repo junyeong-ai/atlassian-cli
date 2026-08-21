@@ -533,7 +533,7 @@ pub async fn remove_link(
     // only matters where nothing matched: counted there, "no such link" would
     // be a definite absence drawn from an entry never examined. Where a match
     // was found, an unreadable sibling is not this command's business.
-    let mut matching: Vec<&Value> = Vec::new();
+    let mut matching: Vec<(&Value, bool)> = Vec::new();
     let mut unreadable = 0usize;
     for link in &items {
         let other_key = link["outwardIssue"]["key"]
@@ -544,6 +544,7 @@ pub async fn remove_link(
         // A field that is there and does not match settles the entry on its
         // own — only a missing one the answer still depended on leaves it
         // undecided.
+        let outward = link["outwardIssue"]["key"].as_str().is_some();
         let key_excludes = other_key.is_some_and(|k| k != target_key);
         let type_excludes = link_type.is_some_and(|t| type_name.is_some_and(|n| n != t));
         if key_excludes || type_excludes {
@@ -554,7 +555,7 @@ pub async fn remove_link(
             continue;
         }
 
-        matching.push(link);
+        matching.push((link, outward));
     }
 
     match matching.len() {
@@ -588,10 +589,27 @@ pub async fn remove_link(
                     target_key
                 );
             }
+            // Same type, same pair, both directions: "A blocks B" and "B blocks
+            // A" are two links and both appear on A. `add` takes the source as
+            // the outward side, so `remove` means the same one — deleting
+            // whichever came first would take a link the caller did not name.
+            matching.retain(|(_, outward)| *outward);
+            if matching.len() != 1 {
+                anyhow::bail!(
+                    "Found {} links of type '{}' between {} and {}, and {} of them run outward \
+                     from {}. Remove by the other direction's source instead.",
+                    n,
+                    link_type.unwrap_or_default(),
+                    source_key,
+                    target_key,
+                    matching.len(),
+                    source_key
+                );
+            }
         }
     }
 
-    let link_id = matching[0]["id"]
+    let link_id = matching[0].0["id"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("Link ID missing from response"))?;
 
@@ -1382,6 +1400,38 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("cannot be told"), "{err}");
+    }
+
+    /// "A blocks B" and "B blocks A" are two links, both listed on A with the
+    /// same type and the same other issue. `add` takes the source as the
+    /// outward side, so `remove` takes the same one rather than whichever the
+    /// response happened to put first.
+    #[tokio::test]
+    async fn integ_remove_link_takes_the_outward_one_where_both_directions_exist() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/PROJ-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "fields": { "issuelinks": [
+                    { "id": "inward", "type": { "name": "Blocks" },
+                      "inwardIssue": { "key": "PROJ-2" } },
+                    { "id": "outward", "type": { "name": "Blocks" },
+                      "outwardIssue": { "key": "PROJ-2" } }
+                ]}
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/issueLink/outward"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        remove_link("PROJ-1", "PROJ-2", Some("Blocks"), &client)
+            .await
+            .expect("the outward link is the one `add` would have made");
     }
 
     /// An entry a present field already excludes is decided, not undecided: it
