@@ -2093,18 +2093,24 @@ async fn handle_auth(
             // be cleared rather than lingering unnoticed in the keychain — and
             // say when that could not be checked at all, because "no stale
             // session" is the reading a store nothing read must not produce.
-            if !matches!(method, Some(AuthMethod::OAuth)) {
-                if let Some(loaded) = &session {
-                    println!(
-                        "  Stale OAuth session present ({}) from an earlier configuration — \
-                         run `atlassian-cli auth logout` to clear it.",
-                        loaded.backend
-                    );
-                } else if let Some(e) = &unreadable {
-                    println!("  Whether a session is stored could not be read: {e}");
-                }
+            if !matches!(method, Some(AuthMethod::OAuth))
+                && let Some(loaded) = &session
+            {
+                println!(
+                    "  Stale OAuth session present ({}) from an earlier configuration — \
+                     run `atlassian-cli auth logout` to clear it.",
+                    loaded.backend
+                );
             }
-            Ok(())
+
+            // The report is printed first, in full, because the part that could
+            // be produced is still the answer to what was asked. But the part
+            // that could not is missing from it, and the exit code is the only
+            // thing a script reads — so this run did not answer.
+            match unreadable {
+                Some(e) => Err(e),
+                None => Ok(()),
+            }
         }
         AuthSubcommand::Refresh => {
             let config =
