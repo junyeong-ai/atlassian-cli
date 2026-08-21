@@ -1543,6 +1543,141 @@ mod tests {
         }
     }
 
+    /// Every shape the classification can be handed, and the one it may act
+    /// on. Each side is absent, names the issue asked about, names another, or
+    /// is there without a readable key — a side that is not an object at all
+    /// reads as the last of those, so those are covered here too. Each is
+    /// crossed with a type that is absent, matches, or differs, and with
+    /// `--type` given and omitted.
+    ///
+    /// The removal is irreversible and these entries decide it, so what may be
+    /// deleted is stated once, over the whole space: the outward side names
+    /// the issue asked about, there is no inward side, and the type was either
+    /// not asked for or read and equal. Every other shape refuses.
+    #[tokio::test]
+    async fn integ_remove_link_deletes_only_the_shape_that_answers_the_request() {
+        for (outward, inward, kind, requested, entry) in shape_space() {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/rest/api/3/issue/PROJ-1"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({ "fields": { "issuelinks": [entry.clone()] } })),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .respond_with(ResponseTemplate::new(204))
+                .mount(&server)
+                .await;
+
+            let client = mock_client(server.uri());
+            let removed = remove_link("PROJ-1", "PROJ-2", requested, &client)
+                .await
+                .is_ok();
+            let answers = outward == "names the target"
+                && inward == "absent"
+                && (requested.is_none() || kind == "matches");
+
+            assert_eq!(
+                removed, answers,
+                "outward {outward}, inward {inward}, type {kind}, --type {requested:?}: {entry}"
+            );
+        }
+    }
+
+    /// The same space beside a link that plainly answers the request. Removing
+    /// it is right exactly where the other entry could not be a second one:
+    /// every side it carries said which issue and none is the one asked about;
+    /// or its type is there and is not the one asked for; or it carries an
+    /// inward side and no outward one, which reads as running the other way
+    /// and so not removable from here whatever else it says.
+    ///
+    /// Withholding anywhere else refuses a removal that no reading of the
+    /// unread fields forbids — the failure this pairing exists to catch, and
+    /// one the single-entry space above cannot see.
+    #[tokio::test]
+    async fn integ_remove_link_withholds_only_where_the_other_entry_could_be_a_second_one() {
+        for (outward, inward, kind, requested, other) in shape_space() {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/rest/api/3/issue/PROJ-1"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "fields": { "issuelinks": [other.clone(),
+                        { "id": "MATCH", "type": { "name": "Blocks" },
+                          "outwardIssue": { "key": "PROJ-2" } }] }
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(path("/rest/api/3/issueLink/MATCH"))
+                .respond_with(ResponseTemplate::new(204))
+                .mount(&server)
+                .await;
+
+            let client = mock_client(server.uri());
+            let removed = remove_link("PROJ-1", "PROJ-2", requested, &client)
+                .await
+                .is_ok();
+            let every_side_said_which = outward != "no readable key" && inward != "no readable key";
+            let carries_a_side = outward != "absent" || inward != "absent";
+            let names_target = outward == "names the target" || inward == "names the target";
+            let ruled_out = (every_side_said_which && carries_a_side && !names_target)
+                || (requested.is_some() && kind == "differs")
+                || (outward == "absent" && inward != "absent");
+
+            assert_eq!(
+                removed, ruled_out,
+                "beside outward {outward}, inward {inward}, type {kind}, \
+                 --type {requested:?}: {other}"
+            );
+        }
+    }
+
+    /// Every entry the two checks above are run over, labelled by what each
+    /// part of it says.
+    fn shape_space() -> Vec<(
+        &'static str,
+        &'static str,
+        &'static str,
+        Option<&'static str>,
+        Value,
+    )> {
+        const SIDES: [(&str, fn() -> Value); 4] = [
+            ("absent", || json!(null)),
+            ("names the target", || json!({ "key": "PROJ-2" })),
+            ("names another issue", || json!({ "key": "PROJ-9" })),
+            ("no readable key", || json!({ "key": 42 })),
+        ];
+        const TYPES: [(&str, fn() -> Value); 3] = [
+            ("absent", || json!(null)),
+            ("matches", || json!({ "name": "Blocks" })),
+            ("differs", || json!({ "name": "Relates" })),
+        ];
+
+        let mut space = Vec::new();
+        for (outward, outward_side) in SIDES {
+            for (inward, inward_side) in SIDES {
+                for (kind, link_type) in TYPES {
+                    for requested in [None, Some("Blocks")] {
+                        let mut entry = json!({ "id": "OTHER" });
+                        for (field, value) in [
+                            ("outwardIssue", outward_side()),
+                            ("inwardIssue", inward_side()),
+                            ("type", link_type()),
+                        ] {
+                            if !value.is_null() {
+                                entry[field] = value;
+                            }
+                        }
+                        space.push((outward, inward, kind, requested, entry));
+                    }
+                }
+            }
+        }
+        space
+    }
+
     /// A side that is there and did not say which issue is still a side that
     /// is there. Reading only the key takes it for a side that is absent, and
     /// the entry then looks like the clean one-ended shape it is not.
