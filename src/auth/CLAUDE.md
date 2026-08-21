@@ -54,9 +54,10 @@ calls `AuthConfig::oauth_params(profile)`. This is the only place that decides
 whether the active profile is OAuth-configured and produces the canonical
 error message when it isn't.
 
-`logout` and `status` are about what is stored, not about what is configured,
-so they do not ask: a profile moved off OAuth keeps its persisted session, and
-gating on the method would leave that credential unreachable.
+Neither `logout` nor `status` asks it. `logout` is about what is stored alone,
+and `status` reports the configured method beside it — a profile moved off OAuth
+keeps its persisted session, so gating either on the method would leave that
+credential unreachable and the stale one unmentioned.
 
 ## URL building is shared
 
@@ -145,8 +146,8 @@ spells the separator the same way so both builders read identically.
 - `TokenStore::delete` clears both backends independently — neither half is
   conditional on the other, because whichever one fails, the other is still
   holding a token — and reports a keychain that would not answer as a failure.
-  Nothing is lost when the keychain is unreachable — but `auth logout` does exit non-zero there,
-  and that is deliberate: every released target has a keychain compiled in, so
+  Nothing is lost when the keychain is unreachable — but `auth logout` does exit
+  non-zero there, and that is deliberate: every released target has a keychain compiled in, so
   "could not reach it" cannot be read as "there was nothing in it", and a token
   saved from a desktop session is exactly what would be left behind by a quiet
   success. Cleared means the entry went, was not there, this build carries no
