@@ -167,13 +167,18 @@ pub async fn search_all(
     let final_cql = apply_space_filter(query, client.config());
     let expand = build_search_expand(include_all_fields, additional_expand);
 
+    // The counterpart of `fetch_all_v2_results`' ceiling, and for the same
+    // reason: `CursorTrail` refuses a repeated path, and a server handing out a
+    // genuinely new cursor every time repeats nothing, so nothing else ends
+    // that walk.
+    const MAX_PAGES: u32 = 10_000;
     let mut all_items: Vec<Value> = Vec::new();
-    let mut page_num = 1;
     let mut next_url: Option<String> = None;
     let mut total_size: u64 = 0;
     let mut trail = CursorTrail::default();
+    let mut finished = false;
 
-    loop {
+    for page_num in 1..=MAX_PAGES {
         let mut data = if let Some(ref url) = next_url {
             fetch_page(client, url).await?
         } else {
@@ -214,14 +219,13 @@ pub async fn search_all(
             total_size
         );
 
-        // _links.next is our signal to continue paginating; absence means we're done.
-        // `let-else` keeps the happy path flat and removes the unwraps below.
         // Absent or null is the API's end-of-results signal; a `next` that is
         // there and is not a string is drift, the same distinction `link_path`
         // draws one step later. An empty page is neither — with `next` still
         // live, breaking on one drops every page after it.
         let next = &data["_links"]["next"];
         if next.is_null() {
+            finished = true;
             break;
         }
         let Some(link) = next.as_str() else {
@@ -230,11 +234,14 @@ pub async fn search_all(
 
         next_url = Some(trail.step("search", &v1_next_link(&data["_links"], link))?);
 
-        page_num += 1;
         sleep(Duration::from_millis(
             client.config().performance.rate_limit_delay_ms,
         ))
         .await;
+    }
+
+    if !finished {
+        anyhow::bail!("search did not finish within {MAX_PAGES} pages");
     }
 
     eprintln!("\nTotal: {} items fetched", all_items.len());
@@ -1222,7 +1229,7 @@ fn extract_content_from_results(data: &mut Value, as_markdown: bool) -> Result<V
             // A result with no `content` is not a content hit — v1 search also
             // answers with space and user entities — and dropping it reported
             // no matches for a query that had them. It is returned as it came.
-            let Some(content) = item.get_mut("content") else {
+            let Some(content) = item.get_mut("content").filter(|c| !c.is_null()) else {
                 return item.take();
             };
             let mut content = content.take();
@@ -1355,8 +1362,7 @@ mod tests {
     }
 
     /// A lookup's 2xx without a `results` array is drift; reading it as "not
-    /// found" reports an absence nothing established — and `set_property`
-    /// picks its create path on that answer.
+    /// found" reports an absence nothing established.
     #[tokio::test]
     async fn integ_space_lookup_bails_on_missing_results() {
         let server = MockServer::start().await;
@@ -2836,8 +2842,7 @@ mod tests {
     #[tokio::test]
     async fn integ_v1_search_all_bails_when_the_cursor_stops_advancing() {
         let server = MockServer::start().await;
-        // v1 walks the same cursor forever unless the trail stops it. Every
-        // page is non-empty, so the `count == 0` exit never fires.
+        // v1 walks the same cursor forever unless the trail stops it.
         Mock::given(method("GET"))
             .and(path("/wiki/rest/api/search"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({

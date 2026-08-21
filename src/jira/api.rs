@@ -219,14 +219,22 @@ pub async fn search_all(
         // empty page is not: with a token still live, breaking on one drops
         // every page after it, which is the truncation the contract bails on
         // one field over.
-        next_page_token = match data["nextPageToken"].as_str() {
-            None => break,
-            Some(token) if seen_tokens.insert(token.to_string()) => Some(token.to_string()),
-            Some(token) => anyhow::bail!(
+        let Some(token) = data["nextPageToken"].as_str() else {
+            // Cleared, not merely broken out of: the check after the loop reads
+            // this to tell "the endpoint said stop" from "the page bound ran
+            // out", and a diverging arm inside the assignment left the previous
+            // page's token standing — so every walk that reached page two threw
+            // away everything it had fetched.
+            next_page_token = None;
+            break;
+        };
+        if !seen_tokens.insert(token.to_string()) {
+            anyhow::bail!(
                 "search returned a page token it had already used ({token}), so the walk would \
                  not advance"
-            ),
-        };
+            );
+        }
+        next_page_token = Some(token.to_string());
 
         sleep(Duration::from_millis(
             client.config().performance.rate_limit_delay_ms,
@@ -566,8 +574,15 @@ pub async fn get_links(issue_key: &str, client: &ApiClient) -> Result<Value> {
     filter::apply(&mut data, client.config());
     // The envelope contract is `{"items": [...]}`; a 2xx that lost the array
     // would hand a `jq` pipeline `null` — and `remove_link` reads it back
-    // as "no links on this issue".
-    Ok(json!({ "items": require_field(&data, "/fields/issuelinks", "get links")? }))
+    // as "no links on this issue". A link-free issue still carries `[]`; the
+    // field goes missing only where the site has issue linking turned off.
+    Ok(json!({
+        "items": require_field(
+            &data,
+            "/fields/issuelinks",
+            "get links (is issue linking enabled for this site?)",
+        )?
+    }))
 }
 
 pub async fn get_transitions(issue_key: &str, client: &ApiClient) -> Result<Value> {
@@ -636,7 +651,7 @@ pub async fn get_worklogs(issue_key: &str, client: &ApiClient) -> Result<Value> 
 
     let mut data: Value = response.json().await?;
     filter::apply(&mut data, client.config());
-    Ok(json!({ "items": data["worklogs"] }))
+    Ok(json!({ "items": require_field(&data, "/worklogs", "get worklogs")? }))
 }
 
 pub async fn update_worklog(
@@ -742,7 +757,7 @@ pub async fn get_watchers(issue_key: &str, client: &ApiClient) -> Result<Value> 
 
     let mut data: Value = response.json().await?;
     filter::apply(&mut data, client.config());
-    Ok(json!({ "items": data["watchers"] }))
+    Ok(json!({ "items": require_field(&data, "/watchers", "get watchers")? }))
 }
 
 /// How a Jira collection reports that a page is the last one.
@@ -1331,6 +1346,47 @@ mod tests {
             .to_string();
 
         assert!(err.contains("no 'issues' array"), "{err}");
+    }
+
+    /// The walk that actually happens: more than one page, ending when the
+    /// endpoint stops handing out a token. Every other bound in this crate has
+    /// this test; without it, a `--all` that fetched everything and then threw
+    /// it away looked green.
+    #[tokio::test]
+    async fn integ_search_all_returns_every_page_it_fetched() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/rest/api/3/search/jql"))
+            .and(body_string_contains("nextPageToken"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "issues": [{ "key": "X-2" }] })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/rest/api/3/search/jql"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "issues": [{ "key": "X-1" }], "nextPageToken": "P2" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let result = search_all("project = X", None, false, false, &client)
+            .await
+            .unwrap();
+
+        assert_eq!(result["total"], 2, "{result}");
+        let keys: Vec<&str> = result["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["key"].as_str().unwrap())
+            .collect();
+        assert_eq!(keys, vec!["X-1", "X-2"], "{result}");
     }
 
     /// An empty page with a live token is not the end of the results; a token
