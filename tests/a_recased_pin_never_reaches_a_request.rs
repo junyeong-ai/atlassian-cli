@@ -98,9 +98,11 @@ fn params(cloud_id: Option<&str>) -> OAuthParams {
 /// `ATLASSIAN_NO_KEYCHAIN` in the inherited environment would send `load` past
 /// the mock to the file store, and the file store's path is the one this
 /// machine's sessions are kept at — a test that reads it is reading the user's
-/// credentials to decide its own result. Cleared here, and the home the path is
-/// built from is a temporary directory, so the fallback has nothing of anyone's
-/// to find either way.
+/// credentials to decide its own result. Clearing it is what keeps the read
+/// inside the mock. The temporary home moves that fallback path as well, on
+/// the platforms where it is derived from the environment at all; Windows
+/// resolves the profile through a known folder, so there the mock answering
+/// is the whole of it.
 #[test]
 fn resume_refuses_a_pin_that_differs_from_the_stored_id_only_in_case() {
     let home = tempfile::tempdir().expect("temporary home");
