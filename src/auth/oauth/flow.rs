@@ -232,12 +232,18 @@ fn resolve_cloud_id(pin: Option<&str>, sites: &[SiteInfo]) -> Result<String> {
         // `accessible-resources` is the list of sites this grant covers, so a
         // pin outside it stores a session every later request sends to a site
         // the token was never authorized for.
-        // Case-insensitively: cloud ids are lowercase UUIDs, and a pin pasted
-        // in upper case is the same site — refusing it while printing the
-        // same id back in the reachable list would be a puzzle.
-        (Some(p), sites) if sites.iter().any(|s| s.id.eq_ignore_ascii_case(p)) => {
-            checked(p.to_string())
-        }
+        (Some(p), sites) if sites.iter().any(|s| s.id == p) => checked(p.to_string()),
+        // Exactly, not case-insensitively. The gateway resolves a cloud id by
+        // byte: `/ex/jira/{id}` answers 403 for the site's own id and 404 —
+        // indistinguishable from a tenant that does not exist — for the same
+        // id with any letter in upper case. Accepting one would store a
+        // session whose every request then reports not-found, so the case is
+        // named instead, because it is not something a reader would guess.
+        (Some(p), sites) if sites.iter().any(|s| s.id.eq_ignore_ascii_case(p)) => bail!(
+            "cloud_id is pinned to {p}, which differs only in case from a site this login can \
+             reach. Atlassian matches it exactly — use the id as it is listed:\n{}",
+            listed(sites)
+        ),
         (Some(p), []) => {
             bail!("cloud_id is pinned to {p}, but this login can reach no Atlassian sites at all")
         }
@@ -394,6 +400,34 @@ mod tests {
             .to_string();
         assert!(err.contains("cannot reach"), "{err}");
         assert!(err.contains("auto"), "{err}");
+    }
+
+    /// The gateway resolves a cloud id by byte: `/ex/jira/{id}` answers 403 for
+    /// a site's own id and 404 for the same id upper-cased, which is what it
+    /// answers for a tenant that does not exist. Accepting the upper-cased form
+    /// would store a session whose every request reports not-found, so it is
+    /// refused — and the refusal says that case is the difference, which is not
+    /// something the two strings show a reader on their own.
+    #[test]
+    fn a_pin_differing_only_in_case_is_refused_and_says_so() {
+        let sites = vec![SiteInfo {
+            id: "00e6196b-8845-46cb-bb2b-85ed696dafcd".into(),
+            url: "https://one.atlassian.net".into(),
+            name: None,
+        }];
+        assert_eq!(
+            resolve_cloud_id(Some("00e6196b-8845-46cb-bb2b-85ed696dafcd"), &sites).unwrap(),
+            "00e6196b-8845-46cb-bb2b-85ed696dafcd"
+        );
+
+        let err = resolve_cloud_id(Some("00E6196B-8845-46CB-BB2B-85ED696DAFCD"), &sites)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("only in case"), "{err}");
+        assert!(
+            err.contains("00e6196b"),
+            "the id to use was not shown: {err}"
+        );
     }
 
     #[test]

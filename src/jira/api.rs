@@ -541,27 +541,33 @@ pub async fn remove_link(
             .or_else(|| link["inwardIssue"]["key"].as_str());
         let type_name = link["type"]["name"].as_str();
 
-        let Some(other_key) = other_key else {
-            unreadable += 1;
+        // A field that is there and does not match settles the entry on its
+        // own — only a missing one the answer still depended on leaves it
+        // undecided.
+        let key_excludes = other_key.is_some_and(|k| k != target_key);
+        let type_excludes = link_type.is_some_and(|t| type_name.is_some_and(|n| n != t));
+        if key_excludes || type_excludes {
             continue;
-        };
-        if link_type.is_some() && type_name.is_none() {
+        }
+        if other_key.is_none() || (link_type.is_some() && type_name.is_none()) {
             unreadable += 1;
             continue;
         }
 
-        let type_match = link_type.is_none_or(|t| type_name == Some(t));
-        if other_key == target_key && type_match {
-            matching.push(link);
-        }
+        matching.push(link);
     }
 
     match matching.len() {
         0 if unreadable > 0 => anyhow::bail!(
-            "{} of the links on {} name no issue or no type, so whether one to {} is among \
+            "{} of the links on {} left the question open{}, so whether one to {} is among \
              them cannot be told",
             unreadable,
             source_key,
+            if link_type.is_some() {
+                " (no issue named, or no type)"
+            } else {
+                " (no issue named)"
+            },
             target_key
         ),
         0 => anyhow::bail!(
@@ -1182,24 +1188,6 @@ mod tests {
     }
 
     #[test]
-    fn test_search_default_limit() {
-        let jql = "status = Open";
-        let limit = 20u32;
-
-        assert_eq!(jql, "status = Open");
-        assert_eq!(limit, 20);
-    }
-
-    #[test]
-    fn test_search_custom_limit() {
-        let jql = "status = Open";
-        let limit = 50u32;
-
-        assert_eq!(jql, "status = Open");
-        assert_eq!(limit, 50);
-    }
-
-    #[test]
     fn test_search_project_filter_injection() {
         let config = create_test_config(vec!["PROJ1".to_string(), "PROJ2".to_string()], None);
         let result = apply_project_filter("status = Open", &config);
@@ -1237,19 +1225,6 @@ mod tests {
     }
 
     #[test]
-    fn test_search_fields_extraction_from_api() {
-        let fields = Some(vec![
-            "key".to_string(),
-            "summary".to_string(),
-            "status".to_string(),
-        ]);
-
-        let fields_vec = fields.expect("fields should be Some");
-        assert_eq!(fields_vec.len(), 3);
-        assert_eq!(fields_vec, vec!["key", "summary", "status"]);
-    }
-
-    #[test]
     fn test_search_no_fields_uses_default() {
         let config = create_test_config(vec![], None);
         let result = fields::resolve_search_fields(None, false, &config);
@@ -1272,118 +1247,12 @@ mod tests {
     }
 
     #[test]
-    fn test_create_issue_required_fields() {
-        let project_key = "PROJ";
-        let summary = "Test Issue";
-        let issue_type = "Task";
-        let description = "Test description";
-
-        assert_eq!(project_key, "PROJ");
-        assert_eq!(summary, "Test Issue");
-        assert_eq!(issue_type, "Task");
-        assert_eq!(description, "Test description");
-    }
-
-    #[test]
-    fn test_create_issue_adf_conversion() {
-        let description = "Test description";
-
-        let adf_body = json!({
-            "type": "doc",
-            "version": 1,
-            "content": [{
-                "type": "paragraph",
-                "content": [{
-                    "type": "text",
-                    "text": description
-                }]
-            }]
-        });
-
-        assert_eq!(adf_body["type"], "doc");
-        assert_eq!(adf_body["version"], 1);
-        assert_eq!(adf_body["content"][0]["type"], "paragraph");
-        assert_eq!(
-            adf_body["content"][0]["content"][0]["text"],
-            "Test description"
-        );
-    }
-
-    #[test]
-    fn test_update_issue_valid_fields() {
-        let issue_key = "PROJ-123";
-        let fields_json = json!({
-            "summary": "Updated summary",
-            "priority": {"name": "High"}
-        });
-
-        assert_eq!(issue_key, "PROJ-123");
-        assert_eq!(fields_json["summary"], "Updated summary");
-        assert_eq!(fields_json["priority"]["name"], "High");
-    }
-
-    #[test]
     fn test_add_comment_missing_comment() {
         let comment_result = adf::process_comment_input(json!(null));
         assert!(comment_result.is_ok());
         let comment_adf = comment_result.unwrap();
         assert_eq!(comment_adf["type"], "doc");
         assert_eq!(comment_adf["content"][0]["content"][0]["text"], "");
-    }
-
-    #[test]
-    fn test_add_comment_adf_conversion() {
-        let comment = "This is a test comment";
-
-        let adf_body = json!({
-            "body": {
-                "type": "doc",
-                "version": 1,
-                "content": [{
-                    "type": "paragraph",
-                    "content": [{
-                        "type": "text",
-                        "text": comment
-                    }]
-                }]
-            }
-        });
-
-        assert_eq!(adf_body["body"]["type"], "doc");
-        assert_eq!(adf_body["body"]["version"], 1);
-        assert_eq!(adf_body["body"]["content"][0]["type"], "paragraph");
-        assert_eq!(
-            adf_body["body"]["content"][0]["content"][0]["text"],
-            "This is a test comment"
-        );
-    }
-
-    #[test]
-    fn test_transition_issue_valid_params() {
-        let issue_key = "PROJ-123";
-        let transition_id = "21";
-
-        assert_eq!(issue_key, "PROJ-123");
-        assert_eq!(transition_id, "21");
-    }
-
-    #[test]
-    fn test_transition_issue_body_format() {
-        let transition_id = "31";
-
-        let body = json!({
-            "transition": {
-                "id": transition_id
-            }
-        });
-
-        assert_eq!(body["transition"]["id"], "31");
-    }
-
-    #[test]
-    fn test_get_transitions_valid_issue_key() {
-        let issue_key = "PROJ-123";
-        assert_eq!(issue_key, "PROJ-123");
     }
 
     // -- Integration tests for Phase 1-3 endpoints --
@@ -1513,6 +1382,31 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("cannot be told"), "{err}");
+    }
+
+    /// An entry a present field already excludes is decided, not undecided: it
+    /// carries no issue key, but its type is not the one asked for, so it could
+    /// never have been the link — and "no such link" stays a provable answer.
+    #[tokio::test]
+    async fn integ_remove_link_still_answers_where_a_present_field_settles_it() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/PROJ-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "fields": { "issuelinks": [
+                    { "id": "1", "type": { "name": "Relates" } },
+                    { "id": "2", "type": { "name": "Blocks" }, "outwardIssue": { "key": "PROJ-3" } }
+                ]}
+            })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = remove_link("PROJ-1", "PROJ-2", Some("Blocks"), &client)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("No link found"), "{err}");
     }
 
     /// The single-issue read had the same ordering as the comment list did:

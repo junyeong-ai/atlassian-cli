@@ -2074,7 +2074,8 @@ async fn handle_auth(
             if atlassian_cli::auth::keychain_opt_out() {
                 println!(
                     "ATLASSIAN_NO_KEYCHAIN is set, so the keychain was not consulted; a session \
-                     stored there before the flag is untouched."
+                     stored there before the flag is untouched — unset it for one run to see or \
+                     clear what it holds."
                 );
             }
 
