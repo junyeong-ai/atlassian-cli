@@ -6,8 +6,8 @@ use crate::jira::adf;
 use crate::jira::fields;
 use crate::markdown::adf_to_markdown;
 use crate::query_utils::{clause_detector, inject_filter};
-use crate::response::{require_array, require_field};
-use anyhow::Result;
+use crate::response::{WHOLE_BODY, require_array, require_field};
+use anyhow::{Context, Result};
 use regex::Regex;
 use serde_json::{Value, json};
 use std::io::{self, Write};
@@ -178,8 +178,9 @@ pub async fn search_all(
         let mut data: Value = response.json().await?;
         filter::apply(&mut data, client.config());
 
-        // Same as the single-page read, and it matters more here: `count == 0`
-        // ends the walk below, so a drifted page would truncate the rest.
+        // Same as the single-page read: a 2xx that lost the array is drift,
+        // and reporting it as a page of no matches is the truncation this walk
+        // exists to prevent.
         let Some(issues) = data["issues"].as_array().cloned() else {
             anyhow::bail!("search succeeded but its response had no 'issues' array: {data}");
         };
@@ -215,18 +216,20 @@ pub async fn search_all(
             all_issues.len()
         );
 
-        // Absence of a token is the endpoint's own end-of-results signal. An
-        // empty page is not: with a token still live, breaking on one drops
-        // every page after it, which is the truncation the contract bails on
-        // one field over.
-        let Some(token) = data["nextPageToken"].as_str() else {
-            // Cleared, not merely broken out of: the check after the loop reads
-            // this to tell "the endpoint said stop" from "the page bound ran
-            // out", and a diverging arm inside the assignment left the previous
-            // page's token standing — so every walk that reached page two threw
-            // away everything it had fetched.
+        // Absent or null is the endpoint's own end-of-results signal; a token
+        // that is there and is not a string is drift, the same distinction the
+        // Confluence walk draws on `_links.next`. An empty page is neither —
+        // with a token still live, breaking on one drops every page after it.
+        let candidate = &data["nextPageToken"];
+        if candidate.is_null() {
+            // Cleared rather than merely broken out of: the check after the
+            // loop reads this to tell "the endpoint said stop" from "the page
+            // bound ran out".
             next_page_token = None;
             break;
+        }
+        let Some(token) = candidate.as_str() else {
+            anyhow::bail!("search succeeded but its 'nextPageToken' was not a string: {candidate}");
         };
         if !seen_tokens.insert(token.to_string()) {
             anyhow::bail!(
@@ -508,10 +511,7 @@ pub async fn remove_link(
     link_type: Option<&str>,
     client: &ApiClient,
 ) -> Result<Value> {
-    let links = get_links(source_key, client).await?;
-    let items = links["items"].as_array().ok_or_else(|| {
-        anyhow::anyhow!("get links returned a non-array 'items' for {source_key}")
-    })?;
+    let items = fetch_links(source_key, client).await?;
 
     let matching: Vec<&Value> = items
         .iter()
@@ -561,7 +561,12 @@ pub async fn remove_link(
     Ok(json!({}))
 }
 
-pub async fn get_links(issue_key: &str, client: &ApiClient) -> Result<Value> {
+/// The links on an issue, as the array both the `get links` envelope and
+/// `remove_link` read. A link-free issue still carries `[]`; the field goes
+/// missing only where the site has issue linking turned off, which is what the
+/// error says — reading it as "no links on this issue" would have `remove_link`
+/// report nothing to remove on an issue that has links.
+async fn fetch_links(issue_key: &str, client: &ApiClient) -> Result<Vec<Value>> {
     let url = format!(
         "/rest/api/3/issue/{}?fields=issuelinks",
         encode_path_segment(issue_key)
@@ -572,17 +577,12 @@ pub async fn get_links(issue_key: &str, client: &ApiClient) -> Result<Value> {
 
     let mut data: Value = response.json().await?;
     filter::apply(&mut data, client.config());
-    // The envelope contract is `{"items": [...]}`; a 2xx that lost the array
-    // would hand a `jq` pipeline `null` — and `remove_link` reads it back
-    // as "no links on this issue". A link-free issue still carries `[]`; the
-    // field goes missing only where the site has issue linking turned off.
-    Ok(json!({
-        "items": require_array(
-            &data,
-            "/fields/issuelinks",
-            "get links (is issue linking enabled for this site?)",
-        )?
-    }))
+    require_array(&data, "/fields/issuelinks", "get links")
+        .context("a site with issue linking turned off carries no 'issuelinks' field")
+}
+
+pub async fn get_links(issue_key: &str, client: &ApiClient) -> Result<Value> {
+    Ok(json!({ "items": fetch_links(issue_key, client).await? }))
 }
 
 pub async fn get_transitions(issue_key: &str, client: &ApiClient) -> Result<Value> {
@@ -646,12 +646,8 @@ pub async fn get_worklogs(issue_key: &str, client: &ApiClient) -> Result<Value> 
         encode_path_segment(issue_key)
     );
 
-    let request = client.get(Service::Jira, &url).await?;
-    let response = client.execute("get worklogs", request).await?;
-
-    let mut data: Value = response.json().await?;
-    filter::apply(&mut data, client.config());
-    Ok(json!({ "items": require_array(&data, "/worklogs", "get worklogs")? }))
+    let items = paginate(&url, &[], "get worklogs", WORKLOG_PAGE, client).await?;
+    Ok(json!({ "items": items }))
 }
 
 pub async fn update_worklog(
@@ -795,6 +791,12 @@ const COMMENT_PAGE: PageContract = PageContract {
     end: PageEnd::Total,
 };
 
+/// `/rest/api/3/issue/{key}/worklog`.
+const WORKLOG_PAGE: PageContract = PageContract {
+    items: "worklogs",
+    end: PageEnd::Total,
+};
+
 /// Loop through a paginated `startAt`/`maxResults` endpoint and accumulate every
 /// item, following `contract` to know where the items are and when to stop.
 async fn paginate(
@@ -917,7 +919,7 @@ pub async fn get_issue_types(client: &ApiClient) -> Result<Value> {
 
     let mut data: Value = response.json().await?;
     filter::apply(&mut data, client.config());
-    Ok(json!({ "items": data }))
+    Ok(json!({ "items": require_array(&data, WHOLE_BODY, "get issue types")? }))
 }
 
 pub async fn get_priorities(client: &ApiClient) -> Result<Value> {
@@ -926,7 +928,7 @@ pub async fn get_priorities(client: &ApiClient) -> Result<Value> {
 
     let mut data: Value = response.json().await?;
     filter::apply(&mut data, client.config());
-    Ok(json!({ "items": data }))
+    Ok(json!({ "items": require_array(&data, WHOLE_BODY, "get priorities")? }))
 }
 
 pub async fn get_statuses(client: &ApiClient) -> Result<Value> {
@@ -935,7 +937,7 @@ pub async fn get_statuses(client: &ApiClient) -> Result<Value> {
 
     let mut data: Value = response.json().await?;
     filter::apply(&mut data, client.config());
-    Ok(json!({ "items": data }))
+    Ok(json!({ "items": require_array(&data, WHOLE_BODY, "get statuses")? }))
 }
 
 pub async fn get_labels(client: &ApiClient) -> Result<Value> {
@@ -1327,8 +1329,9 @@ mod tests {
     };
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    /// A 2xx without an `issues` array is drift, and `search_all` ends its walk
-    /// on an empty page — so reading it as no matches truncated the rest.
+    /// A 2xx without an `issues` array is drift. Reading it as a page of no
+    /// matches is how a search reports an empty result set for a query that
+    /// had one.
     #[tokio::test]
     async fn integ_search_bails_when_the_body_lost_its_issues_array() {
         let server = MockServer::start().await;
@@ -1367,6 +1370,110 @@ mod tests {
             .to_string();
 
         assert!(err.contains("no 'transitions' array"), "{err}");
+    }
+
+    /// Absent ends the walk; present-and-not-a-string is neither an end signal
+    /// nor a token, so returning the pages fetched so far would report a
+    /// truncated search as the whole result set.
+    #[tokio::test]
+    async fn integ_search_all_bails_on_a_page_token_that_is_not_a_string() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/rest/api/3/search/jql"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "issues": [{ "key": "X-1" }], "nextPageToken": 42 })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = search_all("project = X", None, false, false, &client)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("'nextPageToken' was not a string"), "{err}");
+    }
+
+    /// The discovery endpoints answer with their list and no envelope around
+    /// it, so the body itself is what the `{"items": [...]}` contract names.
+    #[tokio::test]
+    async fn integ_discovery_envelope_must_be_a_list() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/priority"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "values": [{ "id": "1" }], "isLast": true })),
+            )
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = get_priorities(&client).await.unwrap_err().to_string();
+
+        assert!(err.contains("response was not an array"), "{err}");
+    }
+
+    /// Worklogs are a `total`-contract collection like comments. Reading one
+    /// page of a long log reports part of the time booked as all of it.
+    #[tokio::test]
+    async fn integ_get_worklogs_reads_past_the_first_page() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/ABC-1/worklog"))
+            .and(query_param("startAt", "0"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "startAt": 0,
+                "total": 3,
+                "worklogs": [{ "id": "1" }, { "id": "2" }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/ABC-1/worklog"))
+            .and(query_param("startAt", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "startAt": 2,
+                "total": 3,
+                "worklogs": [{ "id": "3" }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let result = get_worklogs("ABC-1", &client).await.unwrap();
+        let ids: Vec<&str> = result["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, vec!["1", "2", "3"]);
+    }
+
+    /// The set an issue's watchers arrive in is not paginated, but the envelope
+    /// is still a list — a 2xx that lost the array must not read as nobody.
+    #[tokio::test]
+    async fn integ_watchers_envelope_must_be_a_list() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/ABC-1/watchers"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "watchCount": 2 })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = get_watchers("ABC-1", &client)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("no 'watchers' array"), "{err}");
     }
 
     /// The walk that actually happens: more than one page, ending when the

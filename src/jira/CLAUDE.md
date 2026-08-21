@@ -34,7 +34,10 @@ Keep these shapes stable — downstream tooling (skill, scripts) depends on them
 
 - `AGILE_PAGE` — `values` + `isLast`. `/rest/api/3/label`, `/rest/agile/1.0/board`, sprints.
 - `COMMENT_PAGE` — `comments` + `total`. `/rest/api/3/issue/{key}/comment`, which reports how many comments exist rather than flagging the last page.
+- `WORKLOG_PAGE` — `worklogs` + `total`. `/rest/api/3/issue/{key}/worklog`, on the same contract.
 
 Under `Total` the count is the whole contract, so a page that adds nothing while items remain is the server declining to hand them over — that bails, where the `IsLast` arm's empty page is a legitimate skip-ahead. A response missing its items array, its `isLast`, or its `total` bails too: a truncated collection returned as a complete one is the failure this helper exists to prevent.
 
 Add a new endpoint by adding a `PageContract` constant, never a second loop.
+
+The endpoints outside `paginate` are the ones that are not paginated: `/rest/api/3/issue/{key}/watchers` answers a whole set, and the three discovery reads (`/issuetype`, `/priority`, `/status`) answer with their list and no envelope around it — `require_array(&data, WHOLE_BODY, …)` is how the `{"items": [...]}` contract is held there.

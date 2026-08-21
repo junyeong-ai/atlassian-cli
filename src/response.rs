@@ -28,15 +28,23 @@ pub(crate) fn require_field(body: &Value, pointer: &str, operation: &str) -> Res
     }
 }
 
-/// Read a required array field by JSON Pointer, returning it by value.
+/// The JSON Pointer naming the body itself, for the endpoints that answer with
+/// their list rather than an envelope around it (`/rest/api/3/issuetype`,
+/// `/priority`, `/status`).
+pub(crate) const WHOLE_BODY: &str = "";
+
+/// Read a required array by JSON Pointer, returning its elements.
 ///
 /// [`require_field`] only rejects absent and `null`, so it would let a
 /// `{"transitions": {}}` through into an `{"items": ...}` envelope this
 /// project documents as a list. Every list endpoint's array goes through here
 /// instead, so the envelope's shape is the one the contract names.
-pub(crate) fn require_array(body: &Value, pointer: &str, operation: &str) -> Result<Value> {
+pub(crate) fn require_array(body: &Value, pointer: &str, operation: &str) -> Result<Vec<Value>> {
     match body.pointer(pointer) {
-        Some(value) if value.is_array() => Ok(value.clone()),
+        Some(Value::Array(items)) => Ok(items.clone()),
+        _ if pointer == WHOLE_BODY => {
+            anyhow::bail!("{operation} succeeded but its response was not an array: {body}")
+        }
         _ => anyhow::bail!(
             "{operation} succeeded but its response had no '{}' array: {body}",
             pointer.trim_start_matches('/')
