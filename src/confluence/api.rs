@@ -706,6 +706,9 @@ pub async fn create_page(
     let response = client.execute("create page", request).await?;
 
     let data: Value = response.json().await?;
+    // `title` rides along because a create is where a caller learns what the
+    // page was actually named; `id` is the part the contract promises and the
+    // only one a follow-up command needs, so it is the only one required.
     Ok(json!({
         "id": require_field(&data, "/id", "create page")?,
         "title": data["title"],

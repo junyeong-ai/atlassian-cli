@@ -38,11 +38,9 @@ pub(crate) const PATH_SEGMENT: &AsciiSet = &CONTROLS
 /// its own encoding — do not chain this helper for query values.
 ///
 /// Do not pass server-side identifiers (cloud IDs, numeric resource IDs
-/// returned by the API) through this function. Cloud IDs in particular
-/// embed `:` characters that the defensive AsciiSet would re-encode,
-/// breaking the proxy URLs that `BasicStrategy::build_url` and
-/// `proxy_url` construct. Those are already safe by construction —
-/// encode only what the user typed.
+/// returned by the API) through this function. They are safe by construction:
+/// a cloud ID reaches a URL only after `config::validate_cloud_id`, which
+/// admits `[A-Za-z0-9-]` and nothing else. Encode only what the user typed.
 pub(crate) fn encode_path_segment(segment: &str) -> String {
     utf8_percent_encode(segment, PATH_SEGMENT).to_string()
 }

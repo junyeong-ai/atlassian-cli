@@ -174,7 +174,7 @@ atlassian-cli self skill remove --yes
 atlassian-cli self uninstall --yes [--keep-skill] [--keep-credentials] [--purge-config]
 ```
 
-- The skill is compiled into the binary, so the two cannot be different versions, and `self status` compares the deployed copy **byte for byte** — a locally edited one reads as `stale`.
+- The skill is compiled into the binary, so the copy a binary carries is always its own. What is deployed on disk is a separate thing: `self status` compares it **byte for byte** and reports `stale` for one that was edited, or left behind by a predecessor a downgrade put back.
 - `self update` runs the downloaded binary and checks the version it reports **before** replacing anything, so a binary that will not run on this machine leaves the installation untouched.
 - `self uninstall` also clears OAuth tokens from the OS keychain (`--keep-credentials` to keep them), and **refuses** when a keychain exists but will not be read — locked, or `ATLASSIAN_NO_KEYCHAIN` forbidding the look — because leaving tokens behind with no tool that knows where they are is the worst outcome. A keychain that will not answer takes two runs: the first clears `credentials.json` and refuses, naming what it removed, and `--keep-credentials` finishes the second. `auth logout` exits non-zero against a keychain that would not answer, for the same reason — every released target has a keychain compiled in, so "could not reach it" is not "there was nothing in it". Under `ATLASSIAN_NO_KEYCHAIN` it exits zero and says the keychain was not touched: nothing was asked of it, and unsetting the flag for one run is the way to clear what it holds. `--purge-config` removes the config file this tool writes and the directory only if that leaves it empty, so `credentials.json` survives alongside `--keep-credentials`. Project-local `.atlassian.toml` is never touched.
 
@@ -428,7 +428,7 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 | `edit [--global]` | Edit with editor | `config edit` |
 | `path [--global]` | File path | `config path` |
 | `list` | List locations | `config list` |
-| `validate` | Validate auth and Cloud access; individual APIs still require scopes/permissions | `config validate` |
+| `validate` | Construct the strategy and probe the identity; a service account with a pinned `cloud_id` has no identity to probe, so nothing reaches that site | `config validate` |
 
 ### Common Options
 

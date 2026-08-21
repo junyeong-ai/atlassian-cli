@@ -1375,31 +1375,30 @@ async fn handle_config(
             println!("Configuration files (in precedence order):\n");
 
             let mut profiles: Vec<String> = Vec::new();
-            let mut collect =
-                |path: &std::path::Path| match atlassian_cli::Config::profile_names(path) {
-                    Ok(names) => {
-                        for name in names {
-                            if !profiles.contains(&name) {
-                                profiles.push(name);
-                            }
-                        }
+            // Raised, not warned: a file that will not parse still names
+            // profiles, and printing the list without them says those profiles
+            // do not exist. The header is already out by then — the exit code
+            // is what says the listing is incomplete.
+            let mut collect = |path: &std::path::Path| -> Result<()> {
+                for name in atlassian_cli::Config::profile_names(path)? {
+                    if !profiles.contains(&name) {
+                        profiles.push(name);
                     }
-                    Err(err) => {
-                        eprintln!("Warning: could not read profiles from {path:?}: {err:#}")
-                    }
-                };
+                }
+                Ok(())
+            };
 
             if let Some(global) = atlassian_cli::Config::global_config_path() {
                 let there = atlassian_cli::path_present(&global)?;
                 println!("Global:  {:?} {}", global, if there { "✓" } else { "✗" });
                 if there {
-                    collect(&global);
+                    collect(&global)?;
                 }
             }
 
             if let Some(project) = atlassian_cli::Config::project_config_path()? {
                 println!("Project: {:?} ✓", project);
-                collect(&project);
+                collect(&project)?;
             } else {
                 println!("Project: (none)");
             }

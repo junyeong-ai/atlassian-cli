@@ -395,7 +395,7 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 | `list` | 파일 경로 + 환경변수 상태 |
 | `path [--global]` | 활성 설정 파일 경로 |
 | `edit [--global]` | `$EDITOR`로 편집 |
-| `validate` | 인증/Cloud 접근 검증 (개별 API는 scope/권한 필요) |
+| `validate` | 전략을 구성하고 신원을 확인 — `cloud_id` 가 고정된 service account 는 확인할 신원이 없어 해당 사이트로는 요청이 가지 않습니다 |
 
 ### 공통 옵션
 | 옵션 | 설명 |
