@@ -1986,10 +1986,6 @@ domain = "x.atlassian.net"
         assert!(!crate::path_present(&blocker.join("config.toml")).unwrap());
     }
 
-    /// The walk continues upward past a candidate it does not find, so reading
-    /// one it merely could not stat as absent runs the command against a parent
-    /// directory's site instead of the one the user put in this one.
-    #[cfg(unix)]
     /// A config file is where the secrets are, so a parse failure must name
     /// where it is and not what is there — `toml`'s own rendering quotes the
     /// offending line, which would put a malformed secret into the error object
@@ -2018,6 +2014,10 @@ domain = "x.atlassian.net"
         );
     }
 
+    /// The walk continues upward past a candidate it does not find, so reading
+    /// one it merely could not stat as absent runs the command against a parent
+    /// directory's site instead of the one the user put in this one.
+    #[cfg(unix)]
     #[test]
     fn a_dangling_project_config_link_is_something_at_the_path() {
         let dir = tempfile::tempdir().unwrap();
