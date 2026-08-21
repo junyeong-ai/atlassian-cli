@@ -529,10 +529,12 @@ pub async fn remove_link(
     let items = fetch_links(source_key, client).await?;
 
     // A link names the issue at its other end, and its type when one was asked
-    // for. An entry carrying neither is a shape this code cannot read, which
-    // only matters where nothing matched: counted there, "no such link" would
-    // be a definite absence drawn from an entry never examined. Where a match
-    // was found, an unreadable sibling is not this command's business.
+    // for. An entry carrying neither is a shape this code cannot read, and one
+    // that no exclusion has already ruled out may be a second link to the same
+    // issue of the same type. This command removes only where exactly one
+    // answers to the pair and the type — it refuses two it can read — so an
+    // entry that might be the second leaves that unestablished whether or not
+    // a readable match sits beside it.
     let mut matching: Vec<&Value> = Vec::new();
     let mut unreadable = 0usize;
     let mut reverse = 0usize;
@@ -577,10 +579,9 @@ pub async fn remove_link(
         matching.push(link);
     }
 
-    match matching.len() {
-        0 if unreadable > 0 => anyhow::bail!(
-            "{} of the links on {} left the question open{}, so whether one to {} is among \
-             them cannot be told",
+    if unreadable > 0 {
+        anyhow::bail!(
+            "{} of the links on {} left the question open{}, so {}",
             unreadable,
             source_key,
             if link_type.is_some() {
@@ -588,8 +589,18 @@ pub async fn remove_link(
             } else {
                 " (no issue named)"
             },
-            target_key
-        ),
+            if matching.is_empty() {
+                format!("whether one to {target_key} is among them cannot be told")
+            } else {
+                format!(
+                    "whether one of them is a second link to {target_key} cannot be told, and \
+                     this command removes only where there is one"
+                )
+            }
+        );
+    }
+
+    match matching.len() {
         0 if reverse > 0 => anyhow::bail!(
             "No link runs from {} to {}{}, but {} of them run the other way. Remove one from \
              {}, the issue it starts at.",
@@ -1389,24 +1400,70 @@ mod tests {
         assert_eq!(resolve_board_id("PROJ", &client).await.unwrap(), 7);
     }
 
-    /// An entry this code cannot read only matters where nothing matched: the
-    /// removal it was asked for still lands beside one, and a "no such link"
-    /// must not be drawn from an entry never examined.
+    /// The command refuses two links it can read and cannot tell apart, so an
+    /// entry it cannot read is the same refusal: it may be that second link.
+    /// A match beside it is not evidence that it is not.
     #[tokio::test]
-    async fn integ_remove_link_reads_an_unreadable_sibling_only_when_nothing_matched() {
+    async fn integ_remove_link_will_not_call_a_match_the_only_one_beside_an_unreadable_entry() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/PROJ-1"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "fields": { "issuelinks": [
-                    { "id": "1", "type": { "name": "Blocks" } },
-                    { "id": "2", "type": { "name": "Blocks" }, "outwardIssue": { "key": "PROJ-2" } }
+                    // Names the issue asked about, but not the type asked for:
+                    // another `Blocks` to PROJ-2 is exactly what it may be.
+                    { "id": "unknown", "type": { "id": "10000" },
+                      "outwardIssue": { "key": "PROJ-2" } },
+                    // Names no issue at all, so no key rules it out either.
+                    { "id": "nokey", "type": { "name": "Blocks" } },
+                    { "id": "known", "type": { "name": "Blocks" },
+                      "outwardIssue": { "key": "PROJ-2" } }
                 ]}
             })))
             .mount(&server)
             .await;
         Mock::given(method("DELETE"))
-            .and(path("/rest/api/3/issueLink/2"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = remove_link("PROJ-1", "PROJ-2", Some("Blocks"), &client)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("a second link to PROJ-2"), "{err}");
+
+        // The same entry where nothing matched: absence is not claimed either.
+        let err = remove_link("PROJ-1", "PROJ-9", Some("Blocks"), &client)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("whether one to PROJ-9 is among them"), "{err}");
+    }
+
+    /// An entry an exclusion already ruled out is not a candidate, so it does
+    /// not withhold the removal — one link the caller cannot resolve must not
+    /// refuse every other link on the issue.
+    #[tokio::test]
+    async fn integ_remove_link_ignores_an_unreadable_entry_the_type_rules_out() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/PROJ-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "fields": { "issuelinks": [
+                    // No issue named, but the type is there and is not the one
+                    // asked for — it cannot be a second `Blocks` to PROJ-2.
+                    { "id": "elsewhere", "type": { "name": "Relates" } },
+                    { "id": "known", "type": { "name": "Blocks" },
+                      "outwardIssue": { "key": "PROJ-2" } }
+                ]}
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/issueLink/known"))
             .respond_with(ResponseTemplate::new(204))
             .expect(1)
             .mount(&server)
@@ -1415,14 +1472,7 @@ mod tests {
         let client = mock_client(server.uri());
         remove_link("PROJ-1", "PROJ-2", Some("Blocks"), &client)
             .await
-            .expect("the readable link is still removable");
-
-        // Nothing matched, and an entry went unread — so absence is not claimed.
-        let err = remove_link("PROJ-1", "PROJ-9", Some("Blocks"), &client)
-            .await
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("cannot be told"), "{err}");
+            .expect("an entry ruled out by type is not a candidate");
     }
 
     /// "A blocks B" and "B blocks A" are two links, both listed on A with the

@@ -706,13 +706,17 @@ pub async fn create_page(
     let response = client.execute("create page", request).await?;
 
     let data: Value = response.json().await?;
-    // `title` rides along because a create is where a caller learns what the
-    // page was actually named; `id` is the part the contract promises and the
-    // only one a follow-up command needs, so it is the only one required.
-    Ok(json!({
-        "id": require_field(&data, "/id", "create page")?,
-        "title": data["title"],
-    }))
+    // `id` is the part the contract promises and the only one a follow-up
+    // command needs, so it is the only one required. `title` rides along
+    // because a create is where a caller learns what the page was actually
+    // named — and only where the response named it: reporting `null` would
+    // say the page has no title, which a body that carried no title never
+    // said.
+    let mut created = json!({ "id": require_field(&data, "/id", "create page")? });
+    if let Some(title) = data.get("title").filter(|t| !t.is_null()) {
+        created["title"] = title.clone();
+    }
+    Ok(created)
 }
 
 pub async fn update_page(
@@ -1780,6 +1784,32 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result, json!({ "id": "pid", "title": "Spec" }));
+    }
+
+    /// A `"title": null` beside the id would report a page named nothing. The
+    /// create landed and the id is there, so the write is not a failure — the
+    /// title is simply not among what came back, and is not reported.
+    #[tokio::test]
+    async fn integ_create_page_reports_no_title_where_the_response_carried_none() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/api/v2/spaces"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{ "id": "sid", "key": "ENG" }]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/wiki/api/v2/pages"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({ "id": "pid" })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let result = create_page("ENG", "Spec", "<p>x</p>", None, None, None, &client)
+            .await
+            .unwrap();
+        assert_eq!(result, json!({ "id": "pid" }));
     }
 
     #[tokio::test]

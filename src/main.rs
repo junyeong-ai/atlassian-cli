@@ -1055,17 +1055,29 @@ async fn self_uninstall(
 ) -> Result<serde_json::Value> {
     use atlassian_cli::dist::skill;
 
-    // Before anything goes. Without a home directory the skill and the global
-    // config cannot be located, and every step below would skip them silently
-    // and then take the binary that knows where they are — the same reason a
-    // keychain that will not answer refuses here rather than proceeding.
-    let home_managed = !keep_skill || !keep_credentials || purge_config;
-    if home_managed && (installation.skill_dir().is_none() || installation.config_dir().is_none()) {
+    // Before anything goes. Everything under the home directory is located
+    // from it, so without one each step below would skip its target silently
+    // and then take the binary that knows where it was — the same reason a
+    // keychain that will not answer refuses here rather than proceeding. Only
+    // what this run was actually asked to remove is at stake, and the refusal
+    // names that rather than the whole set.
+    let mut unlocatable: Vec<&str> = Vec::new();
+    if !keep_skill && installation.skill_dir().is_none() {
+        unlocatable.push("the deployed skill");
+    }
+    if !keep_credentials && installation.credentials_file().is_none() {
+        unlocatable.push("the stored credentials");
+    }
+    if purge_config && installation.config_dir().is_none() {
+        unlocatable.push("the global config");
+    }
+    if !unlocatable.is_empty() {
         anyhow::bail!(
-            "Cannot locate the home directory, so the deployed skill and the global config \
-             cannot be found — removing the binary would leave them behind with nothing that \
-             knows where they are. Set HOME and re-run, or keep them explicitly with \
-             --keep-skill --keep-credentials."
+            "Cannot locate the home directory, so {} cannot be found. Removing the binary \
+             would leave that behind with nothing that knows where it lives — set HOME and \
+             re-run, or leave it in place with --keep-skill / --keep-credentials / no \
+             --purge-config.",
+            unlocatable.join(" and ")
         );
     }
 
@@ -2195,25 +2207,50 @@ mod tests {
         assert!(!binary.exists());
     }
 
-    /// The binary is the only thing that knows where the skill and the config
-    /// are. Where the home directory cannot be found, skipping them silently
-    /// and removing it anyway leaves them with nothing to find them by.
+    /// The binary is the only thing that knows where the home-managed
+    /// artifacts are, so removing it with the home unknown leaves whatever was
+    /// asked for with nothing to find it by. The refusal names what this run
+    /// was asked to remove — a flag that keeps something is the run saying it
+    /// is not at stake, and naming it anyway is a claim about the wrong thing.
     #[cfg(unix)]
     #[tokio::test]
-    async fn an_unknown_home_refuses_before_anything_goes() {
+    async fn an_unknown_home_refuses_naming_only_what_the_run_would_remove() {
         let home = tempfile::tempdir().unwrap();
         let binary = home.path().join("bin").join("atlassian-cli");
         std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
         std::fs::write(&binary, "#!/bin/sh\nexit 0\n").unwrap();
         let installation = Installation::at(binary.clone(), None);
 
-        let err = self_uninstall(&installation, false, true, true)
-            .await
-            .unwrap_err()
-            .to_string();
+        for (keep_skill, keep_credentials, purge_config, named, unnamed) in [
+            (
+                false,
+                true,
+                true,
+                vec!["the deployed skill", "the global config"],
+                vec!["the stored credentials"],
+            ),
+            (
+                true,
+                false,
+                false,
+                vec!["the stored credentials"],
+                vec!["the deployed skill", "the global config"],
+            ),
+        ] {
+            let err = self_uninstall(&installation, keep_skill, keep_credentials, purge_config)
+                .await
+                .unwrap_err()
+                .to_string();
 
-        assert!(err.contains("home directory"), "{err}");
-        assert!(binary.is_file(), "the binary went with the home unknown");
+            assert!(err.contains("home directory"), "{err}");
+            for what in named {
+                assert!(err.contains(what), "{what} unnamed: {err}");
+            }
+            for what in unnamed {
+                assert!(!err.contains(what), "{what} named but kept: {err}");
+            }
+            assert!(binary.is_file(), "the binary went with the home unknown");
+        }
     }
 
     /// A successor that answers `self --help` and one that does not. The
