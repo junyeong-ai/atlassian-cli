@@ -544,9 +544,14 @@ pub async fn remove_link(
 
         // Four answers, and the order below is which one a caller is told:
         // a field that is there and does not match settles the entry outright;
-        // then a link that matches but runs the other way is a different link;
-        // then one missing a field the answer still needed is undecided; what
-        // survives all three matched. Reordering these changes the answer.
+        // then one missing a field the answer still needed is undecided; then
+        // what matches but runs the other way is a different link; what
+        // survives all three matched.
+        //
+        // Undecided comes before direction because direction alone does not
+        // make a link the one asked about: an inward entry with no type name,
+        // under a `--type` query, would otherwise be reported as that type
+        // running the other way when its type was never read.
         //
         // Direction is part of the match, not a tie-break. `add` puts the
         // source on the outward side, so on this issue the link it created
@@ -560,12 +565,12 @@ pub async fn remove_link(
         if key_excludes || type_excludes {
             continue;
         }
-        if inward_only && other_key.is_some() {
-            reverse += 1;
-            continue;
-        }
         if other_key.is_none() || (link_type.is_some() && type_name.is_none()) {
             unreadable += 1;
+            continue;
+        }
+        if inward_only {
+            reverse += 1;
             continue;
         }
 
@@ -597,7 +602,8 @@ pub async fn remove_link(
             target_key
         ),
         0 => anyhow::bail!(
-            "No link found between {} and {}{}",
+            "No link found between {} and {}{}. Links name the key an issue has now, so a key \
+             left over from a renamed project will not match one.",
             source_key,
             target_key,
             link_type
@@ -1481,6 +1487,32 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("cannot choose"), "{err}");
+    }
+
+    /// Direction alone does not make a link the one asked about. An inward
+    /// entry whose type was never read is undecided, not "that type running the
+    /// other way" — the schema does not require `type.name`, and reporting the
+    /// direction would claim its type had been checked.
+    #[tokio::test]
+    async fn integ_remove_link_does_not_claim_a_direction_for_a_type_it_never_read() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/PROJ-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "fields": { "issuelinks": [
+                    { "id": "x", "type": { "id": "10000" },
+                      "inwardIssue": { "key": "PROJ-2" } }
+                ]}
+            })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = remove_link("PROJ-1", "PROJ-2", Some("Blocks"), &client)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("cannot be told"), "{err}");
     }
 
     /// A lone link running the other way is a different link. Removing it for a

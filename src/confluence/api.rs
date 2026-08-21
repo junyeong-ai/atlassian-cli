@@ -3074,6 +3074,35 @@ mod tests {
         assert!(err.contains("names 'owner'"), "{err}");
     }
 
+    /// `keys=` resolves space aliases, and a lookup by a historical one returns
+    /// a space naming neither the requested key nor the currently active alias.
+    /// Any equality check here would refuse it, so this pins that there is
+    /// none.
+    #[tokio::test]
+    async fn integ_a_space_lookup_uses_a_result_reached_through_an_alias() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/api/v2/spaces"))
+            .and(query_param("keys", "OLDKEY"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{ "id": "sid", "key": "NEWKEY", "currentActiveAlias": "TEAM" }]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/wiki/api/v2/pages"))
+            .and(body_string_contains("\"spaceId\":\"sid\""))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "p1" })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        create_page("OLDKEY", "T", "<p>x</p>", None, None, None, &client)
+            .await
+            .expect("a historical alias names neither field and still resolves");
+    }
+
     /// A property id is overwritten by `set_property` and removed by
     /// `delete_property`, so an unconfirmed match is refused — a key that
     /// contradicts and equally one that is absent.
