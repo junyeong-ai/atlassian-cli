@@ -567,27 +567,43 @@ pub async fn remove_link(
     let mut unreadable: Vec<&'static str> = Vec::new();
     let mut reverse = 0usize;
     for link in &items {
+        let type_name = link["type"]["name"].as_str();
+
+        // A type that is there and is not the one asked for settles the entry
+        // before anything else is read of it: whatever the rest of the entry
+        // turns out to be, it is not a link of that type.
+        if link_type.is_some_and(|t| type_name.is_some_and(|n| n != t)) {
+            continue;
+        }
+
+        // A side is an issue or it is not there. Anything else — a string, a
+        // number, a list — is a shape this code has no reading of, and since
+        // carrying a side is what settles direction below, taking one for a
+        // side would settle direction on something never read.
+        let side_unreadable = |side: &Value| !side.is_null() && !side.is_object();
+        if side_unreadable(&link["outwardIssue"]) || side_unreadable(&link["inwardIssue"]) {
+            unreadable.push("carries a side that is not an issue");
+            continue;
+        }
+
         // Which sides the entry carries, and separately what they say. A side
         // that is there with an unreadable key still tells us the entry has
         // that end; reading only the key would take it for a side that is not
         // there at all, and the two mean opposite things here.
-        let has_outward = !link["outwardIssue"].is_null();
-        let has_inward = !link["inwardIssue"].is_null();
+        let has_outward = link["outwardIssue"].is_object();
+        let has_inward = link["inwardIssue"].is_object();
         let outward_key = link["outwardIssue"]["key"].as_str();
         let inward_key = link["inwardIssue"]["key"].as_str();
-        let type_name = link["type"]["name"].as_str();
 
-        // A present field that disagrees settles the entry outright, whichever
-        // field it is — but only where every side it carries said which issue
-        // it is. An entry naming two issues is excluded when neither of them
-        // is the one asked about: the pair is what the request names, and
-        // either side carrying it makes the entry relevant.
+        // The same for the issues it names, but only where every side it
+        // carries said which issue it is. An entry naming two issues is
+        // excluded when neither of them is the one asked about: the pair is
+        // what the request names, and either side carrying it makes the entry
+        // relevant.
         let keys_readable =
             (!has_outward || outward_key.is_some()) && (!has_inward || inward_key.is_some());
         let names_target = outward_key == Some(target_key) || inward_key == Some(target_key);
-        let key_excludes = keys_readable && (has_outward || has_inward) && !names_target;
-        let type_excludes = link_type.is_some_and(|t| type_name.is_some_and(|n| n != t));
-        if key_excludes || type_excludes {
+        if keys_readable && (has_outward || has_inward) && !names_target {
             continue;
         }
 
@@ -1587,11 +1603,10 @@ mod tests {
     }
 
     /// Every shape the classification can be handed, and the one it may act
-    /// on. Each side is absent, names the issue asked about, names another, or
-    /// is there without a readable key — a side that is not an object at all
-    /// reads as the last of those, so those are covered here too. Each is
-    /// crossed with a type that is absent, matches, or differs, and with
-    /// `--type` given and omitted.
+    /// on. Each side is absent, names the issue asked about, names the issue
+    /// asked from, names a third, is there without a readable key, or is not
+    /// an issue at all. Each is crossed with a type that is absent, matches,
+    /// or differs, and with `--type` given and omitted.
     ///
     /// The removal is irreversible and these entries decide it, so what may be
     /// deleted is stated once, over the whole space: the outward side names
@@ -1676,6 +1691,10 @@ mod tests {
             // and must go.
             let ruled_out = if requested.is_some() && kind == "differs" {
                 true
+            } else if outward == "not an issue at all" || inward == "not an issue at all" {
+                // No reading of the entry at all, so nothing about it is ruled
+                // out either.
+                false
             } else if outward != "absent" && inward != "absent" {
                 // Both ends carried, so which side is this issue's other end
                 // is not readable. Two readings could still make it the link
@@ -1727,12 +1746,13 @@ mod tests {
     /// Every entry the two checks above are run over, labelled by what each
     /// part of it says.
     fn shape_space() -> Vec<Shape> {
-        const SIDES: [Part; 5] = [
+        const SIDES: [Part; 6] = [
             ("absent", || json!(null)),
             ("names the target", || json!({ "key": "PROJ-2" })),
             ("names the source", || json!({ "key": "PROJ-1" })),
             ("names another issue", || json!({ "key": "PROJ-9" })),
             ("no readable key", || json!({ "key": 42 })),
+            ("not an issue at all", || json!("PROJ-2")),
         ];
         const TYPES: [Part; 3] = [
             ("absent", || json!(null)),
