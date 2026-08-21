@@ -53,11 +53,11 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: release-${{ matrix.target }}
-          save-if: 'false'
-
+      # No build cache here, deliberately. `save-if: false` under a
+      # release-only key meant nothing ever populated it, so every restore
+      # missed — and restoring anything into the job that produces the
+      # published binaries is the cache-poisoning path zizmor flags. A release
+      # builds from source, from scratch.
       - name: Build release binary
         shell: bash
         run: cargo build --release --locked --target ${{ matrix.target }}
