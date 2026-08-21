@@ -798,12 +798,15 @@ async fn fetch_space_by_key(space_key: &str, client: &ApiClient) -> Result<Optio
     let Some(results) = data["results"].as_array() else {
         anyhow::bail!("lookup succeeded but its response had no 'results' array: {data}");
     };
-    // Deliberately not compared against `space_key`: `keys=` accepts a space
-    // alias, and the space it resolves to answers with its own `key` and the
-    // alias in `currentActiveAlias`. A lookup by alias therefore returns a
-    // different key legitimately, so byte-equality here would refuse the
-    // feature. What this id decides — which space a page is created in — is
-    // undone by deleting the page, unlike the property lookup below.
+    // Deliberately not compared against `space_key`, and not against
+    // `currentActiveAlias` either. `keys=` accepts a space alias, and aliases
+    // exist so an old URL keeps working — so a lookup by a *historical* alias
+    // resolves correctly while the result names neither the requested string in
+    // `key` nor in `currentActiveAlias`, which the schema defines as the
+    // *currently active* one. Any equality check here refuses that lookup.
+    // What this id decides — which space a page is created in — is undone by
+    // deleting the page, unlike the property lookup below, whose id is what an
+    // overwrite and a delete land on.
     Ok(results.first().cloned())
 }
 
@@ -1176,8 +1179,8 @@ async fn fetch_property_by_key(
         None => Ok(None),
         Some(found) if found["key"].as_str() == Some(key) => Ok(Some(found.clone())),
         Some(found) => anyhow::bail!(
-            "looked up property '{key}' and the result {}, so which property its id names is \
-             not established: {found}",
+            "looked up property '{key}' and the result {}, so it is not established as the one \
+             asked for: {found}",
             match found["key"].as_str() {
                 Some(other) => format!("names '{other}' instead"),
                 None => "names no key".to_string(),

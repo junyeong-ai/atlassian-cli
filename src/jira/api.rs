@@ -580,18 +580,14 @@ pub async fn remove_link(
             target_key
         ),
         0 if reverse > 0 => anyhow::bail!(
-            "No link runs from {} to {}{}, but {} runs the other way. Remove it from {}, the \
-             issue it starts at.",
+            "No link runs from {} to {}{}, but {} of them run the other way. Remove one from \
+             {}, the issue it starts at.",
             source_key,
             target_key,
             link_type
                 .map(|t| format!(" with type '{}'", t))
                 .unwrap_or_default(),
-            if reverse == 1 {
-                "one"
-            } else {
-                "one of several"
-            },
+            reverse,
             target_key
         ),
         0 => anyhow::bail!(
@@ -1449,6 +1445,38 @@ mod tests {
             .expect("the outward link is the one `add` would have made");
     }
 
+    /// The pair and the type are everything this command takes. Two links that
+    /// agree on both and on direction leave it nothing to choose by, and the
+    /// old code took whichever the response listed first.
+    #[tokio::test]
+    async fn integ_remove_link_refuses_two_links_it_cannot_tell_apart() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/PROJ-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "fields": { "issuelinks": [
+                    { "id": "a", "type": { "name": "Blocks" },
+                      "outwardIssue": { "key": "PROJ-2" } },
+                    { "id": "b", "type": { "name": "Blocks" },
+                      "outwardIssue": { "key": "PROJ-2" } }
+                ]}
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = remove_link("PROJ-1", "PROJ-2", Some("Blocks"), &client)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("cannot choose"), "{err}");
+    }
+
     /// A lone link running the other way is a different link. Removing it for a
     /// request that named this issue as the source would take one nobody asked
     /// about, so the answer names the issue it starts at instead.
@@ -1477,7 +1505,7 @@ mod tests {
             .await
             .unwrap_err()
             .to_string();
-        assert!(err.contains("runs the other way"), "{err}");
+        assert!(err.contains("run the other way"), "{err}");
         assert!(err.contains("PROJ-2"), "{err}");
     }
 
