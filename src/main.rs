@@ -2067,6 +2067,17 @@ async fn handle_auth(
                 Err(e) => (None, Some(e)),
             };
 
+            // Above the match, so it holds for every arm: under the opt-out the
+            // keychain was not consulted, and a session stored there before the
+            // flag is one this report neither read nor cleared — including
+            // where a file-backed session is found and printed below.
+            if atlassian_cli::auth::keychain_opt_out() {
+                println!(
+                    "ATLASSIAN_NO_KEYCHAIN is set, so the keychain was not consulted; a session \
+                     stored there before the flag is untouched."
+                );
+            }
+
             match (method, &session) {
                 (Some(AuthMethod::OAuth), Some(loaded)) => {
                     let t = &loaded.tokens;
@@ -2093,14 +2104,11 @@ async fn handle_auth(
                 }
                 (Some(AuthMethod::OAuth), None) => match &unreadable {
                     Some(e) => println!("Session unknown (profile: {}): {e}", config.profile),
-                    // Under the opt-out the keychain was never asked, so "not
-                    // logged in" would be a claim about a place this run did
-                    // not look — and a session stored there before the flag is
-                    // exactly what `auth login` would shadow rather than reach.
+                    // Not "not logged in" under the opt-out: the note above has
+                    // already said the keychain went unread, and a session there
+                    // is what `auth login` would shadow rather than reach.
                     None if atlassian_cli::auth::keychain_opt_out() => println!(
-                        "No session in the file store (profile: {}). ATLASSIAN_NO_KEYCHAIN is \
-                         set, so the keychain was not consulted; unset it for one run to see \
-                         or clear what it holds.",
+                        "No session in the file store (profile: {}).",
                         config.profile
                     ),
                     None => println!(
@@ -2109,29 +2117,13 @@ async fn handle_auth(
                     ),
                 },
                 (Some(method), _) => {
-                    if atlassian_cli::auth::keychain_opt_out() {
-                        // Same reason as the OAuth arm above: a session stored
-                        // before the flag is in a place this run did not look.
-                        println!(
-                            "ATLASSIAN_NO_KEYCHAIN is set, so the keychain was not consulted; \
-                             a session stored there before the flag is untouched."
-                        );
-                    }
                     println!(
                         "Profile '{}' uses '{}' auth — credentials are read from config/env, \
                          not a stored session.",
                         config.profile, method
                     );
                 }
-                (None, _) => {
-                    if atlassian_cli::auth::keychain_opt_out() {
-                        println!(
-                            "ATLASSIAN_NO_KEYCHAIN is set, so the keychain was not consulted; \
-                             a session stored there before the flag is untouched."
-                        );
-                    }
-                    println!("Profile '{}' has no auth configured.", config.profile)
-                }
+                (None, _) => println!("Profile '{}' has no auth configured.", config.profile),
             }
 
             // A session left behind by a previous OAuth configuration is a live

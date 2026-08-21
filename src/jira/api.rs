@@ -86,11 +86,14 @@ pub async fn get_issue(
 
     let mut data: Value = response.json().await?;
 
+    // Filtered before converted, as the comment and search reads are: the ADF
+    // description becomes a string, and a key the caller excluded inside it
+    // would no longer be there to exclude.
+    filter::apply(&mut data, client.config());
     if as_markdown {
         convert_issue_to_markdown(&mut data);
     }
 
-    filter::apply(&mut data, client.config());
     Ok(data)
 }
 
@@ -1510,6 +1513,41 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("cannot be told"), "{err}");
+    }
+
+    /// The single-issue read had the same ordering as the comment list did:
+    /// once the description is a string, an exclude naming a key inside it has
+    /// nothing left to match.
+    #[tokio::test]
+    async fn integ_an_issue_is_filtered_before_its_description_becomes_a_string() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/ABC-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "key": "ABC-1",
+                "fields": {
+                    "description": {
+                        "type": "doc",
+                        "content": [{
+                            "type": "paragraph",
+                            "content": [{ "type": "text", "text": "sensitive" }]
+                        }]
+                    }
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let mut config = crate::test_utils::create_test_config();
+        config.optimization.response_exclude_fields = Some(vec!["text".to_string()]);
+        let client = crate::test_utils::mock_client_with_config(server.uri(), config);
+
+        let result = get_issue("ABC-1", None, true, &client).await.unwrap();
+        let description = result["fields"]["description"].as_str().unwrap_or_default();
+        assert!(
+            !description.contains("sensitive"),
+            "the excluded field reached the converted description: {result}"
+        );
     }
 
     /// `adf_to_markdown` turns the body object into a string, so a key the
