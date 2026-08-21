@@ -871,7 +871,10 @@ async fn self_status(
     let config_file = installation.config_file();
     // Reported, not raised: this is the command a user runs after an uninstall
     // refused, and a path it cannot read is the answer they came for.
-    let config_state = config_file.as_deref().map(present).transpose();
+    let config_state = config_file
+        .as_deref()
+        .map(atlassian_cli::path_present)
+        .transpose();
 
     Ok(serde_json::json!({
         "version": dist::current_version().to_string(),
@@ -1049,7 +1052,7 @@ async fn self_uninstall(
     };
 
     if let Some(dir) = installation.skill_dir()
-        && present(&dir).map_err(|e| already_removed(e, &removed))?
+        && atlassian_cli::path_present(&dir).map_err(|e| already_removed(e, &removed))?
     {
         if keep_skill {
             kept.push("skill");
@@ -1063,11 +1066,11 @@ async fn self_uninstall(
     // would take it whatever `--keep-credentials` said — and would take
     // anything else the user keeps here besides.
     if let Some(dir) = installation.config_dir()
-        && present(&dir).map_err(|e| already_removed(e, &removed))?
+        && atlassian_cli::path_present(&dir).map_err(|e| already_removed(e, &removed))?
     {
         if purge_config {
             if let Some(file) = installation.config_file()
-                && present(&file).map_err(|e| already_removed(e, &removed))?
+                && atlassian_cli::path_present(&file).map_err(|e| already_removed(e, &removed))?
             {
                 std::fs::remove_file(&file).map_err(|e| already_removed(e.into(), &removed))?;
                 record(&mut removed, "config", display_path(&file));
@@ -1104,7 +1107,7 @@ async fn self_uninstall(
     // executable, so a plain `remove_file` would fail there after everything
     // above had already gone.
     let binary = installation.binary();
-    if present(binary).map_err(|e| already_removed(e, &removed))? {
+    if atlassian_cli::path_present(binary).map_err(|e| already_removed(e, &removed))? {
         if let Err(e) = self_replace::self_delete_at(binary) {
             return Err(already_removed(
                 anyhow::Error::from(e).context(format!("Failed to remove {}", binary.display())),
@@ -1268,21 +1271,6 @@ async fn clear_session(store: &atlassian_cli::auth::TokenStore, profile: &str) -
     Ok(())
 }
 
-/// Whether something is at this path, refusing to read a failure as an absence.
-///
-/// `exists` answers false both for "nothing there" and for "could not tell",
-/// and it resolves a symlink, so a dangling one reads as nothing there too.
-/// Every removal below is irreversible and ends with the binary that knows
-/// where the rest is, so a step skipped on either mistake is a thing left
-/// behind and reported gone.
-fn present(path: &std::path::Path) -> Result<bool> {
-    match std::fs::symlink_metadata(path) {
-        Ok(_) => Ok(true),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(e) => Err(anyhow::Error::from(e).context(format!("Failed to read {}", path.display()))),
-    }
-}
-
 /// A path as JSON. `Path` serializes only when it is UTF-8 and `json!` panics
 /// on the rest, which would answer with a crash instead of the single-line
 /// error object every failure here is contracted to print.
@@ -1371,7 +1359,7 @@ async fn handle_config(
                 };
 
             if let Some(global) = atlassian_cli::Config::global_config_path() {
-                let there = present(&global)?;
+                let there = atlassian_cli::path_present(&global)?;
                 println!("Global:  {:?} {}", global, if there { "✓" } else { "✗" });
                 if there {
                     collect(&global);
@@ -1438,7 +1426,7 @@ async fn handle_config(
 
             let path = path.ok_or_else(|| anyhow::anyhow!("Config file not found"))?;
 
-            if !path.exists() {
+            if !atlassian_cli::path_present(&path)? {
                 anyhow::bail!(
                     "Config file does not exist: {:?}\nRun 'atlassian-cli config init{}' to create it.",
                     path,
@@ -2093,20 +2081,24 @@ async fn handle_auth(
             // be cleared rather than lingering unnoticed in the keychain — and
             // say when that could not be checked at all, because "no stale
             // session" is the reading a store nothing read must not produce.
-            if !matches!(method, Some(AuthMethod::OAuth))
-                && let Some(loaded) = &session
-            {
-                println!(
-                    "  Stale OAuth session present ({}) from an earlier configuration — \
-                     run `atlassian-cli auth logout` to clear it.",
-                    loaded.backend
-                );
+            if !matches!(method, Some(AuthMethod::OAuth)) {
+                if let Some(loaded) = &session {
+                    println!(
+                        "  Stale OAuth session present ({}) from an earlier configuration — \
+                         run `atlassian-cli auth logout` to clear it.",
+                        loaded.backend
+                    );
+                } else if unreadable.is_some() {
+                    println!(
+                        "  Whether a session is stored could not be read — see the error below."
+                    );
+                }
             }
 
-            // The report is printed first, in full, because the part that could
-            // be produced is still the answer to what was asked. But the part
-            // that could not is missing from it, and the exit code is the only
-            // thing a script reads — so this run did not answer.
+            // The report prints first and in full: what could be established is
+            // still the answer to what was asked, and it says on stdout where
+            // it stops. What could not is the error — and the exit code, which
+            // is the only part of a prose report a script can read.
             match unreadable {
                 Some(e) => Err(e),
                 None => Ok(()),
