@@ -85,13 +85,26 @@ impl CredentialStoreApi for BlockingStore {
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn enumerating_never_reads_an_entry_on_the_reactor() {
+/// Not `#[tokio::test]`: `ATLASSIAN_NO_KEYCHAIN` exported into the process
+/// short-circuits the dispatcher before the store below is ever asked, so the
+/// environment would decide this test's result instead of the code under test.
+/// It is cleared before a runtime exists, the only point at which writing the
+/// environment is sound, and this binary holds one test.
+#[test]
+fn enumerating_never_reads_an_entry_on_the_reactor() {
+    unsafe {
+        std::env::remove_var("ATLASSIAN_NO_KEYCHAIN");
+    }
     keyring_core::set_default_store(Arc::new(BlockingStore));
     let dir = tempfile::tempdir().unwrap();
 
-    let stored =
-        atlassian_cli::auth::stored_profiles(Some(&dir.path().join("credentials.json"))).await;
+    let stored = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime")
+        .block_on(atlassian_cli::auth::stored_profiles(Some(
+            &dir.path().join("credentials.json"),
+        )));
 
     assert!(stored.profiles.contains("stored"), "{:?}", stored.profiles);
 }
