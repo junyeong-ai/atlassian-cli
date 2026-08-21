@@ -467,7 +467,7 @@ pub async fn get_comments(issue_key: &str, as_markdown: bool, client: &ApiClient
         }
     }
 
-    Ok(json!({ "items": items }))
+    Ok(list_envelope(items, client))
 }
 
 pub async fn get_link_types(client: &ApiClient) -> Result<Value> {
@@ -476,11 +476,14 @@ pub async fn get_link_types(client: &ApiClient) -> Result<Value> {
         .await?;
     let response = client.execute("get link types", request).await?;
 
-    let mut data: Value = response.json().await?;
-    filter::apply(&mut data, client.config());
+    let data: Value = response.json().await?;
     // The envelope contract is `{"items": [...]}`; a 2xx that lost the array
-    // would hand a `jq` pipeline `null` and a caller "there are none".
-    Ok(json!({ "items": require_array(&data, "/issueLinkTypes", "get link types")? }))
+    // would hand a `jq` pipeline `null` and a caller "there are none". Read
+    // before filtering, so the error can only mean the response lacked it.
+    Ok(list_envelope(
+        require_array(&data, "/issueLinkTypes", "get link types")?,
+        client,
+    ))
 }
 
 pub async fn add_link(
@@ -595,11 +598,7 @@ async fn fetch_links(issue_key: &str, client: &ApiClient) -> Result<Vec<Value>> 
 }
 
 pub async fn get_links(issue_key: &str, client: &ApiClient) -> Result<Value> {
-    let mut items = fetch_links(issue_key, client).await?;
-    for item in &mut items {
-        filter::apply(item, client.config());
-    }
-    Ok(json!({ "items": items }))
+    Ok(list_envelope(fetch_links(issue_key, client).await?, client))
 }
 
 pub async fn get_transitions(issue_key: &str, client: &ApiClient) -> Result<Value> {
@@ -614,11 +613,11 @@ pub async fn get_transitions(issue_key: &str, client: &ApiClient) -> Result<Valu
         .header("Accept", "application/json");
     let response = client.execute("get transitions", request).await?;
 
-    let mut data: Value = response.json().await?;
-    filter::apply(&mut data, client.config());
-    // The envelope contract is `{"items": [...]}`; a 2xx that lost the array
-    // would hand a `jq` pipeline `null` and a caller "there are none".
-    Ok(json!({ "items": require_array(&data, "/transitions", "get transitions")? }))
+    let data: Value = response.json().await?;
+    Ok(list_envelope(
+        require_array(&data, "/transitions", "get transitions")?,
+        client,
+    ))
 }
 
 pub async fn add_worklog(
@@ -664,7 +663,7 @@ pub async fn get_worklogs(issue_key: &str, client: &ApiClient) -> Result<Value> 
     );
 
     let items = paginate(&url, &[], "get worklogs", WORKLOG_PAGE, client).await?;
-    Ok(json!({ "items": items }))
+    Ok(list_envelope(items, client))
 }
 
 pub async fn update_worklog(
@@ -768,9 +767,24 @@ pub async fn get_watchers(issue_key: &str, client: &ApiClient) -> Result<Value> 
     let request = client.get(Service::Jira, &url).await?;
     let response = client.execute("get watchers", request).await?;
 
-    let mut data: Value = response.json().await?;
-    filter::apply(&mut data, client.config());
-    Ok(json!({ "items": require_array(&data, "/watchers", "get watchers")? }))
+    let data: Value = response.json().await?;
+    Ok(list_envelope(
+        require_array(&data, "/watchers", "get watchers")?,
+        client,
+    ))
+}
+
+/// The `{"items": [...]}` envelope, with the response filter applied to the
+/// items and never to the envelope.
+///
+/// The wrapper is this CLI's contract rather than the API's answer, so
+/// `response_exclude_fields` has no business editing it: naming `items` would
+/// otherwise return `{}` with exit 0 where a list was promised.
+fn list_envelope(mut items: Vec<Value>, client: &ApiClient) -> Value {
+    for item in &mut items {
+        filter::apply(item, client.config());
+    }
+    json!({ "items": items })
 }
 
 /// How a Jira collection reports that a page is the last one.
@@ -816,6 +830,11 @@ const WORKLOG_PAGE: PageContract = PageContract {
 
 /// Loop through a paginated `startAt`/`maxResults` endpoint and accumulate every
 /// item, following `contract` to know where the items are and when to stop.
+///
+/// Returns the items as the API sent them. Filtering belongs to whoever is
+/// about to print them — `resolve_board_id` reads an `id` off this, and a
+/// caller's `response_exclude_fields` naming a field an internal decision turns
+/// on would otherwise decide something rather than trim a display.
 async fn paginate(
     path: &str,
     extra_query: &[(&str, String)],
@@ -899,10 +918,7 @@ async fn paginate(
         };
 
         let count = page.len() as u64;
-        for mut item in page {
-            filter::apply(&mut item, client.config());
-            all.push(item);
-        }
+        all.extend(page);
 
         if end {
             return Ok(all);
@@ -934,53 +950,64 @@ pub async fn get_issue_types(client: &ApiClient) -> Result<Value> {
     let request = client.get(Service::Jira, "/rest/api/3/issuetype").await?;
     let response = client.execute("get issue types", request).await?;
 
-    let mut data: Value = response.json().await?;
-    filter::apply(&mut data, client.config());
-    Ok(json!({ "items": require_array(&data, WHOLE_BODY, "get issue types")? }))
+    let data: Value = response.json().await?;
+    Ok(list_envelope(
+        require_array(&data, WHOLE_BODY, "get issue types")?,
+        client,
+    ))
 }
 
 pub async fn get_priorities(client: &ApiClient) -> Result<Value> {
     let request = client.get(Service::Jira, "/rest/api/3/priority").await?;
     let response = client.execute("get priorities", request).await?;
 
-    let mut data: Value = response.json().await?;
-    filter::apply(&mut data, client.config());
-    Ok(json!({ "items": require_array(&data, WHOLE_BODY, "get priorities")? }))
+    let data: Value = response.json().await?;
+    Ok(list_envelope(
+        require_array(&data, WHOLE_BODY, "get priorities")?,
+        client,
+    ))
 }
 
 pub async fn get_statuses(client: &ApiClient) -> Result<Value> {
     let request = client.get(Service::Jira, "/rest/api/3/status").await?;
     let response = client.execute("get statuses", request).await?;
 
-    let mut data: Value = response.json().await?;
-    filter::apply(&mut data, client.config());
-    Ok(json!({ "items": require_array(&data, WHOLE_BODY, "get statuses")? }))
+    let data: Value = response.json().await?;
+    Ok(list_envelope(
+        require_array(&data, WHOLE_BODY, "get statuses")?,
+        client,
+    ))
 }
 
 pub async fn get_labels(client: &ApiClient) -> Result<Value> {
     let items = paginate("/rest/api/3/label", &[], "get labels", AGILE_PAGE, client).await?;
-    Ok(json!({ "items": items }))
+    Ok(list_envelope(items, client))
 }
 
 // -- Board / Sprint / Epic (Agile API) --
 
-pub async fn get_boards(project: &str, client: &ApiClient) -> Result<Value> {
-    let items = paginate(
+/// A project's boards, as the API sent them.
+///
+/// Unfiltered for the same reason as `fetch_links`: `resolve_board_id` picks a
+/// board by its `id`, and a caller's `response_exclude_fields` is a setting
+/// about display.
+async fn fetch_boards(project: &str, client: &ApiClient) -> Result<Vec<Value>> {
+    paginate(
         "/rest/agile/1.0/board",
         &[("projectKeyOrId", project.to_string())],
         "get boards",
         AGILE_PAGE,
         client,
     )
-    .await?;
-    Ok(json!({ "items": items }))
+    .await
+}
+
+pub async fn get_boards(project: &str, client: &ApiClient) -> Result<Value> {
+    Ok(list_envelope(fetch_boards(project, client).await?, client))
 }
 
 pub async fn resolve_board_id(project: &str, client: &ApiClient) -> Result<u64> {
-    let boards = get_boards(project, client).await?;
-    let items = boards["items"]
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("No boards found for project {}", project))?;
+    let items = fetch_boards(project, client).await?;
 
     match items.len() {
         0 => anyhow::bail!("No boards found for project {}", project),
@@ -1016,7 +1043,7 @@ pub async fn get_sprints(board_id: u64, state: &str, client: &ApiClient) -> Resu
         client,
     )
     .await?;
-    Ok(json!({ "items": items }))
+    Ok(list_envelope(items, client))
 }
 
 /// Maximum issues per POST for Atlassian's Agile bulk endpoints
@@ -1387,6 +1414,38 @@ mod tests {
             .to_string();
 
         assert!(err.contains("no 'transitions' array"), "{err}");
+    }
+
+    /// The `{"items": [...]}` wrapper is this CLI's contract, not a field of the
+    /// response, so the caller's filter reaches the items and stops there — and
+    /// an internal decision reads what the API sent, not what a display setting
+    /// left of it.
+    #[tokio::test]
+    async fn integ_the_list_envelope_is_not_the_filter_s_to_edit() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/agile/1.0/board"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "isLast": true,
+                "values": [{ "id": 7, "name": "Board", "avatarUrls": { "16x16": "u" } }]
+            })))
+            .mount(&server)
+            .await;
+
+        let mut config = crate::test_utils::create_test_config();
+        config.optimization.response_exclude_fields =
+            Some(vec!["items".to_string(), "avatarUrls".to_string()]);
+        let client = crate::test_utils::mock_client_with_config(server.uri(), config);
+
+        let result = get_boards("PROJ", &client).await.unwrap();
+        assert_eq!(
+            result["items"].as_array().map(Vec::len),
+            Some(1),
+            "{result}"
+        );
+        assert!(result["items"][0].get("avatarUrls").is_none(), "{result}");
+        // And the resolver decides from the API's answer, not the filtered view.
+        assert_eq!(resolve_board_id("PROJ", &client).await.unwrap(), 7);
     }
 
     /// `--fields` is the caller's, so it goes through the query builder. Written

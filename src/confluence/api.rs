@@ -142,17 +142,19 @@ pub async fn search(
 
     let mut data: Value = response.json().await?;
 
-    let items = extract_content_from_results(&mut data, as_markdown)?;
+    let mut items = extract_content_from_results(&mut data, as_markdown)?;
     let total = require_u64(&data, "/totalSize", "search")?;
+    // As on the `--all` path and the Jira side: the items are filtered, the
+    // envelope this CLI promises is not.
+    for item in &mut items {
+        filter::apply(item, client.config());
+    }
 
-    let mut output = json!({
+    Ok(json!({
         "items": items,
         "count": items.len(),
         "total": total,
-    });
-
-    filter::apply(&mut output, client.config());
-    Ok(output)
+    }))
 }
 
 pub async fn search_all(
@@ -899,10 +901,14 @@ async fn fetch_all_v2_results(
 /// Build the standard `{"items": [...]}` envelope from a fully-paginated v2
 /// list and apply the configured response filter. Every paginated list
 /// endpoint funnels through here so the envelope and filtering stay identical.
-fn v2_list_envelope(items: Vec<Value>, client: &ApiClient) -> Value {
-    let mut envelope = json!({ "items": items });
-    filter::apply(&mut envelope, client.config());
-    envelope
+fn v2_list_envelope(mut items: Vec<Value>, client: &ApiClient) -> Value {
+    // The items, never the envelope: the wrapper is this CLI's contract rather
+    // than the API's answer, so `response_exclude_fields` naming `items` would
+    // otherwise return `{}` with exit 0 where a list was promised.
+    for item in &mut items {
+        filter::apply(item, client.config());
+    }
+    json!({ "items": items })
 }
 
 // --- Footer comments (write) ---------------------------------------------
