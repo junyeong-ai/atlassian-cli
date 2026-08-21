@@ -220,21 +220,32 @@ fn resolve_cloud_id(pin: Option<&str>, sites: &[SiteInfo]) -> Result<String> {
     // leaves a session nothing can use — and an id from `accessible-resources`
     // is no more trusted for having come from an API than a pinned one is.
     let checked = |id: String| crate::config::validate_cloud_id(&id).map(|()| id);
+    let listed = |sites: &[SiteInfo]| {
+        sites
+            .iter()
+            .map(|s| format!("  - {} ({})", s.url, s.id))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     match (pin, sites) {
-        (Some(p), _) => checked(p.to_string()),
+        // A pin is checked against what the token can actually reach.
+        // `accessible-resources` is the list of sites this grant covers, so a
+        // pin outside it stores a session every later request sends to a site
+        // the token was never authorized for.
+        (Some(p), sites) if sites.iter().any(|s| s.id == p) => checked(p.to_string()),
+        (Some(p), []) => {
+            bail!("cloud_id is pinned to {p}, but this login can reach no Atlassian sites at all")
+        }
+        (Some(p), sites) => bail!(
+            "cloud_id is pinned to {p}, which this login cannot reach. Accessible:\n{}",
+            listed(sites)
+        ),
         (None, []) => bail!("Login succeeded but no Atlassian sites are accessible to this user"),
         (None, [only]) => checked(only.id.clone()),
-        (None, many) => {
-            let list = many
-                .iter()
-                .map(|s| format!("  - {} ({})", s.url, s.id))
-                .collect::<Vec<_>>()
-                .join("\n");
-            bail!(
-                "Logged in, but multiple Atlassian sites are accessible. Pin one by setting cloud_id in [<profile>.auth]:\n{}",
-                list
-            )
-        }
+        (None, many) => bail!(
+            "Logged in, but multiple Atlassian sites are accessible. Pin one by setting cloud_id in [<profile>.auth]:\n{}",
+            listed(many)
+        ),
     }
 }
 
@@ -354,13 +365,30 @@ mod tests {
     }
 
     #[test]
-    fn resolve_cloud_id_prefers_pin() {
-        let sites = vec![SiteInfo {
-            id: "auto".into(),
-            url: "https://auto.atlassian.net".into(),
-            name: None,
-        }];
+    fn resolve_cloud_id_prefers_a_pin_the_grant_covers() {
+        let sites = vec![
+            SiteInfo {
+                id: "auto".into(),
+                url: "https://auto.atlassian.net".into(),
+                name: None,
+            },
+            SiteInfo {
+                id: "pinned".into(),
+                url: "https://pinned.atlassian.net".into(),
+                name: None,
+            },
+        ];
+        // Two sites: discovery would refuse to choose, and the pin decides.
         assert_eq!(resolve_cloud_id(Some("pinned"), &sites).unwrap(), "pinned");
+
+        // A pin outside the grant is a session every later request sends to a
+        // site the token was never authorized for. The failure lists what the
+        // login can actually reach.
+        let err = resolve_cloud_id(Some("elsewhere"), &sites)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("cannot reach"), "{err}");
+        assert!(err.contains("auto"), "{err}");
     }
 
     #[test]

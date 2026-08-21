@@ -454,10 +454,14 @@ pub async fn get_comments(issue_key: &str, as_markdown: bool, client: &ApiClient
         "/rest/api/3/issue/{}/comment",
         encode_path_segment(issue_key)
     );
-    let mut items = paginate(&url, &[], "get comments", COMMENT_PAGE, client).await?;
+    let items = paginate(&url, &[], "get comments", COMMENT_PAGE, client).await?;
 
-    if as_markdown {
-        for comment in &mut items {
+    // Filtered first, then converted: `adf_to_markdown` collapses the body
+    // object into a string, so a key the caller excluded would no longer be
+    // there to exclude. The Confluence side orders it the same way.
+    let mut envelope = list_envelope(items, client);
+    if as_markdown && let Some(comments) = envelope["items"].as_array_mut() {
+        for comment in comments {
             if let Some(body) = comment.get_mut("body")
                 && body.is_object()
             {
@@ -466,7 +470,7 @@ pub async fn get_comments(issue_key: &str, as_markdown: bool, client: &ApiClient
         }
     }
 
-    Ok(list_envelope(items, client))
+    Ok(envelope)
 }
 
 pub async fn get_link_types(client: &ApiClient) -> Result<Value> {
@@ -521,20 +525,28 @@ pub async fn remove_link(
 ) -> Result<Value> {
     let items = fetch_links(source_key, client).await?;
 
-    let matching: Vec<&Value> = items
-        .iter()
-        .filter(|link| {
-            let other_key = link["outwardIssue"]["key"]
-                .as_str()
-                .or_else(|| link["inwardIssue"]["key"].as_str());
-            let type_name = link["type"]["name"].as_str();
+    let mut matching: Vec<&Value> = Vec::new();
+    for link in &items {
+        // A link names the issue at its other end, and the type when one was
+        // asked for. An entry carrying neither is not a link that fails to
+        // match — it is a shape this code cannot read, and letting it fall
+        // through would report a definite "no such link" drawn from drift.
+        let Some(other_key) = link["outwardIssue"]["key"]
+            .as_str()
+            .or_else(|| link["inwardIssue"]["key"].as_str())
+        else {
+            anyhow::bail!("get links returned a link on {source_key} naming neither issue: {link}");
+        };
+        let type_name = link["type"]["name"].as_str();
+        if link_type.is_some() && type_name.is_none() {
+            anyhow::bail!("get links returned a link on {source_key} with no type name: {link}");
+        }
 
-            let key_match = other_key == Some(target_key);
-            let type_match = link_type.map(|t| type_name == Some(t)).unwrap_or(true);
-
-            key_match && type_match
-        })
-        .collect();
+        let type_match = link_type.is_none_or(|t| type_name == Some(t));
+        if other_key == target_key && type_match {
+            matching.push(link);
+        }
+    }
 
     match matching.len() {
         0 => anyhow::bail!(
@@ -1450,6 +1462,46 @@ mod tests {
         assert!(result["items"][0].get("avatarUrls").is_none(), "{result}");
         // And the resolver decides from the API's answer, not the filtered view.
         assert_eq!(resolve_board_id("PROJ", &client).await.unwrap(), 7);
+    }
+
+    /// `adf_to_markdown` turns the body object into a string, so a key the
+    /// caller excluded would no longer be there to exclude. Filtering has to
+    /// come first, as it did before the filter moved out of `paginate`.
+    #[tokio::test]
+    async fn integ_comments_are_filtered_before_the_body_becomes_a_string() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/ABC-1/comment"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "startAt": 0,
+                "total": 1,
+                "comments": [{
+                    "id": "1",
+                    "body": {
+                        "type": "doc",
+                        "content": [{
+                            "type": "paragraph",
+                            "content": [{ "type": "text", "text": "sensitive" }]
+                        }]
+                    }
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        // `text` lives inside the ADF body. Filtered first it is gone before
+        // conversion; converted first it is already part of the string and no
+        // exclude can reach it.
+        let mut config = crate::test_utils::create_test_config();
+        config.optimization.response_exclude_fields = Some(vec!["text".to_string()]);
+        let client = crate::test_utils::mock_client_with_config(server.uri(), config);
+
+        let result = get_comments("ABC-1", true, &client).await.unwrap();
+        let body = result["items"][0]["body"].as_str().unwrap_or_default();
+        assert!(
+            !body.contains("sensitive"),
+            "the excluded field reached the converted body: {result}"
+        );
     }
 
     /// `--fields` is the caller's, so it goes through the query builder. Written

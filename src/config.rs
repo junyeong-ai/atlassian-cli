@@ -474,7 +474,7 @@ pub(crate) fn validate_cloud_id(raw: &str) -> Result<()> {
 /// from there into a shell history or a CI log. The line and column are derived
 /// from the span instead, so the diagnosis keeps its location and loses only the
 /// text.
-fn parse_failure(path: &Path, content: &str, mut error: toml::de::Error) -> anyhow::Error {
+fn parse_failure(path: &Path, content: &str, error: toml::de::Error) -> anyhow::Error {
     let position = error
         .span()
         .map(|span| {
@@ -484,8 +484,15 @@ fn parse_failure(path: &Path, content: &str, mut error: toml::de::Error) -> anyh
             format!(" at line {line}, column {column}")
         })
         .unwrap_or_default();
-    error.set_input(None);
-    anyhow::anyhow!("Failed to parse config file {path:?}{position}: {error}")
+    // Nothing of the error's own text survives. Dropping its input removes the
+    // quoted source line, but a type error also carries the value it rejected —
+    // `invalid type: integer \`483920174629\`` for a secret written unquoted —
+    // and this file is where the secrets are. The position is the actionable
+    // part; the line itself is one the operator can open.
+    anyhow::anyhow!(
+        "Failed to parse config file {path:?}{position}. The reason is not repeated here \
+         because it can quote the file, which holds credentials — open that line to see it."
+    )
 }
 
 impl Config {

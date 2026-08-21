@@ -28,6 +28,10 @@ const KEYRING_SERVICE: &str = "atlassian-cli";
 /// `0` / `false` count as unset, consistent with the project's blank-value
 /// policy for the rest of the env surface.
 fn keychain_disabled() -> bool {
+    // `.ok()` folds `VarError::NotUnicode` in with `NotPresent`, as
+    // `config::non_blank_env` does: bytes that are not UTF-8 are none of the
+    // values below, and reading them as unset leaves the keychain in play
+    // rather than silently suppressing it on malformed input.
     keychain_disabled_from(std::env::var("ATLASSIAN_NO_KEYCHAIN").ok().as_deref())
 }
 

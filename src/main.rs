@@ -1059,11 +1059,13 @@ async fn self_uninstall(
     // config cannot be located, and every step below would skip them silently
     // and then take the binary that knows where they are — the same reason a
     // keychain that will not answer refuses here rather than proceeding.
-    if installation.skill_dir().is_none() || installation.config_dir().is_none() {
+    let home_managed = !keep_skill || !keep_credentials || purge_config;
+    if home_managed && (installation.skill_dir().is_none() || installation.config_dir().is_none()) {
         anyhow::bail!(
             "Cannot locate the home directory, so the deployed skill and the global config \
              cannot be found — removing the binary would leave them behind with nothing that \
-             knows where they are. Set HOME and re-run."
+             knows where they are. Set HOME and re-run, or keep them explicitly with \
+             --keep-skill --keep-credentials."
         );
     }
 
@@ -2121,7 +2123,15 @@ async fn handle_auth(
                         config.profile, method
                     );
                 }
-                (None, _) => println!("Profile '{}' has no auth configured.", config.profile),
+                (None, _) => {
+                    if atlassian_cli::auth::keychain_opt_out() {
+                        println!(
+                            "ATLASSIAN_NO_KEYCHAIN is set, so the keychain was not consulted; \
+                             a session stored there before the flag is untouched."
+                        );
+                    }
+                    println!("Profile '{}' has no auth configured.", config.profile)
+                }
             }
 
             // A session left behind by a previous OAuth configuration is a live
