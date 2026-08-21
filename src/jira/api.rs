@@ -542,6 +542,12 @@ pub async fn remove_link(
             .or_else(|| link["inwardIssue"]["key"].as_str());
         let type_name = link["type"]["name"].as_str();
 
+        // Four answers, and the order below is which one a caller is told:
+        // a field that is there and does not match settles the entry outright;
+        // then a link that matches but runs the other way is a different link;
+        // then one missing a field the answer still needed is undecided; what
+        // survives all three matched. Reordering these changes the answer.
+        //
         // Direction is part of the match, not a tie-break. `add` puts the
         // source on the outward side, so on this issue the link it created
         // names the other one through `outwardIssue`; a link running the other
@@ -1415,10 +1421,10 @@ mod tests {
 
     /// "A blocks B" and "B blocks A" are two links, both listed on A with the
     /// same type and the same other issue. `add` takes the source as the
-    /// outward side, so `remove` takes the same one rather than whichever the
-    /// response happened to put first.
+    /// outward side, so `remove` takes that one — and the reverse is not a
+    /// candidate at all, filtered before anything counts matches.
     #[tokio::test]
-    async fn integ_remove_link_takes_the_outward_one_where_both_directions_exist() {
+    async fn integ_remove_link_takes_the_outward_link_and_not_the_reverse_one() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/PROJ-1"))
