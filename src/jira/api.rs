@@ -529,22 +529,22 @@ pub async fn add_link(
     Ok(json!({}))
 }
 
-/// Whether naming a type would narrow these matches to fewer than all of them.
-/// It would not where one carries no type name — that one answers to no `--type`
-/// at all — nor where they all carry the same one.
-fn distinguishable_by_type(matching: &[&Value]) -> bool {
-    let mut names = matching.iter().map(|link| link["type"]["name"].as_str());
-    let Some(Some(first)) = names.next() else {
-        return false;
-    };
-    let mut differs = false;
-    for name in names {
-        match name {
+/// Whether some `--type` would narrow these matches to one. Fewer than all of
+/// them is not enough — the command removes where one is left, so a set of
+/// `Blocks, Blocks, Relates, Relates` is a dead end under either name. A match
+/// carrying no type name is one no `--type` selects, and it makes every name a
+/// dead end with it.
+fn a_type_would_narrow_to_one(matching: &[&Value]) -> bool {
+    let mut names = Vec::with_capacity(matching.len());
+    for link in matching {
+        match link["type"]["name"].as_str() {
             None => return false,
-            Some(other) => differs |= other != first,
+            Some(name) => names.push(name),
         }
     }
-    differs
+    names
+        .iter()
+        .any(|name| names.iter().filter(|other| *other == name).count() == 1)
 }
 
 pub async fn remove_link(
@@ -573,6 +573,18 @@ pub async fn remove_link(
         // before anything else is read of it: whatever the rest of the entry
         // turns out to be, it is not a link of that type.
         if link_type.is_some_and(|t| type_name.is_some_and(|n| n != t)) {
+            continue;
+        }
+
+        // An outward side that named a third issue settles the entry the same
+        // way, whatever the rest of it turns out to be: read as this issue's
+        // other end it is that issue's link, read absolutely its pair holds
+        // that issue, and read as an inward end it runs the other way. None of
+        // those is the link asked for, so nothing below needs reading.
+        if link["outwardIssue"]["key"]
+            .as_str()
+            .is_some_and(|k| k != target_key && k != source_key)
+        {
             continue;
         }
 
@@ -613,16 +625,12 @@ pub async fn remove_link(
         // absolute rather than relative to this issue: taking one of them as
         // "the other end" is a guess, and this guess decides a delete.
         //
-        // Only two readings of it could be the link asked for — the outward
+        // Two readings of it could still be the link asked for — the outward
         // side is this issue's other end and it is the target, or the sides
-        // are absolute and they are this issue and the target. An outward side
-        // that named a third issue leaves neither: it is that issue's link,
-        // whichever way it runs. The third reading, the inward side being the
-        // other end, runs the other way and never is the link asked for.
+        // are absolute and they are this issue and the target. The third, the
+        // inward side being the other end, runs the other way and never is.
+        // What ruled the entry out under all three has already gone above.
         if has_outward && has_inward {
-            if outward_key.is_some_and(|k| k != target_key && k != source_key) {
-                continue;
-            }
             unreadable.push("carries both ends");
             continue;
         }
@@ -722,15 +730,22 @@ pub async fn remove_link(
         // Without a type, naming one is the way out. With one, the pair and the
         // type are everything this command takes, so it has nothing left to
         // choose by and says so rather than picking.
-        // Naming a type is the way out only where the matches carry types that
-        // tell them apart. Where they do not, `--type` narrows to the same set
-        // and the advice sends the caller round the same refusal.
-        n if link_type.is_none() && distinguishable_by_type(&matching) => anyhow::bail!(
-            "Found {} links from {} to {}. Specify --type to disambiguate.",
-            n,
-            source_key,
-            target_key
-        ),
+        // Naming a type is the way out only where one of them would be left
+        // alone by it, and only where nothing was left unread: an entry this
+        // walk could not read is one no `--type` reads either, and it withholds
+        // the removal once the matches are down to one. Anywhere else the
+        // advice narrows to a set this same refusal answers again.
+        n if link_type.is_none()
+            && unreadable.is_empty()
+            && a_type_would_narrow_to_one(&matching) =>
+        {
+            anyhow::bail!(
+                "Found {} links from {} to {}. Specify --type to disambiguate.",
+                n,
+                source_key,
+                target_key
+            )
+        }
         n => match link_type {
             None => anyhow::bail!(
                 "Found {} links from {} to {}, and no type tells them apart. This command \
@@ -1691,9 +1706,13 @@ mod tests {
             // and must go.
             let ruled_out = if requested.is_some() && kind == "differs" {
                 true
+            } else if outward == "names another issue" {
+                // Every reading of the entry puts that issue in it, and this
+                // request names two others.
+                true
             } else if outward == "not an issue at all" || inward == "not an issue at all" {
-                // No reading of the entry at all, so nothing about it is ruled
-                // out either.
+                // Nothing else about the entry reads, so nothing else about it
+                // is ruled out either.
                 false
             } else if outward != "absent" && inward != "absent" {
                 // Both ends carried, so which side is this issue's other end
@@ -1717,7 +1736,7 @@ mod tests {
                 true
             } else {
                 // Outward only: it is this issue's other end, and it said so.
-                outward == "names another issue" || outward == "names the source"
+                outward == "names the source"
             };
 
             assert_eq!(
@@ -2743,6 +2762,21 @@ mod tests {
                 { "id": "2", "type": { "name": "Relates" }, "outwardIssue": { "key": "B-1" } },
                 { "id": "3", "type": { "id": "10000" }, "outwardIssue": { "key": "B-1" } }
             ]),
+            // Names that differ, and neither leaves one alone.
+            json!([
+                { "id": "1", "type": { "name": "Blocks" }, "outwardIssue": { "key": "B-1" } },
+                { "id": "2", "type": { "name": "Blocks" }, "outwardIssue": { "key": "B-1" } },
+                { "id": "3", "type": { "name": "Relates" }, "outwardIssue": { "key": "B-1" } },
+                { "id": "4", "type": { "name": "Relates" }, "outwardIssue": { "key": "B-1" } }
+            ]),
+            // A name that would leave one alone, beside an entry this walk
+            // could not read: no `--type` reads that one either, so once the
+            // matches are down to one it withholds instead of removing.
+            json!([
+                { "id": "1", "type": { "name": "Blocks" }, "outwardIssue": { "key": "B-1" } },
+                { "id": "2", "type": { "name": "Relates" }, "outwardIssue": { "key": "B-1" } },
+                { "id": "3", "type": { "name": "Blocks" } }
+            ]),
         ] {
             let server = MockServer::start().await;
             Mock::given(method("GET"))
@@ -2765,7 +2799,6 @@ mod tests {
                 .unwrap_err()
                 .to_string();
             assert!(!err.contains("Specify --type"), "{links}: {err}");
-            assert!(err.contains("no type tells them apart"), "{links}: {err}");
         }
     }
 
