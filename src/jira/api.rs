@@ -1634,22 +1634,31 @@ mod tests {
         }
     }
 
-    /// Every entry the two checks above are run over, labelled by what each
-    /// part of it says.
-    fn shape_space() -> Vec<(
+    /// What one part of an entry says, and the JSON that says it. The label is
+    /// what a failed assertion names, so a failure reads back as the shape it
+    /// was handed.
+    type Part = (&'static str, fn() -> Value);
+
+    /// One entry of the space: the outward side, the inward side, the type,
+    /// the `--type` the request carried, and the entry those three describe.
+    type Shape = (
         &'static str,
         &'static str,
         &'static str,
         Option<&'static str>,
         Value,
-    )> {
-        const SIDES: [(&str, fn() -> Value); 4] = [
+    );
+
+    /// Every entry the two checks above are run over, labelled by what each
+    /// part of it says.
+    fn shape_space() -> Vec<Shape> {
+        const SIDES: [Part; 4] = [
             ("absent", || json!(null)),
             ("names the target", || json!({ "key": "PROJ-2" })),
             ("names another issue", || json!({ "key": "PROJ-9" })),
             ("no readable key", || json!({ "key": 42 })),
         ];
-        const TYPES: [(&str, fn() -> Value); 3] = [
+        const TYPES: [Part; 3] = [
             ("absent", || json!(null)),
             ("matches", || json!({ "name": "Blocks" })),
             ("differs", || json!({ "name": "Relates" })),
