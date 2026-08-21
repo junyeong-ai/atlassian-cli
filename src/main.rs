@@ -1259,10 +1259,7 @@ fn clear_stored_tokens_refusal(
 async fn stored_profiles_of(
     installation: &atlassian_cli::dist::Installation,
 ) -> atlassian_cli::auth::StoredProfiles {
-    let file = installation
-        .credentials_file()
-        .unwrap_or_else(|| std::path::PathBuf::from(atlassian_cli::auth::CREDENTIALS_FILE));
-    atlassian_cli::auth::stored_profiles(&file).await
+    atlassian_cli::auth::stored_profiles(installation.credentials_file().as_deref()).await
 }
 
 fn token_store(

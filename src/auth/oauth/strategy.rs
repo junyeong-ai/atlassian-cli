@@ -118,9 +118,21 @@ impl OAuthStrategy {
             .load()
             .await?
             .with_context(|| {
-                format!(
-                    "No OAuth tokens stored for profile '{profile}'. Run `atlassian-cli auth login` first."
-                )
+                // Under the opt-out the keychain was not consulted, so this is
+                // the file store's answer and not the machine's: advising a
+                // login here would replace a session rather than reach one.
+                if crate::auth::keychain_opt_out() {
+                    format!(
+                        "No OAuth tokens in the file store for profile '{profile}', and \
+                         ATLASSIAN_NO_KEYCHAIN forbade looking in the keychain. Unset it for \
+                         this run, or run `atlassian-cli auth login` if there is no session to \
+                         reach."
+                    )
+                } else {
+                    format!(
+                        "No OAuth tokens stored for profile '{profile}'. Run `atlassian-cli auth login` first."
+                    )
+                }
             })?
             .tokens;
         let cloud_id =

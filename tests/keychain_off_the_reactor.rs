@@ -90,7 +90,8 @@ async fn enumerating_never_reads_an_entry_on_the_reactor() {
     keyring_core::set_default_store(Arc::new(BlockingStore));
     let dir = tempfile::tempdir().unwrap();
 
-    let stored = atlassian_cli::auth::stored_profiles(&dir.path().join("credentials.json")).await;
+    let stored =
+        atlassian_cli::auth::stored_profiles(Some(&dir.path().join("credentials.json"))).await;
 
     assert!(stored.profiles.contains("stored"), "{:?}", stored.profiles);
 }

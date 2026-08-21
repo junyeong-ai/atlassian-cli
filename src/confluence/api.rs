@@ -798,7 +798,17 @@ async fn fetch_space_by_key(space_key: &str, client: &ApiClient) -> Result<Optio
     let Some(results) = data["results"].as_array() else {
         anyhow::bail!("lookup succeeded but its response had no 'results' array: {data}");
     };
-    Ok(results.first().cloned())
+    // As with a property lookup: the `keys` filter is the server's, and the id
+    // taken from here decides which space a page is created in. A result naming
+    // another key is not the space that was asked for.
+    match results.first() {
+        None => Ok(None),
+        Some(found) if found["key"].as_str() == Some(space_key) => Ok(Some(found.clone())),
+        Some(found) => anyhow::bail!(
+            "looked up space '{space_key}' and the response named '{}' instead: {found}",
+            found["key"].as_str().unwrap_or("nothing")
+        ),
+    }
 }
 
 /// Resolve a Confluence space key to its numeric space id. The single
@@ -1160,7 +1170,18 @@ async fn fetch_property_by_key(
     let Some(results) = data["results"].as_array() else {
         anyhow::bail!("lookup succeeded but its response had no 'results' array: {data}");
     };
-    Ok(results.first().cloned())
+    // The filter is the server's, and what comes back is what `delete_property`
+    // deletes by id. A result that names a different key is not the property
+    // that was asked for, and deleting it would take data nobody named — so the
+    // key is read back rather than assumed.
+    match results.first() {
+        None => Ok(None),
+        Some(found) if found["key"].as_str() == Some(key) => Ok(Some(found.clone())),
+        Some(found) => anyhow::bail!(
+            "looked up property '{key}' and the response named '{}' instead: {found}",
+            found["key"].as_str().unwrap_or("nothing")
+        ),
+    }
 }
 
 // --- Spaces ---------------------------------------------------------------
@@ -1730,7 +1751,7 @@ mod tests {
             .and(path("/wiki/api/v2/spaces"))
             .and(query_param("keys", "ENG"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "results": [{ "id": "sid" }]
+                "results": [{ "id": "sid", "key": "ENG" }]
             })))
             .expect(1)
             .mount(&server)
@@ -1763,7 +1784,8 @@ mod tests {
             .and(path("/wiki/api/v2/spaces"))
             .and(query_param("keys", "ENG"))
             .respond_with(
-                ResponseTemplate::new(200).set_body_json(json!({ "results": [{ "id": "sid" }] })),
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "results": [{ "id": "sid", "key": "ENG" }] })),
             )
             .mount(&server)
             .await;
@@ -3023,6 +3045,48 @@ mod tests {
         assert_eq!(item["pageId"], "9", "{result}");
         // What the filter is actually for still goes.
         assert!(item.get("avatarUrls").is_none(), "{result}");
+    }
+
+    /// The `key` filter is the server's, and what comes back is what a delete
+    /// removes by id. A result naming a different key is not the property that
+    /// was asked for, and deleting it would take data nobody named.
+    #[tokio::test]
+    async fn integ_a_property_lookup_refuses_a_result_naming_another_key() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/api/v2/pages/9/properties"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{ "id": "p-owner", "key": "owner" }]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = delete_property("9", "state", &client)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("named 'owner'"), "{err}");
+    }
+
+    /// The same for a space: its id decides where a page is created.
+    #[tokio::test]
+    async fn integ_a_space_lookup_refuses_a_result_naming_another_key() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/api/v2/spaces"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{ "id": "sid", "key": "OTHER" }]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = create_page("ENG", "T", "<p>x</p>", None, None, None, &client)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("named 'OTHER'"), "{err}");
     }
 
     /// v2's end-of-list signal is an absent or null `next` and nothing else.

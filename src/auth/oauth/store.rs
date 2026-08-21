@@ -633,14 +633,20 @@ pub struct StoredProfiles {
 /// trusted: only entries that name this service are kept, and one that will not
 /// name itself makes the listing incomplete. Both halves report how complete
 /// they are beside the list rather than folded into it.
-pub async fn stored_profiles(credentials_file: &std::path::Path) -> StoredProfiles {
+pub async fn stored_profiles(credentials_file: Option<&std::path::Path>) -> StoredProfiles {
     let mut profiles = BTreeSet::new();
-    let file_error = match read_all_from(credentials_file) {
-        Ok(all) => {
-            profiles.extend(all.into_keys());
-            None
-        }
-        Err(e) => Some(format!("{e:#}")),
+    // `None` is a location this installation could not work out, not an empty
+    // file: reading a bare `credentials.json` would take whatever the working
+    // directory happens to hold and report its profiles as this one's.
+    let file_error = match credentials_file {
+        None => Some("the credentials file location is unknown (no home directory)".to_string()),
+        Some(path) => match read_all_from(path) {
+            Ok(all) => {
+                profiles.extend(all.into_keys());
+                None
+            }
+            Err(e) => Some(format!("{e:#}")),
+        },
     };
 
     let keyring = match keychain(|| {
@@ -1040,7 +1046,7 @@ mod tests {
             .set_password("x")
             .unwrap();
 
-        let stored = stored_profiles(&path).await;
+        let stored = stored_profiles(Some(&path)).await;
         assert_eq!(stored.keyring, KeyringEnumeration::Listed);
         assert!(stored.profiles.contains("ours"), "{:?}", stored.profiles);
         assert!(!stored.profiles.contains("theirs"), "{:?}", stored.profiles);
@@ -1056,7 +1062,7 @@ mod tests {
         let path = dir.path().join("credentials.json");
         fs::write(&path, "{ not json").unwrap();
 
-        let stored = stored_profiles(&path).await;
+        let stored = stored_profiles(Some(&path)).await;
         assert!(
             stored
                 .file_error
@@ -1080,7 +1086,7 @@ mod tests {
         fs::write(&path, "{}").unwrap();
         fs::set_permissions(&closed, fs::Permissions::from_mode(0o000)).unwrap();
 
-        let stored = stored_profiles(&path).await;
+        let stored = stored_profiles(Some(&path)).await;
         fs::set_permissions(&closed, fs::Permissions::from_mode(0o700)).unwrap();
 
         assert!(

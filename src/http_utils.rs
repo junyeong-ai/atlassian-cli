@@ -37,10 +37,11 @@ pub(crate) const PATH_SEGMENT: &AsciiSet = &CONTROLS
 /// Query parameters go through reqwest's `.query()` builder, which handles
 /// its own encoding — do not chain this helper for query values.
 ///
-/// Do not pass server-side identifiers (cloud IDs, numeric resource IDs
-/// returned by the API) through this function. They are safe by construction:
-/// a cloud ID reaches a URL only after `config::validate_cloud_id`, which
-/// admits `[A-Za-z0-9-]` and nothing else. Encode only what the user typed.
+/// A server-returned identifier that reaches a path segment goes through here
+/// too — a Confluence comment or property id arrives in a response and then
+/// chooses the next request's path, which is exactly the position this guards.
+/// The cloud ID is the one exception, and only because
+/// `config::validate_cloud_id` has already narrowed it to `[A-Za-z0-9-]`.
 pub(crate) fn encode_path_segment(segment: &str) -> String {
     utf8_percent_encode(segment, PATH_SEGMENT).to_string()
 }

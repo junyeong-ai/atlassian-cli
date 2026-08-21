@@ -94,10 +94,13 @@ future query-language additions inherit the same defense.
 
 ## URL path encoding
 
-Every site that interpolates `page_id` (or any other user-controllable
-identifier) into a `/wiki/...` path goes through
-`http_utils::encode_path_segment`. The encoder is RFC 3986 strict
-(brackets, `:`, `@`, slash, etc. are all percent-encoded). Server-side
-identifiers returned by the API — including the cursor query inside a
-pagination `_links.next` — must NOT be encoded; encoding them would corrupt
-the cursor. They reach `build_url` as an already-formed path via `link_path`.
+Every site that interpolates an identifier into a `/wiki/...` path segment
+goes through `http_utils::encode_path_segment` — the caller's `page_id` and
+equally a comment or property id the API returned, since a response choosing
+the next request's path is the position the encoder exists for. The encoder is
+RFC 3986 strict (brackets, `:`, `@`, slash, etc. are all percent-encoded).
+
+A pagination `_links.next` is not an identifier and does not go through it: it
+is a whole path with a cursor query, and encoding would corrupt the cursor. It
+reaches `build_url` as an already-formed path via `link_path`, which is what
+checks it.
