@@ -544,7 +544,9 @@ pub async fn remove_link(
     // that was never there and none is withheld over one that no longer
     // matters.
     let mut matching: Vec<&Value> = Vec::new();
-    let mut unreadable = 0usize;
+    // What each entry left open, not merely how many did: the reasons differ,
+    // and a fixed one would be describing entries it never saw.
+    let mut unreadable: Vec<&'static str> = Vec::new();
     let mut reverse = 0usize;
     for link in &items {
         let outward_key = link["outwardIssue"]["key"].as_str();
@@ -566,7 +568,7 @@ pub async fn remove_link(
         // included: it may be the second link to this one that would make the
         // removal a guess.
         if !names_target {
-            unreadable += 1;
+            unreadable.push("names no issue");
             continue;
         }
 
@@ -576,7 +578,7 @@ pub async fn remove_link(
         // rather than relative to this issue: taking one of them as "the other
         // end" is a guess, and this guess decides a delete.
         if outward_key.is_some() && inward_key.is_some() {
-            unreadable += 1;
+            unreadable.push("names an issue at both ends");
             continue;
         }
 
@@ -598,23 +600,25 @@ pub async fn remove_link(
         // refuses two it can read and cannot tell apart, so one it cannot read
         // leaves that same question open.
         if link_type.is_some() && type_name.is_none() {
-            unreadable += 1;
+            unreadable.push("names no type");
             continue;
         }
 
         matching.push(link);
     }
 
-    if unreadable > 0 {
+    if !unreadable.is_empty() {
+        let mut reasons: Vec<&str> = Vec::new();
+        for reason in &unreadable {
+            if !reasons.contains(reason) {
+                reasons.push(reason);
+            }
+        }
         anyhow::bail!(
-            "{} of the links on {} left the question open{}, so {}",
-            unreadable,
+            "{} of the links on {} left the question open ({}), so {}",
+            unreadable.len(),
             source_key,
-            if link_type.is_some() {
-                " (no issue named, or no type)"
-            } else {
-                " (no issue named)"
-            },
+            reasons.join("; "),
             if matching.is_empty() {
                 format!("whether one to {target_key} is among them cannot be told")
             } else {
@@ -1465,6 +1469,9 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("a second link to PROJ-2"), "{err}");
+        // Two entries left it open and for different reasons; a fixed
+        // parenthetical would describe one of them wrongly.
+        assert!(err.contains("(names no type; names no issue)"), "{err}");
 
         // The same entry where nothing matched: absence is not claimed either.
         let err = remove_link("PROJ-1", "PROJ-9", Some("Blocks"), &client)
@@ -1472,6 +1479,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("whether one to PROJ-9 is among them"), "{err}");
+        assert!(err.contains("(names no issue)"), "{err}");
     }
 
     /// An issue's own links name one end. An entry naming both is the shape
@@ -1511,7 +1519,10 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string();
-            assert!(err.contains("left the question open"), "{entry}: {err}");
+            assert!(
+                err.contains("left the question open (names an issue at both ends)"),
+                "{entry}: {err}"
+            );
         }
     }
 
