@@ -1590,6 +1590,9 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/rest/api/3/issue"))
             .and(body_string_contains("\"type\":\"doc\""))
+            // The text itself, not just the wrapper: an empty document would
+            // satisfy a shape-only match while dropping what was written.
+            .and(body_string_contains("\"text\":\"plain text\""))
             .and(body_string_contains("\"key\":\"PROJ\""))
             .and(body_string_contains("\"name\":\"Task\""))
             .respond_with(
