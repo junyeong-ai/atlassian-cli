@@ -525,21 +525,26 @@ pub async fn remove_link(
 ) -> Result<Value> {
     let items = fetch_links(source_key, client).await?;
 
+    // A link names the issue at its other end, and its type when one was asked
+    // for. An entry carrying neither is a shape this code cannot read, which
+    // only matters where nothing matched: counted there, "no such link" would
+    // be a definite absence drawn from an entry never examined. Where a match
+    // was found, an unreadable sibling is not this command's business.
     let mut matching: Vec<&Value> = Vec::new();
+    let mut unreadable = 0usize;
     for link in &items {
-        // A link names the issue at its other end, and the type when one was
-        // asked for. An entry carrying neither is not a link that fails to
-        // match — it is a shape this code cannot read, and letting it fall
-        // through would report a definite "no such link" drawn from drift.
-        let Some(other_key) = link["outwardIssue"]["key"]
+        let other_key = link["outwardIssue"]["key"]
             .as_str()
-            .or_else(|| link["inwardIssue"]["key"].as_str())
-        else {
-            anyhow::bail!("get links returned a link on {source_key} naming neither issue: {link}");
-        };
+            .or_else(|| link["inwardIssue"]["key"].as_str());
         let type_name = link["type"]["name"].as_str();
+
+        let Some(other_key) = other_key else {
+            unreadable += 1;
+            continue;
+        };
         if link_type.is_some() && type_name.is_none() {
-            anyhow::bail!("get links returned a link on {source_key} with no type name: {link}");
+            unreadable += 1;
+            continue;
         }
 
         let type_match = link_type.is_none_or(|t| type_name == Some(t));
@@ -549,6 +554,13 @@ pub async fn remove_link(
     }
 
     match matching.len() {
+        0 if unreadable > 0 => anyhow::bail!(
+            "{} of the links on {} name no issue or no type, so whether one to {} is among \
+             them cannot be told",
+            unreadable,
+            source_key,
+            target_key
+        ),
         0 => anyhow::bail!(
             "No link found between {} and {}{}",
             source_key,
@@ -1462,6 +1474,42 @@ mod tests {
         assert!(result["items"][0].get("avatarUrls").is_none(), "{result}");
         // And the resolver decides from the API's answer, not the filtered view.
         assert_eq!(resolve_board_id("PROJ", &client).await.unwrap(), 7);
+    }
+
+    /// An entry this code cannot read only matters where nothing matched: the
+    /// removal it was asked for still lands beside one, and a "no such link"
+    /// must not be drawn from an entry never examined.
+    #[tokio::test]
+    async fn integ_remove_link_reads_an_unreadable_sibling_only_when_nothing_matched() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/PROJ-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "fields": { "issuelinks": [
+                    { "id": "1", "type": { "name": "Blocks" } },
+                    { "id": "2", "type": { "name": "Blocks" }, "outwardIssue": { "key": "PROJ-2" } }
+                ]}
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/issueLink/2"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        remove_link("PROJ-1", "PROJ-2", Some("Blocks"), &client)
+            .await
+            .expect("the readable link is still removable");
+
+        // Nothing matched, and an entry went unread — so absence is not claimed.
+        let err = remove_link("PROJ-1", "PROJ-9", Some("Blocks"), &client)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("cannot be told"), "{err}");
     }
 
     /// `adf_to_markdown` turns the body object into a string, so a key the
