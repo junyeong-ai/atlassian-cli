@@ -1402,8 +1402,7 @@ mod tests {
     }
 
     /// v1 search answers space and user entities without a `content` object.
-    /// Dropping them reported no matches for a query that had them, and the
-    /// count it left behind then ended the `--all` crawl.
+    /// Dropping them reports no matches for a query that had them.
     #[tokio::test]
     async fn integ_search_keeps_a_result_that_carries_no_content() {
         let server = MockServer::start().await;
@@ -2837,6 +2836,136 @@ mod tests {
         let result = get_labels("9", &client).await.unwrap();
         assert_eq!(result["items"].as_array().unwrap().len(), 2);
         assert_eq!(result["items"][1]["name"], "b");
+    }
+
+    /// The walk that actually happens: more than one page, ending when the
+    /// response stops naming a next one. Its Jira and v2 counterparts each
+    /// have this test; without it a `--all` that fetched everything and then
+    /// threw it away would look green.
+    #[tokio::test]
+    async fn integ_v1_search_all_returns_every_page_it_fetched() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/rest/api/search"))
+            .and(query_param_is_missing("cursor"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{ "content": { "id": "1", "title": "a" } }],
+                "totalSize": 2,
+                "_links": {
+                    "base": format!("{}/wiki", server.uri()),
+                    "next": "/rest/api/search?cursor=P2"
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/rest/api/search"))
+            .and(query_param("cursor", "P2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{ "content": { "id": "2", "title": "b" } }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let result = search_all("type = page", 50, None, None, false, false, &client)
+            .await
+            .unwrap();
+        let ids: Vec<&str> = result["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, vec!["1", "2"], "{result}");
+        assert_eq!(result["total"], 2, "{result}");
+    }
+
+    /// A page can come back empty while `next` is still live — v1 trims
+    /// results the caller may not read after paging. Stopping on the count
+    /// drops every page behind it.
+    #[tokio::test]
+    async fn integ_v1_search_all_walks_past_a_page_that_matched_nothing() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/rest/api/search"))
+            .and(query_param_is_missing("cursor"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [],
+                "totalSize": 1,
+                "_links": {
+                    "base": format!("{}/wiki", server.uri()),
+                    "next": "/rest/api/search?cursor=P2"
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/rest/api/search"))
+            .and(query_param("cursor", "P2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{ "content": { "id": "7", "title": "found" } }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let result = search_all("type = page", 50, None, None, false, false, &client)
+            .await
+            .unwrap();
+        assert_eq!(result["items"][0]["id"], "7", "{result}");
+        assert_eq!(result["total"], 1, "{result}");
+    }
+
+    /// Absent or null ends the walk; present-and-not-a-string is neither an
+    /// end signal nor a link, so the pages fetched so far are not the whole
+    /// result set.
+    #[tokio::test]
+    async fn integ_v1_search_all_bails_on_a_next_that_is_not_a_string() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/rest/api/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{ "content": { "id": "1", "title": "a" } }],
+                "totalSize": 9,
+                "_links": {
+                    "base": format!("{}/wiki", server.uri()),
+                    "next": { "href": "/rest/api/search?cursor=P2" }
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = search_all("type = page", 50, None, None, false, false, &client)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("was not a string"), "unexpected error: {err}");
+    }
+
+    /// The v2 half of the same distinction.
+    #[tokio::test]
+    async fn integ_list_bails_on_a_next_that_is_not_a_string() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/api/v2/pages/9/labels"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{ "name": "a" }],
+                "_links": { "next": ["/wiki/api/v2/pages/9/labels?cursor=P2"] }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = get_labels("9", &client).await.unwrap_err().to_string();
+        assert!(err.contains("was not a string"), "unexpected error: {err}");
     }
 
     #[tokio::test]
