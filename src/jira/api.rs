@@ -533,21 +533,29 @@ pub async fn remove_link(
     // only matters where nothing matched: counted there, "no such link" would
     // be a definite absence drawn from an entry never examined. Where a match
     // was found, an unreadable sibling is not this command's business.
-    let mut matching: Vec<(&Value, bool)> = Vec::new();
+    let mut matching: Vec<&Value> = Vec::new();
     let mut unreadable = 0usize;
+    let mut reverse = 0usize;
     for link in &items {
         let other_key = link["outwardIssue"]["key"]
             .as_str()
             .or_else(|| link["inwardIssue"]["key"].as_str());
         let type_name = link["type"]["name"].as_str();
 
-        // A field that is there and does not match settles the entry on its
-        // own — only a missing one the answer still depended on leaves it
-        // undecided.
-        let outward = link["outwardIssue"]["key"].as_str().is_some();
+        // Direction is part of the match, not a tie-break. `add` puts the
+        // source on the outward side, so on this issue the link it created
+        // names the other one through `outwardIssue`; a link running the other
+        // way is a different link, removed from the issue that is its source.
+        // Deciding this only where several matched is how a lone reverse link
+        // was deleted for a request that never named it.
+        let inward_only = link["outwardIssue"]["key"].as_str().is_none();
         let key_excludes = other_key.is_some_and(|k| k != target_key);
         let type_excludes = link_type.is_some_and(|t| type_name.is_some_and(|n| n != t));
         if key_excludes || type_excludes {
+            continue;
+        }
+        if inward_only && other_key.is_some() {
+            reverse += 1;
             continue;
         }
         if other_key.is_none() || (link_type.is_some() && type_name.is_none()) {
@@ -555,7 +563,7 @@ pub async fn remove_link(
             continue;
         }
 
-        matching.push((link, outward));
+        matching.push(link);
     }
 
     match matching.len() {
@@ -571,6 +579,21 @@ pub async fn remove_link(
             },
             target_key
         ),
+        0 if reverse > 0 => anyhow::bail!(
+            "No link runs from {} to {}{}, but {} runs the other way. Remove it from {}, the \
+             issue it starts at.",
+            source_key,
+            target_key,
+            link_type
+                .map(|t| format!(" with type '{}'", t))
+                .unwrap_or_default(),
+            if reverse == 1 {
+                "one"
+            } else {
+                "one of several"
+            },
+            target_key
+        ),
         0 => anyhow::bail!(
             "No link found between {} and {}{}",
             source_key,
@@ -580,36 +603,28 @@ pub async fn remove_link(
                 .unwrap_or_default()
         ),
         1 => {}
-        n => {
-            if link_type.is_none() {
-                anyhow::bail!(
-                    "Found {} links between {} and {}. Specify --type to disambiguate.",
-                    n,
-                    source_key,
-                    target_key
-                );
-            }
-            // Same type, same pair, both directions: "A blocks B" and "B blocks
-            // A" are two links and both appear on A. `add` takes the source as
-            // the outward side, so `remove` means the same one — deleting
-            // whichever came first would take a link the caller did not name.
-            matching.retain(|(_, outward)| *outward);
-            if matching.len() != 1 {
-                anyhow::bail!(
-                    "Found {} links of type '{}' between {} and {}, and {} of them run outward \
-                     from {}. Remove by the other direction's source instead.",
-                    n,
-                    link_type.unwrap_or_default(),
-                    source_key,
-                    target_key,
-                    matching.len(),
-                    source_key
-                );
-            }
-        }
+        // Without a type, naming one is the way out. With one, the pair and the
+        // type are everything this command takes, so it has nothing left to
+        // choose by and says so rather than picking.
+        n => match link_type {
+            None => anyhow::bail!(
+                "Found {} links from {} to {}. Specify --type to disambiguate.",
+                n,
+                source_key,
+                target_key
+            ),
+            Some(t) => anyhow::bail!(
+                "Found {} links from {} to {} with type '{}'. This command removes by issue pair \
+                 and type, so it cannot choose between them.",
+                n,
+                source_key,
+                target_key,
+                t
+            ),
+        },
     }
 
-    let link_id = matching[0].0["id"]
+    let link_id = matching[0]["id"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("Link ID missing from response"))?;
 
@@ -1432,6 +1447,38 @@ mod tests {
         remove_link("PROJ-1", "PROJ-2", Some("Blocks"), &client)
             .await
             .expect("the outward link is the one `add` would have made");
+    }
+
+    /// A lone link running the other way is a different link. Removing it for a
+    /// request that named this issue as the source would take one nobody asked
+    /// about, so the answer names the issue it starts at instead.
+    #[tokio::test]
+    async fn integ_remove_link_leaves_a_lone_reverse_link_alone() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/PROJ-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "fields": { "issuelinks": [
+                    { "id": "inward", "type": { "name": "Blocks" },
+                      "inwardIssue": { "key": "PROJ-2" } }
+                ]}
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/issueLink/inward"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = remove_link("PROJ-1", "PROJ-2", Some("Blocks"), &client)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("runs the other way"), "{err}");
+        assert!(err.contains("PROJ-2"), "{err}");
     }
 
     /// An entry a present field already excludes is decided, not undecided: it
