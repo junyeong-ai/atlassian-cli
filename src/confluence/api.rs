@@ -170,7 +170,12 @@ pub async fn search_all(
     // The counterpart of `fetch_all_v2_results`' ceiling, and for the same
     // reason: `CursorTrail` refuses a repeated path, and a server handing out a
     // genuinely new cursor every time repeats nothing, so nothing else ends
-    // that walk.
+    // that walk. Counted in requests rather than results because that is what
+    // runs away — which does mean the results a walk can return are this
+    // many times its page size, and `limit` is the caller's. At the default 50
+    // that is half a million; a caller who lowered it to keep each request
+    // small is the one who can hit this, so the failure names the page size it
+    // was reached at.
     const MAX_PAGES: u32 = 10_000;
     let mut all_items: Vec<Value> = Vec::new();
     let mut next_url: Option<String> = None;
@@ -241,7 +246,11 @@ pub async fn search_all(
     }
 
     if !finished {
-        anyhow::bail!("search did not finish within {MAX_PAGES} pages");
+        anyhow::bail!(
+            "search did not finish within {MAX_PAGES} pages of {} results — raise --limit to \
+             cover more results per page",
+            effective_search_limit(limit)
+        );
     }
 
     eprintln!("\nTotal: {} items fetched", all_items.len());
