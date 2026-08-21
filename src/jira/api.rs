@@ -579,28 +579,31 @@ pub async fn remove_link(
         // absolute rather than relative to this issue: taking one of them as
         // "the other end" is a guess, and this guess decides a delete.
         if has_outward && has_inward {
-            unreadable.push("names an issue at both ends");
-            continue;
-        }
-
-        // One side, and it did not say which issue — or no side at all.
-        // Either way the entry may be the second link to this one that would
-        // make the removal a guess.
-        if !names_target {
-            unreadable.push("names no issue");
+            unreadable.push("carries both ends");
             continue;
         }
 
         // Direction is part of the match, not a tie-break. `add` puts the
         // source on the outward side, so on this issue the link it created
-        // names the other one through `outwardIssue`; a link running the other
-        // way is a different link, removed from the issue that is its source.
-        // Settling it here settles the entry whatever its type turns out to be
-        // — it is not removable from this issue under any of them — so a type
-        // the response left out is only ever weighed below, where it could
-        // still change the answer.
-        if !has_outward {
-            reverse += 1;
+        // carries the other one as `outwardIssue`; an entry with only an
+        // inward side runs the other way and is removed from the issue it
+        // starts at. Carrying that side settles the entry whatever the rest of
+        // it says, so nothing below is read for it — and it joins the links
+        // running the other way only where it said which issue it is between,
+        // which is the only form that count is claimed in.
+        if has_inward {
+            if inward_key == Some(target_key) {
+                reverse += 1;
+            }
+            continue;
+        }
+
+        // An outward side that did not say which issue, or no side at all —
+        // and with no side there is no direction to read either. Either way
+        // the entry may be the second link from here to the issue asked
+        // about, which is what would make the removal a guess.
+        if !names_target {
+            unreadable.push("names no issue");
             continue;
         }
 
@@ -659,7 +662,7 @@ pub async fn remove_link(
             target_key
         ),
         0 => anyhow::bail!(
-            "No link found between {} and {}{}. Links name the key an issue has now, so a key \
+            "No link runs from {} to {}{}. Links name the key an issue has now, so a key \
              left over from a renamed project will not match one.",
             source_key,
             target_key,
@@ -1534,7 +1537,7 @@ mod tests {
                 .unwrap_err()
                 .to_string();
             assert!(
-                err.contains("left the question open (names an issue at both ends)"),
+                err.contains("left the question open (carries both ends)"),
                 "{entry}: {err}"
             );
         }
@@ -1570,7 +1573,7 @@ mod tests {
                 .unwrap_err()
                 .to_string();
             assert!(
-                err.contains("left the question open (names an issue at both ends)"),
+                err.contains("left the question open (carries both ends)"),
                 "{second_side}: {err}"
             );
         }
@@ -1866,7 +1869,7 @@ mod tests {
             .await
             .unwrap_err()
             .to_string();
-        assert!(err.contains("No link found"), "{err}");
+        assert!(err.contains("No link runs from"), "{err}");
     }
 
     /// Once the description is a string, an exclude naming a key inside it has
