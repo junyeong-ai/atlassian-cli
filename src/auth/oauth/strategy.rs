@@ -62,23 +62,30 @@ pub struct OAuthStrategy {
     tokens: Mutex<TokenSet>,
 }
 
-/// The message for a pin that differs from the logged-in session only in case.
+/// The cloud id a resumed session will use: the pin where there is one, else
+/// what the session stored.
 ///
-/// The pin wins over what the session stored, and that is right — it is how a
-/// profile is repointed. But the gateway resolves a cloud id byte for byte: it
-/// answers 404, the same as for a tenant that does not exist, for any letter
-/// cased differently. Login refuses such a pin against the sites the grant
-/// covers; one edited afterwards has no login to pass, so it would reach every
-/// request and report not found. Both strings are already in hand here, so the
-/// one case this can name for free is named.
-fn case_only_pin_conflict(pinned: Option<&str>, stored: Option<&str>) -> Option<String> {
-    let (pinned, stored) = (pinned?, stored?);
-    (pinned != stored && pinned.eq_ignore_ascii_case(stored)).then(|| {
-        format!(
+/// The refusal is part of the resolution rather than a guard beside it, so it
+/// cannot be dropped without dropping the answer. The pin winning is right — it
+/// is how a profile is repointed — but the gateway resolves a cloud id byte for
+/// byte, answering 404, the same as for a tenant that does not exist, for any
+/// letter cased differently. `auth login` refuses such a pin against the sites
+/// the grant covers; one edited afterwards has no login left to pass, so it
+/// would reach every request. Both strings are in hand here, so the one case
+/// this can name for free is named.
+fn resolve_stored_cloud_id(pinned: Option<&str>, stored: Option<&str>) -> Result<String> {
+    if let (Some(pinned), Some(stored)) = (pinned, stored)
+        && pinned != stored
+        && pinned.eq_ignore_ascii_case(stored)
+    {
+        bail!(
             "cloud_id is pinned to {pinned}, which differs only in case from the {stored} this \
              session was logged in against. Atlassian matches it exactly — use the stored form."
-        )
-    })
+        );
+    }
+    pinned.or(stored).map(str::to_string).context(
+        "OAuth tokens are missing cloud_id. Run `atlassian-cli auth login` to re-discover.",
+    )
 }
 
 impl OAuthStrategy {
@@ -116,18 +123,8 @@ impl OAuthStrategy {
                 )
             })?
             .tokens;
-        if let Some(conflict) =
-            case_only_pin_conflict(params.cloud_id.as_deref(), tokens.cloud_id.as_deref())
-        {
-            bail!(conflict);
-        }
-        let cloud_id = params
-            .cloud_id
-            .clone()
-            .or_else(|| tokens.cloud_id.clone())
-            .context(
-                "OAuth tokens are missing cloud_id. Run `atlassian-cli auth login` to re-discover.",
-            )?;
+        let cloud_id =
+            resolve_stored_cloud_id(params.cloud_id.as_deref(), tokens.cloud_id.as_deref())?;
         // Defense in depth: the cloud_id is interpolated into the proxy path.
         // Validate here so neither a pinned config value (reached via
         // `load_without_validation`) nor a tampered `credentials.json` can
@@ -226,16 +223,31 @@ mod tests {
         let stored = "00e6196b-8845-46cb-bb2b-85ed696dafcd";
         // The ordinary cases: no pin, an identical pin, a pin naming another
         // site. Only the last is a repointing, and none of the three is this.
-        assert!(super::case_only_pin_conflict(None, Some(stored)).is_none());
-        assert!(super::case_only_pin_conflict(Some(stored), Some(stored)).is_none());
-        assert!(super::case_only_pin_conflict(Some("other-site-id"), Some(stored)).is_none());
-        assert!(super::case_only_pin_conflict(Some(stored), None).is_none());
+        assert_eq!(
+            super::resolve_stored_cloud_id(None, Some(stored)).unwrap(),
+            stored
+        );
+        assert_eq!(
+            super::resolve_stored_cloud_id(Some(stored), Some(stored)).unwrap(),
+            stored
+        );
+        // A pin naming another site is a repointing, and it wins.
+        assert_eq!(
+            super::resolve_stored_cloud_id(Some("other-site-id"), Some(stored)).unwrap(),
+            "other-site-id"
+        );
+        assert_eq!(
+            super::resolve_stored_cloud_id(Some(stored), None).unwrap(),
+            stored
+        );
+        assert!(super::resolve_stored_cloud_id(None, None).is_err());
 
-        let message = super::case_only_pin_conflict(
+        let message = super::resolve_stored_cloud_id(
             Some("00E6196B-8845-46CB-BB2B-85ED696DAFCD"),
             Some(stored),
         )
-        .expect("a case-only difference is the one this names");
+        .unwrap_err()
+        .to_string();
         assert!(message.contains("only in case"), "{message}");
         assert!(message.contains(stored), "{message}");
     }
