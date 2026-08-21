@@ -850,9 +850,11 @@ impl Config {
     /// stat as absent runs the command against a parent directory's site
     /// instead of the one the user put in this one.
     pub fn project_config_path() -> Result<Option<PathBuf>> {
-        let Ok(current) = std::env::current_dir() else {
-            return Ok(None);
-        };
+        // A working directory that cannot be read is not a directory tree with
+        // no project config in it — and answering `None` would run the command
+        // against the global configuration instead.
+        let current = std::env::current_dir()
+            .context("Failed to read the working directory while looking for a project config")?;
         let mut dir = current.as_path();
 
         loop {
