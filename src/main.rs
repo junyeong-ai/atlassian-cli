@@ -2147,8 +2147,6 @@ mod tests {
     #[cfg(unix)]
     use atlassian_cli::dist::skill;
 
-    /// An installation whose every path lands under a temporary home, so the
-    /// removal steps can run for real without touching the machine.
     /// A successor that answers `self --help` and one that does not. The
     /// second is what `--version <old>` installs, and the report has to say
     /// the deployed skill was left alone rather than name a subcommand that
@@ -2182,8 +2180,10 @@ mod tests {
         }
     }
 
-    /// An installation whose binary is a placeholder file. Tests that let
-    /// `self_uninstall` reach the binary are `#[cfg(unix)]` for it: on Windows
+    /// An installation whose every path lands under a temporary home, so the
+    /// removal steps can run for real without touching the machine. Its binary
+    /// is a placeholder file, which is why the tests that let `self_uninstall`
+    /// reach the binary are `#[cfg(unix)]`: on Windows
     /// `self_replace::self_delete_at` removes a file by spawning a copy of it
     /// that waits for this process to exit, so it needs a real self-replace
     /// executable in the first place and would finish after the test either
