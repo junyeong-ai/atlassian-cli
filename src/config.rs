@@ -27,9 +27,6 @@ const ENV_CLOUD_ID: &str = "ATLASSIAN_CLOUD_ID";
 /// Field precedence (per method):
 ///   - Each field is picked as `cli.or(env).or(file)`, yielding missing-field
 ///     errors that name all three sources.
-///
-/// All logic that used to live in separate `apply_env_*` / `apply_cli_*`
-/// helpers plus the ad-hoc method-switch branch is unified here.
 struct AuthResolver<'a> {
     file_auth: Option<&'a AuthConfig>,
     cli: &'a CliOverrides,

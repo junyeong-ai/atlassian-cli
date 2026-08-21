@@ -557,8 +557,8 @@ pub async fn remove_link(
         // source on the outward side, so on this issue the link it created
         // names the other one through `outwardIssue`; a link running the other
         // way is a different link, removed from the issue that is its source.
-        // Deciding this only where several matched is how a lone reverse link
-        // was deleted for a request that never named it.
+        // Deciding it only where several matched is how a lone reverse link
+        // ends up deleted for a request that never named it.
         let inward_only = link["outwardIssue"]["key"].as_str().is_none();
         let key_excludes = other_key.is_some_and(|k| k != target_key);
         let type_excludes = link_type.is_some_and(|t| type_name.is_some_and(|n| n != t));
@@ -1457,9 +1457,9 @@ mod tests {
             .expect("the outward link is the one `add` would have made");
     }
 
-    /// The pair and the type are everything this command takes. Two links that
-    /// agree on both and on direction leave it nothing to choose by, and the
-    /// old code took whichever the response listed first.
+    /// The pair and the type are everything this command takes, so two links
+    /// that agree on both and on direction leave it nothing to choose by.
+    /// Removing either would be a guess about which one the caller meant.
     #[tokio::test]
     async fn integ_remove_link_refuses_two_links_it_cannot_tell_apart() {
         let server = MockServer::start().await;
@@ -1572,9 +1572,9 @@ mod tests {
         assert!(err.contains("No link found"), "{err}");
     }
 
-    /// The single-issue read had the same ordering as the comment list did:
-    /// once the description is a string, an exclude naming a key inside it has
-    /// nothing left to match.
+    /// Once the description is a string, an exclude naming a key inside it has
+    /// nothing left to match, so the filter has to run while the ADF is still
+    /// an object.
     #[tokio::test]
     async fn integ_an_issue_is_filtered_before_its_description_becomes_a_string() {
         let server = MockServer::start().await;
@@ -1607,9 +1607,9 @@ mod tests {
         );
     }
 
-    /// `adf_to_markdown` turns the body object into a string, so a key the
-    /// caller excluded would no longer be there to exclude. Filtering has to
-    /// come first, as it did before the filter moved out of `paginate`.
+    /// `adf_to_markdown` turns the body object into a string, and a key the
+    /// caller excluded is not there to exclude once it is one. Filtering comes
+    /// first for the same reason the single-issue read does it first.
     #[tokio::test]
     async fn integ_comments_are_filtered_before_the_body_becomes_a_string() {
         let server = MockServer::start().await;
