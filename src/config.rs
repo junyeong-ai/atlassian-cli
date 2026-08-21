@@ -1969,7 +1969,7 @@ domain = "x.atlassian.net"
     /// directory's site instead of the one the user put in this one.
     #[cfg(unix)]
     #[test]
-    fn a_project_config_that_will_not_stat_is_not_absent() {
+    fn a_dangling_project_config_link_is_something_at_the_path() {
         let dir = tempfile::tempdir().unwrap();
         let candidate = dir.path().join(".atlassian.toml");
         std::fs::write(&candidate, "").unwrap();

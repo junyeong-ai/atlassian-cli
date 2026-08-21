@@ -563,11 +563,19 @@ pub async fn remove_link(
     Ok(json!({}))
 }
 
-/// The links on an issue, as the array both the `get links` envelope and
-/// `remove_link` read. A link-free issue still carries `[]`; the field goes
-/// missing only where the site has issue linking turned off, which is what the
-/// error says — reading it as "no links on this issue" would have `remove_link`
-/// report nothing to remove on an issue that has links.
+/// The links on an issue, as the API gave them.
+///
+/// Unfiltered, because `remove_link` decides which link to delete by reading
+/// `type.name` and the other issue's `key` off these: `response_exclude_fields`
+/// is a cosmetic setting for reads, and a name in it matching one of those
+/// would have the match fail and the command report no such link on an issue
+/// that has one. `get links` filters the items it returns instead, which is
+/// where filtering was always for.
+///
+/// A link-free issue still carries `[]`; the field goes missing only where the
+/// site has issue linking turned off, which is what the error says — reading
+/// that as "no links on this issue" would have `remove_link` report nothing to
+/// remove for the same reason.
 async fn fetch_links(issue_key: &str, client: &ApiClient) -> Result<Vec<Value>> {
     let url = format!(
         "/rest/api/3/issue/{}?fields=issuelinks",
@@ -577,14 +585,17 @@ async fn fetch_links(issue_key: &str, client: &ApiClient) -> Result<Vec<Value>> 
     let request = client.get(Service::Jira, &url).await?;
     let response = client.execute("get links", request).await?;
 
-    let mut data: Value = response.json().await?;
-    filter::apply(&mut data, client.config());
+    let data: Value = response.json().await?;
     require_array(&data, "/fields/issuelinks", "get links")
         .context("a site with issue linking turned off carries no 'issuelinks' field")
 }
 
 pub async fn get_links(issue_key: &str, client: &ApiClient) -> Result<Value> {
-    Ok(json!({ "items": fetch_links(issue_key, client).await? }))
+    let mut items = fetch_links(issue_key, client).await?;
+    for item in &mut items {
+        filter::apply(item, client.config());
+    }
+    Ok(json!({ "items": items }))
 }
 
 pub async fn get_transitions(issue_key: &str, client: &ApiClient) -> Result<Value> {
@@ -1372,6 +1383,41 @@ mod tests {
             .to_string();
 
         assert!(err.contains("no 'transitions' array"), "{err}");
+    }
+
+    /// `response_exclude_fields` trims what a read prints. `remove_link` picks
+    /// its link by `type.name` and the other issue's `key`, so reading those
+    /// off a trimmed body would have the match fail and the command report no
+    /// such link on an issue that has one — an absence the setting invented.
+    #[tokio::test]
+    async fn integ_remove_link_matches_on_what_the_api_sent() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/PROJ-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "fields": { "issuelinks": [{
+                    "id": "77",
+                    "type": { "name": "Blocks" },
+                    "outwardIssue": { "key": "PROJ-2" }
+                }]}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/issueLink/77"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut config = crate::test_utils::create_test_config();
+        config.optimization.response_exclude_fields = Some(vec!["type".to_string()]);
+        let client = crate::test_utils::mock_client_with_config(server.uri(), config);
+
+        remove_link("PROJ-1", "PROJ-2", Some("Blocks"), &client)
+            .await
+            .expect("the link the API reported was there");
     }
 
     /// `response_exclude_fields` is the caller's, so a name in it that matches

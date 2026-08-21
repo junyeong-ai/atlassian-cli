@@ -2154,8 +2154,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_successor_without_self_leaves_the_deployed_skill_alone() {
-        use atlassian_cli::dist::skill;
-
         for (script, expected) in [
             ("#!/bin/sh\nexit 0\n", "redeployed"),
             (

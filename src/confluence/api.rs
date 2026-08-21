@@ -539,6 +539,16 @@ impl<'a> ThreadWalk<'a> {
             anyhow::bail!("Failed to {what}: comment {id} is reachable from itself");
         }
 
+        // The response filter trims what the API sent; the four fields below
+        // are the walk's own answers, and `location` is what makes an id this
+        // module hands out a complete address. Filtering first is what keeps a
+        // caller's `response_exclude_fields` from taking them — `get_comment`
+        // stamps after filtering for the same reason.
+        filter::apply(comment, self.client.config());
+        let Some(object) = comment.as_object_mut() else {
+            anyhow::bail!("Failed to {what}: a comment was not a JSON object");
+        };
+
         object.insert("location".into(), json!(self.family.label()));
         object.insert("depth".into(), json!(depth));
         object.insert(
@@ -553,8 +563,12 @@ impl<'a> ThreadWalk<'a> {
 }
 
 /// Wrap a flattened comment listing in the standard envelope.
-fn comment_envelope(items: Vec<Value>, as_markdown: bool, client: &ApiClient) -> Value {
-    let mut envelope = v2_list_envelope(items, client);
+///
+/// Unlike `v2_list_envelope` this does not filter: `ThreadWalk::admit` already
+/// filtered each comment before stamping the fields the walk determined, and
+/// filtering again here would remove exactly those.
+fn comment_envelope(items: Vec<Value>, as_markdown: bool) -> Value {
+    let mut envelope = json!({ "items": items });
     if as_markdown && let Some(comments) = envelope["items"].as_array_mut() {
         convert_comments_to_markdown(comments);
     }
@@ -591,7 +605,7 @@ pub async fn get_comments(
                 .await?,
         );
     }
-    Ok(comment_envelope(items, as_markdown, client))
+    Ok(comment_envelope(items, as_markdown))
 }
 
 /// List everything below one comment.
@@ -615,7 +629,7 @@ pub async fn get_comment_replies(
     let items = ThreadWalk::new(client, family, None, true)
         .collect("get replies", roots, Some(comment_id))
         .await?;
-    Ok(comment_envelope(items, as_markdown, client))
+    Ok(comment_envelope(items, as_markdown))
 }
 
 /// Fetch one comment by id.
@@ -855,21 +869,22 @@ async fn fetch_all_v2_results(
         // A v2 list page always carries a `results` array; its absence on a 2xx
         // means schema drift or a wrong-shaped response. Bail rather than
         // silently returning a short list — the same posture as the Jira-side
-        // `paginate_values` helper.
+        // `paginate` helper.
         let data: Value = response.json().await?;
         let page = data["results"].as_array().ok_or_else(|| {
             anyhow::anyhow!("Failed to {}: response had no 'results' array", what)
         })?;
         results.extend(page.iter().cloned());
 
-        // As above: absent, null or empty ends the collection; a `next` of any
-        // other shape is drift rather than an answer.
+        // As above: absent or null is v2's end-of-list signal and nothing else
+        // is. An empty string is not it — the v1 walk and the Jira token walk
+        // both refuse one, and a completeness claim drawn from an undocumented
+        // shape is the short list this walk exists to prevent.
         let candidate = &data["_links"]["next"];
         if candidate.is_null() {
             return Ok(results);
         }
         match candidate.as_str() {
-            Some("") => return Ok(results),
             Some(link) => next = Some(trail.step(what, link)?),
             None => anyhow::bail!("Failed to {what}: '_links.next' was not a string: {candidate}"),
         }
@@ -2962,6 +2977,65 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("was not a string"), "unexpected error: {err}");
+    }
+
+    /// `location` is what makes an id this module hands out a complete address,
+    /// and `depth`/`parentCommentId` are how a caller rebuilds the thread. They
+    /// are the walk's answers, not the API's, so the response filter must not
+    /// be able to take them — as it cannot from `comment get`.
+    #[tokio::test]
+    async fn integ_the_walk_stamps_survive_the_response_filter() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/api/v2/pages/9/footer-comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{ "id": "r1", "title": "root", "avatarUrls": { "16x16": "u" } }]
+            })))
+            .mount(&server)
+            .await;
+
+        let mut config = crate::test_utils::create_test_config();
+        config.optimization.response_exclude_fields = Some(vec![
+            "location".to_string(),
+            "depth".to_string(),
+            "parentCommentId".to_string(),
+            "pageId".to_string(),
+            "avatarUrls".to_string(),
+        ]);
+        let client = crate::test_utils::mock_client_with_config(server.uri(), config);
+
+        let result = get_comments("9", &[CommentFamily::Footer], false, false, &client)
+            .await
+            .unwrap();
+        let item = &result["items"][0];
+        assert_eq!(item["location"], "footer", "{result}");
+        assert_eq!(item["depth"], 0, "{result}");
+        assert_eq!(item["parentCommentId"], Value::Null, "{result}");
+        assert_eq!(item["pageId"], "9", "{result}");
+        // What the filter is actually for still goes.
+        assert!(item.get("avatarUrls").is_none(), "{result}");
+    }
+
+    /// v2's end-of-list signal is an absent or null `next` and nothing else.
+    /// An empty string is not it, and treating one as the end would report the
+    /// pages fetched so far as the whole collection — which is what the v1 and
+    /// Jira walks already refuse.
+    #[tokio::test]
+    async fn integ_list_refuses_an_empty_next_instead_of_calling_it_the_end() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/api/v2/pages/9/labels"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{ "name": "a" }],
+                "_links": { "next": "" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = get_labels("9", &client).await.unwrap_err().to_string();
+        assert!(err.contains("no path"), "unexpected error: {err}");
     }
 
     /// The v2 half of the same distinction.
