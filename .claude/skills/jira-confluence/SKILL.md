@@ -1,6 +1,6 @@
 ---
 name: jira-confluence
-version: 0.10.0
+version: 0.10.1
 description: Run Jira/Confluence operations through atlassian-cli — JQL/CQL search, issue CRUD, comments, transitions, issue links, worklogs, watchers, sprint/board/epic moves; Confluence page CRUD, comment threads (footer and inline, replies included), labels, content properties, spaces, and attachment upload, with ADF/HTML body editing. Also handles OAuth sign-in flows (`auth login/status/refresh`) when the user reports an auth problem or asks to switch accounts, and the tool's own installation (`self status/update/skill install`).
 when_to_use: Trigger on Jira tickets, Confluence pages, sprint planning, time logging, "내 이슈", "위키 검색", auth trouble or account switching, updating atlassian-cli itself, or any Atlassian workspace request.
 allowed-tools: Bash
