@@ -737,6 +737,15 @@ pub async fn remove_link(
         matching.push(link);
     }
 
+    // The way through any refusal below, worked out once because the rule is
+    // the same for all of them: an entry that went unread is a candidate whose
+    // id this walk never saw, so wherever there is one the ids it did read are
+    // not the whole of what to choose between.
+    let choose_by_id = by_id_advice(
+        source_key,
+        unreadable.is_empty().then_some(matching.as_slice()),
+    );
+
     // Where two the walk could read already match, an entry it could not read
     // changes nothing: the command cannot choose among the ones it has, and
     // saying the question cannot be told would be saying it of a question
@@ -763,7 +772,7 @@ pub async fn remove_link(
                      cannot be told, and this command removes only where there is one"
                 )
             },
-            by_id_advice(source_key, None)
+            choose_by_id
         );
     }
 
@@ -826,7 +835,7 @@ pub async fn remove_link(
                 found,
                 source_key,
                 target_key,
-                by_id_advice(source_key, Some(&matching))
+                choose_by_id
             ),
             Some(t) => anyhow::bail!(
                 "{} from {} to {} with type '{}'. This command removes by issue pair and \
@@ -835,7 +844,7 @@ pub async fn remove_link(
                 source_key,
                 target_key,
                 t,
-                by_id_advice(source_key, Some(&matching))
+                choose_by_id
             ),
         },
     }
@@ -849,10 +858,10 @@ pub async fn remove_link(
 
 /// The way through a refusal that could not settle on one link.
 ///
-/// `among` is the set the caller offers a choice from. Their ids are named
-/// only where the choice is among those alone and every one of them carried a
-/// readable id: an entry that went unread is a candidate whose id this walk
-/// never saw, and a list without it reads as the whole of them.
+/// `among` is the set the caller may offer a choice from, where there is one.
+/// Their ids are named only where every one of them carried a readable id — a
+/// list short by the match whose id could not be read offers a choice that
+/// leaves that one out, the same way one short by an unread entry would.
 fn by_id_advice(source_key: &str, among: Option<&[&Value]>) -> String {
     let ids = among.and_then(|links| {
         links
@@ -3101,6 +3110,39 @@ mod tests {
         assert!(err.contains("--id"), "{err}");
         assert!(err.contains("jira link list A-1"), "{err}");
         assert!(!err.contains("10001"), "{err}");
+    }
+
+    /// Two matches settle the refusal without the unread entry being read, but
+    /// they do not settle what there is to choose between: that entry may be a
+    /// third link from here to the same issue, and naming the two ids offers a
+    /// choice that leaves it out.
+    #[tokio::test]
+    async fn integ_remove_link_names_no_ids_where_an_entry_went_unread_beside_two_matches() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/A-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "fields": {
+                    "issuelinks": [
+                        { "id": "1", "type": { "name": "Blocks" }, "outwardIssue": { "key": "B-1" } },
+                        { "id": "2", "type": { "name": "Blocks" }, "outwardIssue": { "key": "B-1" } },
+                        { "id": "3", "type": { "name": "Blocks" }, "outwardIssue": "not an issue" }
+                    ]
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        for link_type in [None, Some("Blocks")] {
+            let err = remove_link("A-1", "B-1", link_type, &client)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("at least 2 links"), "{err}");
+            assert!(err.contains("jira link list A-1"), "{err}");
+            assert!(!err.contains("(1, 2)"), "{err}");
+        }
     }
 
     /// The same rule one step in: the choice is among the matches alone, and
