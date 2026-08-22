@@ -106,9 +106,14 @@ spells the separator the same way so both builders read identically.
   `~/.config/atlassian-cli/credentials.json` (0600, atomic via tempfile).
   `load` returns `LoadedTokens { tokens, backend }` so callers report
   provenance without a second store query. Per-profile keyed.
-  `ATLASSIAN_NO_KEYCHAIN` (truthy) bypasses the keychain entirely — `keychain`
-  answers `Forbidden` without touching it, so reads and writes use the file
-  store and a delete reports the file half alone.
+  Which backends a store has is a `KeychainAccess` field on it, not a reading
+  of the environment: `TokenStore::new` takes the machine's answer from
+  `KeychainAccess::from_env`, `TokenStore::at` names both backends, and every
+  operation acts on the field. `Forbidden` — what `ATLASSIAN_NO_KEYCHAIN`
+  (truthy) resolves to — makes `keychain` answer without touching the store, so
+  reads and writes use the file and a delete reports the file half alone. The
+  field is what lets that path be driven against a keychain that does hold the
+  profile's session, which is where its promise is held.
   This is for headless / AI-agent sessions on a desktop OS where the keychain
   prompts with a blocking GUI dialog. Explicit opt-out only; no auto-detection.
   **It is a per-environment setting, not a per-call toggle.** Because the flag
@@ -190,9 +195,10 @@ spells the separator the same way so both builders read identically.
   round trip when the cache is stale. Refresh tokens **rotate** on every
   use; the merged set replaces the stored one atomically.
 - OAuth redirect URI must use `127.0.0.1` literally, never `localhost`.
-- `OAuthStrategy::login` returns `LoginOutcome` only. The runtime
-  `profile` (storage key) is a separate argument so `OAuthParams` holds
-  pure config data.
+- `OAuthStrategy::login` returns `LoginOutcome` only. It takes the
+  `TokenStore` rather than a profile name, so `OAuthParams` holds pure config
+  data and the strategy never decides where tokens live — the caller that knows
+  which machine or installation this is does.
 
 ## Scoped-token specifics
 

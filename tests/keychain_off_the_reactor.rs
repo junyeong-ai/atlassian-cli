@@ -85,23 +85,19 @@ impl CredentialStoreApi for BlockingStore {
     }
 }
 
-/// `ATLASSIAN_NO_KEYCHAIN` short-circuits the dispatcher before the store below
-/// is ever asked, which would leave this test asserting nothing. It is checked
-/// rather than rewritten — writing the environment is sound only in a
-/// single-threaded process, and the harness has already spawned a thread by the
-/// time a test body runs.
+/// Both backends are named rather than taken from the machine: the keychain
+/// this drives is the store above, and the file is one in a directory that
+/// goes with the test.
 #[tokio::test(flavor = "multi_thread")]
 async fn enumerating_never_reads_an_entry_on_the_reactor() {
-    assert!(
-        !atlassian_cli::auth::keychain_opt_out(),
-        "ATLASSIAN_NO_KEYCHAIN is set, which disables the path this test drives — \
-         unset it to run the suite"
-    );
     keyring_core::set_default_store(Arc::new(BlockingStore));
     let dir = tempfile::tempdir().unwrap();
 
-    let stored =
-        atlassian_cli::auth::stored_profiles(Some(&dir.path().join("credentials.json"))).await;
+    let stored = atlassian_cli::auth::stored_profiles(
+        Some(&dir.path().join("credentials.json")),
+        atlassian_cli::auth::KeychainAccess::Allowed,
+    )
+    .await;
 
     assert!(stored.profiles.contains("stored"), "{:?}", stored.profiles);
 }

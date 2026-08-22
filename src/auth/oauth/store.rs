@@ -21,36 +21,49 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const KEYRING_SERVICE: &str = "atlassian-cli";
 
-/// `ATLASSIAN_NO_KEYCHAIN` bypasses the OS keychain entirely so token storage
-/// uses the 0600 file. On a desktop OS the keychain prompts with a GUI dialog
-/// that blocks indefinitely in a headless or AI-agent session; this explicit
-/// opt-out (no heuristic auto-detection) lets those callers skip it. Blank /
-/// `0` / `false` count as unset, consistent with the project's blank-value
-/// policy for the rest of the env surface.
-fn keychain_disabled() -> bool {
-    // `.ok()` folds `VarError::NotUnicode` in with `NotPresent`, as
-    // `config::non_blank_env` does: bytes that are not UTF-8 are none of the
-    // values below, and reading them as unset leaves the keychain in play
-    // rather than silently suppressing it on malformed input.
-    keychain_disabled_from(std::env::var("ATLASSIAN_NO_KEYCHAIN").ok().as_deref())
+/// Whether a store may consult the OS keychain.
+///
+/// A value rather than a reading of the environment, for the same reason a
+/// store's fallback file is a path rather than a derivation of one: it decides
+/// which backends a store has, and a caller that must not reach this machine's
+/// must be able to say so. `TokenStore::new` is where the machine's answer is
+/// taken.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeychainAccess {
+    Allowed,
+    /// `ATLASSIAN_NO_KEYCHAIN` is set. A session stored before the flag is
+    /// still in there and every operation says so rather than reporting the
+    /// file store's answer as the whole of it.
+    Forbidden,
 }
 
-/// Whether the opt-out is in force, for a caller reporting what was not done.
-/// This is the same answer every operation here acts on, not a second reading
-/// of the environment.
-pub fn keychain_opt_out() -> bool {
-    keychain_disabled()
-}
+impl KeychainAccess {
+    /// What this machine allows.
+    ///
+    /// On a desktop OS the keychain prompts with a GUI dialog that blocks
+    /// indefinitely in a headless or AI-agent session; the opt-out is explicit
+    /// (no heuristic auto-detection) so those callers can skip it. Blank / `0`
+    /// / `false` count as unset, consistent with the project's blank-value
+    /// policy for the rest of the env surface.
+    pub fn from_env() -> Self {
+        // `.ok()` folds `VarError::NotUnicode` in with `NotPresent`, as
+        // `config::non_blank_env` does: bytes that are not UTF-8 are none of
+        // the values below, and reading them as unset leaves the keychain in
+        // play rather than silently suppressing it on malformed input.
+        Self::from_opt_out(std::env::var("ATLASSIAN_NO_KEYCHAIN").ok().as_deref())
+    }
 
-/// Pure parsing of the opt-out value, split out so it is testable without
-/// mutating process-global env (which would race the parallel test runner).
-fn keychain_disabled_from(value: Option<&str>) -> bool {
-    value
-        .map(|v| {
-            let v = v.trim();
-            !v.is_empty() && v != "0" && !v.eq_ignore_ascii_case("false")
-        })
-        .unwrap_or(false)
+    /// Pure parsing of the opt-out value, split out so it is testable without
+    /// mutating process-global env (which would race the parallel test runner).
+    fn from_opt_out(value: Option<&str>) -> Self {
+        let set = value
+            .map(|v| {
+                let v = v.trim();
+                !v.is_empty() && v != "0" && !v.eq_ignore_ascii_case("false")
+            })
+            .unwrap_or(false);
+        if set { Self::Forbidden } else { Self::Allowed }
+    }
 }
 
 /// What the keychain did, in the terms this tool reasons about.
@@ -103,12 +116,12 @@ impl<T> std::fmt::Display for Keychain<T> {
 /// is not: on Linux, reading one blocks on the session bus through a private
 /// tokio runtime, and `Runtime::block_on` panics on a thread already driving
 /// futures. Whatever a caller needs from an entry is read inside `op`.
-async fn keychain<T, F>(op: F) -> Keychain<T>
+async fn keychain<T, F>(access: KeychainAccess, op: F) -> Keychain<T>
 where
     F: FnOnce() -> std::result::Result<T, KeyringError> + Send + 'static,
     T: Send + 'static,
 {
-    if keychain_disabled() {
+    if access == KeychainAccess::Forbidden {
         return Keychain::Forbidden;
     }
     tokio::task::spawn_blocking(move || {
@@ -245,23 +258,39 @@ impl From<OnDisk> for TokenSet {
 pub struct TokenStore {
     profile: String,
     file_path: PathBuf,
+    keychain: KeychainAccess,
 }
 
 impl TokenStore {
+    /// The store this machine uses: both backends as the machine has them.
     pub fn new(profile: impl Into<String>) -> Result<Self> {
         Ok(Self {
             profile: profile.into(),
             file_path: default_file_path()?,
+            keychain: KeychainAccess::from_env(),
         })
     }
 
-    /// A store whose fallback file is named rather than derived, so a caller
+    /// A store whose backends are named rather than derived, so a caller
     /// holding an installation's paths uses those instead of the machine's.
-    pub fn at(profile: impl Into<String>, file_path: PathBuf) -> Self {
+    pub fn at(profile: impl Into<String>, file_path: PathBuf, keychain: KeychainAccess) -> Self {
         Self {
             profile: profile.into(),
             file_path,
+            keychain,
         }
+    }
+
+    /// The profile these tokens belong to.
+    pub fn profile(&self) -> &str {
+        &self.profile
+    }
+
+    /// Whether this store has the keychain among its backends, for a caller
+    /// reporting what it did not reach. The same value every operation here
+    /// acts on, not a second reading of the environment.
+    pub fn keychain(&self) -> KeychainAccess {
+        self.keychain
     }
 
     /// Save tokens. Tries keyring first; on any error falls back to the 0600
@@ -393,7 +422,10 @@ impl TokenStore {
         T: Send + 'static,
     {
         let profile = self.profile.clone();
-        keychain(move || Entry::new(KEYRING_SERVICE, &profile).and_then(|entry| op(&entry))).await
+        keychain(self.keychain, move || {
+            Entry::new(KEYRING_SERVICE, &profile).and_then(|entry| op(&entry))
+        })
+        .await
     }
 
     fn file_save(&self, json_for_profile: &str) -> Result<()> {
@@ -633,7 +665,10 @@ pub struct StoredProfiles {
 /// trusted: only entries that name this service are kept, and one that will not
 /// name itself makes the listing incomplete. Both halves report how complete
 /// they are beside the list rather than folded into it.
-pub async fn stored_profiles(credentials_file: Option<&std::path::Path>) -> StoredProfiles {
+pub async fn stored_profiles(
+    credentials_file: Option<&std::path::Path>,
+    keychain_access: KeychainAccess,
+) -> StoredProfiles {
     let mut profiles = BTreeSet::new();
     // `None` is a location this installation could not work out, not an empty
     // file: reading a bare `credentials.json` would take whatever the working
@@ -649,7 +684,7 @@ pub async fn stored_profiles(credentials_file: Option<&std::path::Path>) -> Stor
         },
     };
 
-    let keyring = match keychain(|| {
+    let keyring = match keychain(keychain_access, || {
         let (key, value) = search_spec();
         let entries = Entry::search(&HashMap::from([(key, value.as_str())]))?;
         let mut named = BTreeSet::new();
@@ -853,26 +888,28 @@ mod tests {
     }
 
     #[test]
-    fn keychain_opt_out_parsing() {
-        // Truthy → disabled
-        assert!(keychain_disabled_from(Some("1")));
-        assert!(keychain_disabled_from(Some("true")));
-        assert!(keychain_disabled_from(Some("TRUE")));
-        assert!(keychain_disabled_from(Some("yes")));
+    fn the_opt_out_value_decides_keychain_access() {
+        use KeychainAccess::{Allowed, Forbidden};
+        // Truthy → the file store alone
+        for set in ["1", "true", "TRUE", "yes"] {
+            assert_eq!(KeychainAccess::from_opt_out(Some(set)), Forbidden, "{set}");
+        }
         // Falsy / unset → keychain stays on (blank-value policy)
-        assert!(!keychain_disabled_from(None));
-        assert!(!keychain_disabled_from(Some("")));
-        assert!(!keychain_disabled_from(Some("   ")));
-        assert!(!keychain_disabled_from(Some("0")));
-        assert!(!keychain_disabled_from(Some("false")));
-        assert!(!keychain_disabled_from(Some("False")));
+        assert_eq!(KeychainAccess::from_opt_out(None), Allowed);
+        for unset in ["", "   ", "0", "false", "False"] {
+            assert_eq!(
+                KeychainAccess::from_opt_out(Some(unset)),
+                Allowed,
+                "{unset}"
+            );
+        }
     }
 
     #[test]
     fn file_save_load_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credentials.json");
-        let store = TokenStore::at("default", path.clone());
+        let store = TokenStore::at("default", path.clone(), KeychainAccess::Allowed);
 
         let on_disk = OnDisk::from(&fixture_tokens());
         let json = serde_json::to_string(&on_disk).unwrap();
@@ -894,7 +931,7 @@ mod tests {
     fn file_delete_clears_entry() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credentials.json");
-        let store = TokenStore::at("default", path.clone());
+        let store = TokenStore::at("default", path.clone(), KeychainAccess::Allowed);
 
         let json = serde_json::to_string(&OnDisk::from(&fixture_tokens())).unwrap();
         store.file_save(&json).unwrap();
@@ -913,7 +950,7 @@ mod tests {
         mock_keychain();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credentials.json");
-        let store = TokenStore::at("locked-read", path);
+        let store = TokenStore::at("locked-read", path, KeychainAccess::Allowed);
 
         let entry = Entry::new(KEYRING_SERVICE, "locked-read").unwrap();
         entry.set_password("{}").unwrap();
@@ -943,7 +980,7 @@ mod tests {
         let link = dir.path().join("credentials.json");
         std::os::unix::fs::symlink(dir.path().join("unmounted.json"), &link).unwrap();
 
-        let err = TokenStore::at("away-read", link)
+        let err = TokenStore::at("away-read", link, KeychainAccess::Allowed)
             .load()
             .await
             .unwrap_err()
@@ -962,7 +999,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let link = dir.path().join("credentials.json");
         std::os::unix::fs::symlink(dir.path().join("elsewhere.json"), &link).unwrap();
-        let store = TokenStore::at("refusing-file", link);
+        let store = TokenStore::at("refusing-file", link, KeychainAccess::Allowed);
 
         Entry::new(KEYRING_SERVICE, "refusing-file")
             .unwrap()
@@ -991,7 +1028,7 @@ mod tests {
         mock_keychain();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credentials.json");
-        let store = TokenStore::at("refusing-keychain", path.clone());
+        let store = TokenStore::at("refusing-keychain", path.clone(), KeychainAccess::Allowed);
 
         store
             .file_save(&serde_json::to_string(&OnDisk::from(&fixture_tokens())).unwrap())
@@ -1013,6 +1050,45 @@ mod tests {
             !path.exists(),
             "the file token survived a failed keychain delete"
         );
+    }
+
+    /// The whole of what the opt-out promises, held against a keychain that
+    /// does hold this profile's session: it is neither read nor cleared, and
+    /// the file store answers alone. Both halves are the documented reason the
+    /// flag is a per-environment setting rather than a per-call toggle, and
+    /// each is the shape of a real session — one resurrected by unsetting the
+    /// flag, one left behind by a logout under it.
+    #[tokio::test]
+    async fn a_store_forbidden_the_keychain_neither_reads_nor_clears_what_it_holds() {
+        mock_keychain();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        let machine = TokenStore::at("opted-out", path.clone(), KeychainAccess::Allowed);
+        let opted_out = TokenStore::at("opted-out", path.clone(), KeychainAccess::Forbidden);
+
+        assert_eq!(
+            machine.save(&fixture_tokens()).await.unwrap(),
+            TokenStorageBackend::Keyring
+        );
+
+        // Read: the keychain holds the session and this store does not reach it.
+        assert!(opted_out.load().await.unwrap().is_none());
+        // Write: it lands in the file, and the keychain still holds the older one.
+        assert_eq!(
+            opted_out.save(&fixture_tokens()).await.unwrap(),
+            TokenStorageBackend::File
+        );
+        // Clear: success, and the entry the flag forbade touching is still there.
+        opted_out.delete().await.unwrap();
+        assert_eq!(
+            machine.load().await.unwrap().unwrap().backend,
+            TokenStorageBackend::Keyring
+        );
+
+        // And an enumeration says it did not happen rather than reporting the
+        // file's profiles as the whole of what is stored.
+        let stored = stored_profiles(Some(&path), KeychainAccess::Forbidden).await;
+        assert_eq!(stored.keyring, KeyringEnumeration::Skipped);
     }
 
     /// The Windows spec interpolates the service name into a regex, so the name
@@ -1037,7 +1113,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credentials.json");
 
-        TokenStore::at("ours", path.clone())
+        TokenStore::at("ours", path.clone(), KeychainAccess::Allowed)
             .save(&fixture_tokens())
             .await
             .unwrap();
@@ -1046,7 +1122,7 @@ mod tests {
             .set_password("x")
             .unwrap();
 
-        let stored = stored_profiles(Some(&path)).await;
+        let stored = stored_profiles(Some(&path), KeychainAccess::Allowed).await;
         assert_eq!(stored.keyring, KeyringEnumeration::Listed);
         assert!(stored.profiles.contains("ours"), "{:?}", stored.profiles);
         assert!(!stored.profiles.contains("theirs"), "{:?}", stored.profiles);
@@ -1062,7 +1138,7 @@ mod tests {
         let path = dir.path().join("credentials.json");
         fs::write(&path, "{ not json").unwrap();
 
-        let stored = stored_profiles(Some(&path)).await;
+        let stored = stored_profiles(Some(&path), KeychainAccess::Allowed).await;
         assert!(
             stored
                 .file_error
@@ -1086,7 +1162,7 @@ mod tests {
         fs::write(&path, "{}").unwrap();
         fs::set_permissions(&closed, fs::Permissions::from_mode(0o000)).unwrap();
 
-        let stored = stored_profiles(Some(&path)).await;
+        let stored = stored_profiles(Some(&path), KeychainAccess::Allowed).await;
         fs::set_permissions(&closed, fs::Permissions::from_mode(0o700)).unwrap();
 
         assert!(
@@ -1109,7 +1185,7 @@ mod tests {
         fs::write(&real, "{}").unwrap();
         std::os::unix::fs::symlink(&real, &link).unwrap();
 
-        let err = TokenStore::at("linked-save", link.clone())
+        let err = TokenStore::at("linked-save", link.clone(), KeychainAccess::Allowed)
             .file_save("{}")
             .unwrap_err()
             .to_string();
@@ -1133,7 +1209,7 @@ mod tests {
 
         let token = serde_json::to_string(&OnDisk::from(&fixture_tokens())).unwrap();
 
-        let err = TokenStore::at("newcomer", path.clone())
+        let err = TokenStore::at("newcomer", path.clone(), KeychainAccess::Allowed)
             .file_save(&token)
             .unwrap_err();
 
@@ -1155,7 +1231,7 @@ mod tests {
         let link = dir.path().join("credentials.json");
         std::os::unix::fs::symlink(dir.path().join("unmounted.json"), &link).unwrap();
 
-        let err = TokenStore::at("away", link.clone())
+        let err = TokenStore::at("away", link.clone(), KeychainAccess::Allowed)
             .delete()
             .await
             .unwrap_err()
@@ -1196,7 +1272,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credentials.json");
-        let store = TokenStore::at("keyring-roundtrip", path);
+        let store = TokenStore::at("keyring-roundtrip", path, KeychainAccess::Allowed);
 
         let backend = store.save(&fixture_tokens()).await.unwrap();
         assert_eq!(backend, TokenStorageBackend::Keyring);
@@ -1218,8 +1294,8 @@ mod tests {
     fn file_multi_profile_isolation() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credentials.json");
-        let s1 = TokenStore::at("default", path.clone());
-        let s2 = TokenStore::at("work", path.clone());
+        let s1 = TokenStore::at("default", path.clone(), KeychainAccess::Allowed);
+        let s2 = TokenStore::at("work", path.clone(), KeychainAccess::Allowed);
 
         let t1 = fixture_tokens();
         let mut t2 = fixture_tokens();

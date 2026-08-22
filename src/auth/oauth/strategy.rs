@@ -1,7 +1,7 @@
 //! `AuthStrategy` impl for OAuth 3LO (user-delegated) auth.
 
 use super::flow::{self, FlowInputs};
-use super::store::{TokenSet, TokenStore};
+use super::store::{KeychainAccess, TokenSet, TokenStore};
 use crate::auth::strategy::{AuthStrategy, Identity, probe_myself};
 use crate::auth::{AuthMethod, TOKEN_REFRESH_BUFFER_SECS};
 use crate::client::{Service, proxy_url};
@@ -11,10 +11,9 @@ use secrecy::ExposeSecret;
 use tokio::sync::Mutex;
 
 /// Configuration for the OAuth flow. Mirrors the static fields of
-/// `AuthConfig::OAuth` — pure config data, no runtime context. The profile
-/// name (used as the token-storage key) is a separate runtime argument
-/// passed to `login`/`resume` so the same `OAuthParams` instance can be
-/// reused across profiles without confusion.
+/// `AuthConfig::OAuth` — pure config data, no runtime context. Where the
+/// tokens are kept is the `TokenStore` passed to `login`/`resume`, so the same
+/// `OAuthParams` instance can be reused across profiles without confusion.
 #[derive(Clone)]
 pub struct OAuthParams {
     pub client_id: String,
@@ -95,33 +94,33 @@ impl OAuthStrategy {
     /// after printing it; if a long-lived strategy is needed, call `resume`.
     pub async fn login(
         params: OAuthParams,
-        profile: &str,
+        store: TokenStore,
         api_http: &reqwest::Client,
         open_browser: bool,
     ) -> Result<flow::LoginOutcome> {
         let outcome = flow::login(&params.flow_inputs(), api_http, open_browser).await?;
-        let store = TokenStore::new(profile)?;
         let backend = store.save(&outcome.tokens).await?;
         tracing::debug!(
             "Saved OAuth tokens for profile '{}' via {}",
-            profile,
+            store.profile(),
             backend
         );
         Ok(outcome)
     }
 
-    /// Load persisted tokens for `profile`. Errors with a clear `auth login`
-    /// hint when no tokens are stored.
-    pub async fn resume(params: OAuthParams, profile: &str) -> Result<Self> {
-        let store = TokenStore::new(profile)?;
+    /// Load the tokens `store` holds. Errors with a clear `auth login` hint
+    /// when no tokens are stored.
+    pub async fn resume(params: OAuthParams, store: TokenStore) -> Result<Self> {
+        let profile = store.profile().to_string();
         let tokens = store
             .load()
             .await?
             .with_context(|| {
-                // Under the opt-out the keychain was not consulted, so this is
-                // the file store's answer and not the machine's: advising a
-                // login here would replace a session rather than reach one.
-                if crate::auth::keychain_opt_out() {
+                // Where the keychain is not one of this store's backends it was
+                // not consulted, so this is the file store's answer and not the
+                // machine's: advising a login here would replace a session
+                // rather than reach one.
+                if store.keychain() == KeychainAccess::Forbidden {
                     format!(
                         "No OAuth tokens in the file store for profile '{profile}', and \
                          ATLASSIAN_NO_KEYCHAIN forbade looking in the keychain. Unset it for \
@@ -149,7 +148,7 @@ impl OAuthStrategy {
         }
         Ok(Self {
             params,
-            profile: profile.to_string(),
+            profile,
             cloud_id,
             store,
             tokens: Mutex::new(tokens),

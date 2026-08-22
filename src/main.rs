@@ -826,7 +826,13 @@ async fn handle_self(cmd: SelfCommand) -> Result<serde_json::Value> {
 
     let installation = dist::Installation::detect()?;
     match cmd.subcommand {
-        SelfSubcommand::Status => self_status(&installation).await,
+        SelfSubcommand::Status => {
+            self_status(
+                &installation,
+                atlassian_cli::auth::KeychainAccess::from_env(),
+            )
+            .await
+        }
         SelfSubcommand::Update {
             version,
             force,
@@ -850,7 +856,14 @@ async fn handle_self(cmd: SelfCommand) -> Result<serde_json::Value> {
             if !yes {
                 anyhow::bail!("Uninstalling requires --yes");
             }
-            self_uninstall(&installation, keep_skill, keep_credentials, purge_config).await
+            self_uninstall(
+                &installation,
+                atlassian_cli::auth::KeychainAccess::from_env(),
+                keep_skill,
+                keep_credentials,
+                purge_config,
+            )
+            .await
         }
     }
 }
@@ -878,11 +891,12 @@ fn skill_report(dir: &std::path::Path) -> serde_json::Value {
 /// without changing anything when the running binary is already current.
 async fn self_status(
     installation: &atlassian_cli::dist::Installation,
+    keychain: atlassian_cli::auth::KeychainAccess,
 ) -> Result<serde_json::Value> {
     use atlassian_cli::dist;
 
     let credentials_file = installation.credentials_file();
-    let stored = stored_profiles_of(installation).await;
+    let stored = stored_profiles_of(installation, keychain).await;
     let config_file = installation.config_file();
     // Reported, not raised: this is the command a user runs after an uninstall
     // refused, and a path it cannot read is the answer they came for.
@@ -1064,6 +1078,7 @@ fn self_skill_remove(
 /// (`.atlassian.toml`) is never touched; it lives in the user's own repository.
 async fn self_uninstall(
     installation: &atlassian_cli::dist::Installation,
+    keychain: atlassian_cli::auth::KeychainAccess,
     keep_skill: bool,
     keep_credentials: bool,
     purge_config: bool,
@@ -1106,7 +1121,7 @@ async fn self_uninstall(
         // Every step from here can fail partway, and each one is irreversible,
         // so a failure has to say what it already did — "Permission denied"
         // alone reads as "nothing happened".
-        clear_stored_tokens(installation, &mut removed)
+        clear_stored_tokens(installation, keychain, &mut removed)
             .await
             .map_err(|e| already_removed(e, &removed))?
     };
@@ -1228,12 +1243,13 @@ fn already_removed(error: anyhow::Error, removed: &[serde_json::Value]) -> anyho
 /// with it anything that knows where those tokens are.
 async fn clear_stored_tokens(
     installation: &atlassian_cli::dist::Installation,
+    keychain: atlassian_cli::auth::KeychainAccess,
     removed: &mut Vec<serde_json::Value>,
 ) -> Result<serde_json::Value> {
     // Enumerate before removing anything: the file is where the file-backed
     // profiles are named, so deleting it first would leave them out of the
     // report even though they were cleared.
-    let stored = stored_profiles_of(installation).await;
+    let stored = stored_profiles_of(installation, keychain).await;
 
     if let Some(file) = installation.credentials_file()
         && atlassian_cli::auth::remove_credentials_file(&file)?
@@ -1282,11 +1298,13 @@ fn clear_stored_tokens_refusal(
 }
 
 /// The profiles this installation holds tokens for, read from its own paths
-/// rather than the running machine's.
+/// and the keychain it was told it may reach rather than the running
+/// machine's.
 async fn stored_profiles_of(
     installation: &atlassian_cli::dist::Installation,
+    keychain: atlassian_cli::auth::KeychainAccess,
 ) -> atlassian_cli::auth::StoredProfiles {
-    atlassian_cli::auth::stored_profiles(installation.credentials_file().as_deref()).await
+    atlassian_cli::auth::stored_profiles(installation.credentials_file().as_deref(), keychain).await
 }
 
 fn token_store(
@@ -1296,7 +1314,11 @@ fn token_store(
     let file = installation
         .credentials_file()
         .ok_or_else(|| anyhow::anyhow!("Failed to determine home directory"))?;
-    Ok(atlassian_cli::auth::TokenStore::at(profile, file))
+    Ok(atlassian_cli::auth::TokenStore::at(
+        profile,
+        file,
+        atlassian_cli::auth::KeychainAccess::from_env(),
+    ))
 }
 
 /// Clear a profile's stored session and say what was there.
@@ -1319,7 +1341,7 @@ async fn clear_session(store: &atlassian_cli::auth::TokenStore, profile: &str) -
             println!("Cleared profile '{profile}'; what was stored could not be read ({e:#}).")
         }
     }
-    if atlassian_cli::auth::keychain_opt_out() {
+    if store.keychain() == atlassian_cli::auth::KeychainAccess::Forbidden {
         println!(
             "  ATLASSIAN_NO_KEYCHAIN is set, so the keychain was not touched. Unset it and \
              re-run to clear a session stored there before the flag."
@@ -2077,7 +2099,8 @@ async fn handle_auth(
                 .connect_timeout(std::time::Duration::from_secs(10))
                 .build()?;
 
-            let outcome = OAuthStrategy::login(params, &config.profile, &http, !no_browser).await?;
+            let store = TokenStore::new(&config.profile)?;
+            let outcome = OAuthStrategy::login(params, store, &http, !no_browser).await?;
 
             println!("✓ Logged in (profile: {})", config.profile);
             if let Some(cid) = outcome.tokens.cloud_id.as_deref() {
@@ -2121,7 +2144,10 @@ async fn handle_auth(
             // a store that would not answer is one of those answers — for a
             // profile whose credentials come from config it is not even the
             // interesting one. `self status` carries the same fact as data.
-            let (session, unreadable) = match TokenStore::new(&config.profile)?.load().await {
+            let store = TokenStore::new(&config.profile)?;
+            let keychain_unread =
+                store.keychain() == atlassian_cli::auth::KeychainAccess::Forbidden;
+            let (session, unreadable) = match store.load().await {
                 Ok(session) => (session, None),
                 Err(e) => (None, Some(e)),
             };
@@ -2130,7 +2156,7 @@ async fn handle_auth(
             // keychain was not consulted, and a session stored there before the
             // flag is one this report neither read nor cleared — including
             // where a file-backed session is found and printed below.
-            if atlassian_cli::auth::keychain_opt_out() {
+            if keychain_unread {
                 println!(
                     "ATLASSIAN_NO_KEYCHAIN is set, so the keychain was not consulted; a session \
                      stored there before the flag is untouched — unset it for one run to see or \
@@ -2167,7 +2193,7 @@ async fn handle_auth(
                     // Not "not logged in" under the opt-out: the note above has
                     // already said the keychain went unread, and a session there
                     // is what `auth login` would shadow rather than reach.
-                    None if atlassian_cli::auth::keychain_opt_out() => println!(
+                    None if keychain_unread => println!(
                         "No session in the file store (profile: {}).",
                         config.profile
                     ),
@@ -2218,7 +2244,8 @@ async fn handle_auth(
             let config =
                 atlassian_cli::Config::load(config_path.as_ref(), profile.as_ref(), overrides)?;
             let params = config.oauth_params()?;
-            let strategy = OAuthStrategy::resume(params, &config.profile).await?;
+            let store = TokenStore::new(&config.profile)?;
+            let strategy = OAuthStrategy::resume(params, store).await?;
             let refreshed = strategy.force_refresh().await?;
             println!("✓ Token refreshed (profile: {})", config.profile);
             println!(
@@ -2233,6 +2260,7 @@ async fn handle_auth(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use atlassian_cli::auth::KeychainAccess;
     use atlassian_cli::dist::Installation;
     // Only the `#[cfg(unix)]` tests below deploy a skill.
     #[cfg(unix)]
@@ -2282,7 +2310,7 @@ mod tests {
         std::fs::write(&binary, "#!/bin/sh\nexit 0\n").unwrap();
         let installation = Installation::at(binary.clone(), None);
 
-        let report = self_uninstall(&installation, true, true, false)
+        let report = self_uninstall(&installation, KeychainAccess::Allowed, true, true, false)
             .await
             .expect("nothing home-managed was asked for");
 
@@ -2320,10 +2348,16 @@ mod tests {
                 vec!["the deployed skill", "the global config"],
             ),
         ] {
-            let err = self_uninstall(&installation, keep_skill, keep_credentials, purge_config)
-                .await
-                .unwrap_err()
-                .to_string();
+            let err = self_uninstall(
+                &installation,
+                KeychainAccess::Allowed,
+                keep_skill,
+                keep_credentials,
+                purge_config,
+            )
+            .await
+            .unwrap_err()
+            .to_string();
 
             assert!(err.contains("home directory"), "{err}");
             for what in named {
@@ -2419,7 +2453,7 @@ mod tests {
         write_config(&installation);
         skill::deploy(&installation.skill_dir().unwrap()).unwrap();
 
-        let report = self_uninstall(&installation, false, true, false)
+        let report = self_uninstall(&installation, KeychainAccess::Allowed, false, true, false)
             .await
             .unwrap();
 
@@ -2437,7 +2471,7 @@ mod tests {
         let installation = installation(home.path());
         skill::deploy(&installation.skill_dir().unwrap()).unwrap();
 
-        let report = self_uninstall(&installation, true, true, false)
+        let report = self_uninstall(&installation, KeychainAccess::Allowed, true, true, false)
             .await
             .unwrap();
 
@@ -2457,7 +2491,7 @@ mod tests {
         let credentials = installation.credentials_file().unwrap();
         std::fs::write(&credentials, "{}").unwrap();
 
-        let report = self_uninstall(&installation, true, true, true)
+        let report = self_uninstall(&installation, KeychainAccess::Allowed, true, true, true)
             .await
             .unwrap();
 
@@ -2476,7 +2510,7 @@ mod tests {
         let installation = installation(home.path());
         write_config(&installation);
 
-        let report = self_uninstall(&installation, true, true, true)
+        let report = self_uninstall(&installation, KeychainAccess::Allowed, true, true, true)
             .await
             .unwrap();
 
@@ -2500,7 +2534,7 @@ mod tests {
         std::os::unix::fs::symlink(&real, &dir).unwrap();
         std::fs::write(dir.join("config.toml"), "[default]\n").unwrap();
 
-        let report = self_uninstall(&installation, true, true, true)
+        let report = self_uninstall(&installation, KeychainAccess::Allowed, true, true, true)
             .await
             .unwrap();
 
@@ -2528,7 +2562,7 @@ mod tests {
         let stray = installation.config_dir().unwrap().join("notes.txt");
         std::fs::write(&stray, "mine").unwrap();
 
-        self_uninstall(&installation, true, true, true)
+        self_uninstall(&installation, KeychainAccess::Allowed, true, true, true)
             .await
             .unwrap();
 
@@ -2547,7 +2581,7 @@ mod tests {
 
         let bin_dir = installation.binary().parent().unwrap().to_path_buf();
         std::fs::set_permissions(&bin_dir, std::fs::Permissions::from_mode(0o500)).unwrap();
-        let err = self_uninstall(&installation, false, true, false)
+        let err = self_uninstall(&installation, KeychainAccess::Allowed, false, true, false)
             .await
             .unwrap_err();
         std::fs::set_permissions(&bin_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -2603,7 +2637,7 @@ mod tests {
         let installation = installation(home.path());
         write_credentials(&installation, &["default", "work"]);
 
-        let report = self_uninstall(&installation, true, false, false)
+        let report = self_uninstall(&installation, KeychainAccess::Allowed, true, false, false)
             .await
             .unwrap();
 
@@ -2667,7 +2701,7 @@ mod tests {
         std::fs::create_dir_all(dir.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(home.path().join("gone"), &dir).unwrap();
 
-        let report = self_uninstall(&installation, false, true, false)
+        let report = self_uninstall(&installation, KeychainAccess::Allowed, false, true, false)
             .await
             .unwrap();
 
@@ -2693,7 +2727,7 @@ mod tests {
         std::fs::write(&real, r#"{"default":{}}"#).unwrap();
         std::os::unix::fs::symlink(&real, &link).unwrap();
 
-        let err = self_uninstall(&installation, true, false, false)
+        let err = self_uninstall(&installation, KeychainAccess::Allowed, true, false, false)
             .await
             .unwrap_err();
 
@@ -2717,7 +2751,8 @@ mod tests {
         let dir = installation.config_dir().unwrap();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).unwrap();
 
-        let outcome = self_uninstall(&installation, true, false, false).await;
+        let outcome =
+            self_uninstall(&installation, KeychainAccess::Allowed, true, false, false).await;
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
 
         assert!(
@@ -2742,7 +2777,8 @@ mod tests {
         let parent = dir.parent().unwrap().to_path_buf();
         std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o000)).unwrap();
 
-        let outcome = self_uninstall(&installation, false, true, false).await;
+        let outcome =
+            self_uninstall(&installation, KeychainAccess::Allowed, false, true, false).await;
         std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
 
         assert!(
@@ -2767,7 +2803,7 @@ mod tests {
             .join(std::ffi::OsString::from_vec(b"bin\xff".to_vec()));
         let installation = Installation::at(binary.clone(), Some(home.path().to_path_buf()));
 
-        let report = self_uninstall(&installation, true, true, false)
+        let report = self_uninstall(&installation, KeychainAccess::Allowed, true, true, false)
             .await
             .unwrap();
 
@@ -2782,7 +2818,11 @@ mod tests {
         mock_keychain();
         let home = tempfile::tempdir().unwrap();
         let file = home.path().join("credentials.json");
-        let store = atlassian_cli::auth::TokenStore::at("logout-corrupt", file);
+        let store = atlassian_cli::auth::TokenStore::at(
+            "logout-corrupt",
+            file,
+            atlassian_cli::auth::KeychainAccess::Allowed,
+        );
 
         keyring_core::Entry::new("atlassian-cli", "logout-corrupt")
             .unwrap()

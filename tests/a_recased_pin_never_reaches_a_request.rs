@@ -14,7 +14,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use atlassian_cli::auth::{OAuthParams, OAuthStrategy};
+use atlassian_cli::auth::{KeychainAccess, OAuthParams, OAuthStrategy, TokenStore};
 use keyring_core::api::{CredentialApi, CredentialStoreApi};
 use keyring_core::{Credential, Entry, Result};
 
@@ -92,35 +92,38 @@ fn params(cloud_id: Option<&str>) -> OAuthParams {
     }
 }
 
-/// The store below answers before the file store is reached, so nothing on
-/// this machine is read — but only while the keychain is in play at all.
-/// `ATLASSIAN_NO_KEYCHAIN` short-circuits the dispatcher ahead of it, and the
-/// path `load` falls through to is where this machine's own sessions are kept:
+/// Both of a store's backends are named, so neither is this machine's: the
+/// keychain is the store above and answers first, and the file `load` would
+/// otherwise fall through to is where this machine's own sessions are kept —
 /// a test that gets there is reading the user's credentials to decide its
-/// result. The environment is checked rather than rewritten — writing it is
-/// sound only in a single-threaded process, and the harness has already spawned
-/// a thread by the time a test body runs.
+/// result.
 #[tokio::test(flavor = "multi_thread")]
 async fn resume_refuses_a_pin_that_differs_from_the_stored_id_only_in_case() {
-    assert!(
-        !atlassian_cli::auth::keychain_opt_out(),
-        "ATLASSIAN_NO_KEYCHAIN is set, which disables the path this test drives — \
-         unset it to run the suite"
-    );
     keyring_core::set_default_store(Arc::new(StoredSessionStore));
+    let dir = tempfile::tempdir().unwrap();
+    let store = |profile: &str| {
+        TokenStore::at(
+            profile,
+            dir.path().join("credentials.json"),
+            KeychainAccess::Allowed,
+        )
+    };
 
-    let err = OAuthStrategy::resume(params(Some(&STORED_CLOUD_ID.to_uppercase())), "recased")
-        .await
-        .unwrap_err()
-        .to_string();
+    let err = OAuthStrategy::resume(
+        params(Some(&STORED_CLOUD_ID.to_uppercase())),
+        store("recased"),
+    )
+    .await
+    .unwrap_err()
+    .to_string();
     assert!(err.contains("only in case"), "{err}");
     assert!(err.contains(STORED_CLOUD_ID), "{err}");
 
     // The pin the login stored, and no pin at all, both resume.
-    OAuthStrategy::resume(params(Some(STORED_CLOUD_ID)), "pinned")
+    OAuthStrategy::resume(params(Some(STORED_CLOUD_ID)), store("pinned"))
         .await
         .expect("the stored id, pinned as it was stored");
-    OAuthStrategy::resume(params(None), "unpinned")
+    OAuthStrategy::resume(params(None), store("unpinned"))
         .await
         .expect("no pin leaves the stored id to stand");
 }

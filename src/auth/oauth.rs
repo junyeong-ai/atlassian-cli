@@ -19,7 +19,7 @@ mod strategy;
 
 pub use flow::{LoginOutcome, SiteInfo};
 pub use store::{
-    CREDENTIALS_FILE, KeyringEnumeration, LoadedTokens, StoredProfiles, TokenSet,
-    TokenStorageBackend, TokenStore, keychain_opt_out, remove_credentials_file, stored_profiles,
+    CREDENTIALS_FILE, KeychainAccess, KeyringEnumeration, LoadedTokens, StoredProfiles, TokenSet,
+    TokenStorageBackend, TokenStore, remove_credentials_file, stored_profiles,
 };
 pub use strategy::{OAuthParams, OAuthStrategy};

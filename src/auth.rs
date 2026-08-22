@@ -27,8 +27,8 @@ mod strategy;
 
 pub use basic::BasicStrategy;
 pub use oauth::{
-    CREDENTIALS_FILE, KeyringEnumeration, LoadedTokens, LoginOutcome, OAuthParams, OAuthStrategy,
-    SiteInfo, StoredProfiles, TokenStorageBackend, TokenStore, keychain_opt_out,
+    CREDENTIALS_FILE, KeychainAccess, KeyringEnumeration, LoadedTokens, LoginOutcome, OAuthParams,
+    OAuthStrategy, SiteInfo, StoredProfiles, TokenStorageBackend, TokenStore,
     remove_credentials_file, stored_profiles,
 };
 pub use scoped_token::ScopedTokenStrategy;
@@ -329,7 +329,8 @@ impl AuthConfig {
             )),
             AuthConfig::OAuth { .. } => {
                 let params = self.oauth_params(profile)?;
-                Ok(Box::new(OAuthStrategy::resume(params, profile).await?))
+                let store = TokenStore::new(profile)?;
+                Ok(Box::new(OAuthStrategy::resume(params, store).await?))
             }
         }
     }
