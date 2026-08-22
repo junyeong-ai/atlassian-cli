@@ -258,6 +258,30 @@ mod tests {
         );
     }
 
+    /// The readmes name the version in three places a reader acts on: the
+    /// badge, the pinned-install example, and the footer. Each was corrected by
+    /// hand at every release until one of them was not, so they are read here
+    /// instead of remembered.
+    #[test]
+    fn every_readme_names_this_binarys_version() {
+        const VERSION: &str = env!("CARGO_PKG_VERSION");
+        for (name, readme) in [
+            ("README.md", include_str!("../../README.md")),
+            ("README.en.md", include_str!("../../README.en.md")),
+        ] {
+            for shape in [
+                format!("version-{VERSION}-blue"),
+                format!("ATLASSIAN_CLI_VERSION=v{VERSION}"),
+                format!("**Version {VERSION}**"),
+            ] {
+                assert!(
+                    readme.contains(&shape),
+                    "{name} does not carry `{shape}` — bump it with Cargo.toml"
+                );
+            }
+        }
+    }
+
     /// `reconcilable_files` reads one directory level and compares file names,
     /// and it is the set `deploy` deletes from. A carried file addressed into a
     /// subdirectory would never match, so every deploy would delete it and

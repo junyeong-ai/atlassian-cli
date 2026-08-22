@@ -192,6 +192,10 @@ enum JiraSubcommand {
         issue_type: String,
         #[arg(long)]
         description: Option<String>,
+        /// Parent issue key — required by every sub-task type, and how a
+        /// team-managed project puts an issue under its epic
+        #[arg(long)]
+        parent: Option<String>,
     },
     /// Update an issue's fields from a JSON object (e.g. '{"summary":"..."}')
     Update { issue_key: String, fields: String },
@@ -331,7 +335,9 @@ enum WorklogAction {
         /// Comment describing the work
         #[arg(long)]
         comment: Option<String>,
-        /// Start time in ISO 8601 format (defaults to now)
+        /// When the work started, in the shape Jira takes it —
+        /// 2026-08-22T09:30:00.000+0900, with the milliseconds and an offset
+        /// carrying no colon. Omitted, Jira records now
         #[arg(long)]
         started: Option<String>,
     },
@@ -1570,11 +1576,20 @@ async fn handle_jira(
             summary,
             issue_type,
             description,
+            parent,
         } => {
             let desc = description
                 .map(serde_json::Value::String)
                 .unwrap_or(serde_json::Value::Null);
-            jira::create_issue(&project, &summary, &issue_type, desc, client).await
+            jira::create_issue(
+                &project,
+                &summary,
+                &issue_type,
+                desc,
+                parent.as_deref(),
+                client,
+            )
+            .await
         }
         JiraSubcommand::Update { issue_key, fields } => {
             let fields_value: serde_json::Value = serde_json::from_str(&fields).map_err(|e| {

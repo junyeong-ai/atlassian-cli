@@ -35,6 +35,7 @@ atlassian-cli jira search "project = PROJ" --all --stream > issues.jsonl
 
 # Write — plain text auto-converts to ADF
 atlassian-cli jira create PROJ "Summary" Bug --description "Plain text"
+atlassian-cli jira create PROJ "Summary" Sub-task --parent PROJ-123   # every sub-task type needs a parent
 atlassian-cli jira update PROJ-123 '{"summary": "New title", "description": "Plain text"}'
 atlassian-cli jira comment add PROJ-123 "Comment text"
 atlassian-cli jira comment update PROJ-123 10042 "Edited comment"
@@ -58,6 +59,7 @@ atlassian-cli jira link remove PROJ-1 PROJ-2 --type Blocks   # by issue pair; so
 
 # Worklogs — time format is "2h 30m" / "1d" / "45m"
 atlassian-cli jira worklog add PROJ-123 "2h 30m" --comment "Investigation"
+atlassian-cli jira worklog add PROJ-123 "2h" --started 2026-08-22T09:30:00.000+0900   # backdate; omitted logs now
 atlassian-cli jira worklog list PROJ-123
 atlassian-cli jira worklog update PROJ-123 10001 "3h"   # worklog id from `worklog list`
 atlassian-cli jira worklog remove PROJ-123 10001
@@ -91,7 +93,7 @@ atlassian-cli jira epic unassign PROJ-1             # detach from its epic
 
 Board/sprint commands use the agile API. Pass `--project` to let the CLI resolve the board; if the project has several boards it lists them and asks for `--board`.
 
-`epic assign`/`unassign` drive the agile **Epic Link** endpoint, which only takes effect on **company-managed** projects. Team-managed (next-gen) projects model the epic as the issue's `parent`, so there the command returns success but has no effect — set the epic with `jira update KEY '{"parent":{"key":"EPIC-1"}}'` instead (when the project's field config allows it).
+`epic assign`/`unassign` drive the agile **Epic Link** endpoint, which only takes effect on **company-managed** projects. Team-managed (next-gen) projects model the epic as the issue's `parent`, so there the command returns success but has no effect — pass `--parent EPIC-1` when creating, or set it after with `jira update KEY '{"parent":{"key":"EPIC-1"}}'` (when the project's field config allows it). A sub-task is the same field and cannot be created without it: Jira takes the parent on the create screen, so there is no issue to update into place.
 
 ### ADF (rich text — only when plain text isn't enough)
 
@@ -223,7 +225,7 @@ Switch profiles with `--profile <name>`; never invent profile names — list the
 ```bash
 atlassian-cli self status                # version, binary path, skill state, profiles holding tokens — no network
 atlassian-cli self update                # checks GitHub, replaces only after the download runs and reports the expected version
-atlassian-cli self update --version 0.9.0   # a downgrade needs the version named
+atlassian-cli self update --version 0.10.0  # a downgrade needs the version named; below 0.10.0 there is no `self` to come back with
 atlassian-cli self skill install         # rewrite this skill from the running binary
 ```
 

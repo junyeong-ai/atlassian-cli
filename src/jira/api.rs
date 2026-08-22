@@ -286,11 +286,12 @@ pub async fn create_issue(
     summary: &str,
     issue_type: &str,
     description: Value,
+    parent_key: Option<&str>,
     client: &ApiClient,
 ) -> Result<Value> {
     let description_adf = adf::process_description_input(description)?;
 
-    let body = json!({
+    let mut body = json!({
         "fields": {
             "project": {
                 "key": project_key
@@ -302,6 +303,18 @@ pub async fn create_issue(
             "description": description_adf
         }
     });
+    // Every sub-task type requires it, and a team-managed project models an
+    // epic's children the same way, so the field is what makes either of those
+    // creatable at all. It is sent only when given: on a type that takes no
+    // parent, a `null` there is a value the create screen has no field for.
+    //
+    // Which types require it is not decided here. The create screen's own
+    // metadata is the answer, and guessing from the type's name would be
+    // wrong in every language and every renamed scheme — an omission comes
+    // back from Jira naming the field.
+    if let Some(parent) = parent_key {
+        body["fields"]["parent"] = json!({ "key": parent });
+    }
 
     let request = client
         .post(Service::Jira, "/rest/api/3/issue")
@@ -861,6 +874,11 @@ pub async fn add_worklog(
         "timeSpent": time_spent
     });
 
+    // Passed through as written. Jira takes this field in one shape —
+    // milliseconds and an offset with no colon — and narrower than the ISO
+    // 8601 a caller may reasonably offer, so a `Z` or a `+09:00` comes back
+    // refused. Reshaping it here would mean parsing dates to guess what was
+    // meant, and the value is the caller's to state.
     if let Some(started_at) = started {
         body["started"] = json!(started_at);
     }
@@ -2248,10 +2266,74 @@ mod tests {
             .await;
 
         let client = mock_client(server.uri());
-        let created = create_issue("PROJ", "Summary", "Task", json!("plain text"), &client)
-            .await
-            .unwrap();
+        let created = create_issue(
+            "PROJ",
+            "Summary",
+            "Task",
+            json!("plain text"),
+            None,
+            &client,
+        )
+        .await
+        .unwrap();
         assert_eq!(created, json!({ "key": "PROJ-1", "id": "10001" }));
+    }
+
+    /// A sub-task's parent is what makes it a sub-task, and Jira takes it on
+    /// the create screen rather than afterwards — there is no issue to update
+    /// into place, because without the field the create is refused. The same
+    /// field puts an issue under an epic in a team-managed project.
+    #[tokio::test]
+    async fn integ_create_issue_sends_the_parent_it_was_given() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/rest/api/3/issue"))
+            .and(body_string_contains("\"parent\":{\"key\":\"PROJ-1\"}"))
+            .and(body_string_contains("\"name\":\"Sub-task\""))
+            .respond_with(
+                ResponseTemplate::new(201).set_body_json(json!({ "id": "10002", "key": "PROJ-2" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let created = create_issue(
+            "PROJ",
+            "Summary",
+            "Sub-task",
+            json!("plain text"),
+            Some("PROJ-1"),
+            &client,
+        )
+        .await
+        .unwrap();
+        assert_eq!(created, json!({ "key": "PROJ-2", "id": "10002" }));
+    }
+
+    /// Without one the field is absent, not null: a type that takes no parent
+    /// has no field for it on its create screen, and Jira rejects a value for
+    /// a field that is not there.
+    #[tokio::test]
+    async fn integ_create_issue_omits_the_parent_field_when_it_has_none() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/rest/api/3/issue"))
+            .and(|request: &wiremock::Request| {
+                let body: Value = serde_json::from_slice(&request.body).expect("json body");
+                body["fields"].get("parent").is_none()
+            })
+            .respond_with(
+                ResponseTemplate::new(201).set_body_json(json!({ "id": "10003", "key": "PROJ-3" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        create_issue("PROJ", "Summary", "Task", json!("x"), None, &client)
+            .await
+            .expect("a create with no parent");
     }
 
     #[tokio::test]
@@ -2264,7 +2346,7 @@ mod tests {
             .await;
 
         let client = mock_client(server.uri());
-        let err = create_issue("PROJ", "S", "Task", json!("x"), &client)
+        let err = create_issue("PROJ", "S", "Task", json!("x"), None, &client)
             .await
             .unwrap_err()
             .to_string();

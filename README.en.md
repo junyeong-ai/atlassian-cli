@@ -3,7 +3,7 @@
 [![CI](https://github.com/junyeong-ai/atlassian-cli/workflows/CI/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/ci.yml)
 [![Security](https://github.com/junyeong-ai/atlassian-cli/workflows/Security/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/security.yml)
 [![Rust](https://img.shields.io/badge/rust-1.97.1%2B%20(2024%20edition)-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.10.0-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
+[![Version](https://img.shields.io/badge/version-0.10.1-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
 [![DeepWiki](https://img.shields.io/badge/DeepWiki-junyeong--ai%2Fatlassian--cli-blue.svg?logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACwAAAAyCAYAAAAnWDnqAAAAAXNSR0IArs4c6QAAA05JREFUaEPtmUtyEzEQhtWTQyQLHNak2AB7ZnyXZMEjXMGeK/AIi+QuHrMnbChYY7MIh8g01fJoopFb0uhhEqqcbWTp06/uv1saEDv4O3n3dV60RfP947Mm9/SQc0ICFQgzfc4CYZoTPAswgSJCCUJUnAAoRHOAUOcATwbmVLWdGoH//PB8mnKqScAhsD0kYP3j/Yt5LPQe2KvcXmGvRHcDnpxfL2zOYJ1mFwrryWTz0advv1Ut4CJgf5uhDuDj5eUcAUoahrdY/56ebRWeraTjMt/00Sh3UDtjgHtQNHwcRGOC98BJEAEymycmYcWwOprTgcB6VZ5JK5TAJ+fXGLBm3FDAmn6oPPjR4rKCAoJCal2eAiQp2x0vxTPB3ALO2CRkwmDy5WohzBDwSEFKRwPbknEggCPB/imwrycgxX2NzoMCHhPkDwqYMr9tRcP5qNrMZHkVnOjRMWwLCcr8ohBVb1OMjxLwGCvjTikrsBOiA6fNyCrm8V1rP93iVPpwaE+gO0SsWmPiXB+jikdf6SizrT5qKasx5j8ABbHpFTx+vFXp9EnYQmLx02h1QTTrl6eDqxLnGjporxl3NL3agEvXdT0WmEost648sQOYAeJS9Q7bfUVoMGnjo4AZdUMQku50McDcMWcBPvr0SzbTAFDfvJqwLzgxwATnCgnp4wDl6Aa+Ax283gghmj+vj7feE2KBBRMW3FzOpLOADl0Isb5587h/U4gGvkt5v60Z1VLG8BhYjbzRwyQZemwAd6cCR5/XFWLYZRIMpX39AR0tjaGGiGzLVyhse5C9RKC6ai42ppWPKiBagOvaYk8lO7DajerabOZP46Lby5wKjw1HCRx7p9sVMOWGzb/vA1hwiWc6jm3MvQDTogQkiqIhJV0nBQBTU+3okKCFDy9WwferkHjtxib7t3xIUQtHxnIwtx4mpg26/HfwVNVDb4oI9RHmx5WGelRVlrtiw43zboCLaxv46AZeB3IlTkwouebTr1y2NjSpHz68WNFjHvupy3q8TFn3Hos2IAk4Ju5dCo8B3wP7VPr/FGaKiG+T+v+TQqIrOqMTL1VdWV1DdmcbO8KXBz6esmYWYKPwDL5b5FA1a0hwapHiom0r/cKaoqr+27/XcrS5UwSMbQAAAABJRU5ErkJggg==)](https://deepwiki.com/junyeong-ai/atlassian-cli)
 
 > **🌐 [한국어](README.md)** | **English**
@@ -60,6 +60,7 @@ atlassian-cli jira search "project = PROJ" --all --stream    # JSONL streaming
 atlassian-cli jira get PROJ-123
 atlassian-cli jira get PROJ-123 --format markdown  # description as Markdown
 atlassian-cli jira create PROJ "Bug fix" Bug --description "Details"
+atlassian-cli jira create PROJ "Sub-task" Sub-task --parent PROJ-123
 atlassian-cli jira update PROJ-123 '{"summary":"New title"}'
 
 # Comment/Transition
@@ -143,7 +144,7 @@ Installs the latest prebuilt binary, which then deploys the `jira-confluence` Cl
 
 ```bash
 # Install a specific release
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.10.0 bash
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.10.1 bash
 
 # After that the binary manages itself — no need to re-run the installer
 atlassian-cli self update
@@ -167,7 +168,7 @@ atlassian-cli self uninstall --yes
 ```bash
 atlassian-cli self status                     # version, paths, skill state, profiles holding tokens (no network)
 atlassian-cli self update                     # replace with the latest release
-atlassian-cli self update --version 0.9.0     # a specific one; going back takes an explicit version
+atlassian-cli self update --version 0.10.0     # a specific one; going back takes an explicit version
 atlassian-cli self update --verify-attestations   # also check GitHub build provenance (needs the gh CLI)
 atlassian-cli self skill install               # redeploy the skill
 atlassian-cli self skill remove --yes
@@ -381,7 +382,7 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 | `search <JQL> --all` | Fetch all results | `jira search "project = PROJ" --all` |
 | `search <JQL> --all --stream` | JSONL streaming | `jira search "project = PROJ" --all --stream` |
 | `search <JQL> --format markdown` | JQL search (Markdown) | `jira search "status = Open" --format markdown` |
-| `create <PROJECT> <SUMMARY> <TYPE>` | Create issue | `jira create PROJ "Title" Bug` |
+| `create <PROJECT> <SUMMARY> <TYPE>` | Create issue (`--parent` for sub-tasks) | `jira create PROJ "Title" Sub-task --parent PROJ-1` |
 | `update <KEY> <JSON>` | Update issue | `jira update PROJ-123 '{"summary":"New"}'` |
 | `delete <KEY> --yes [--delete-subtasks]` | Delete issue (irreversible) | `jira delete PROJ-123 --yes` |
 | `comment add <KEY> <TEXT>` | Add comment | `jira comment add PROJ-123 "Done"` |
@@ -502,7 +503,7 @@ Supported: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 
 **🌐 [한국어](README.md)** | **English**
 
-**Version 0.10.0** • Rust 2024 Edition
+**Version 0.10.1** • Rust 2024 Edition
 
 Made with ❤️ for productivity
 
