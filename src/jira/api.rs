@@ -749,7 +749,7 @@ pub async fn remove_link(
             }
         }
         anyhow::bail!(
-            "{} of the links on {} left the question open ({}), so {}",
+            "{} of the links on {} left the question open ({}), so {}. {}",
             unreadable.len(),
             source_key,
             reasons.join("; "),
@@ -762,7 +762,8 @@ pub async fn remove_link(
                     "whether one of them is a second link from {source_key} to {target_key} \
                      cannot be told, and this command removes only where there is one"
                 )
-            }
+            },
+            by_id_advice(source_key, None)
         );
     }
 
@@ -821,18 +822,20 @@ pub async fn remove_link(
         _ => match link_type {
             None => anyhow::bail!(
                 "{} from {} to {}, and no type tells them apart. This command removes by \
-                     issue pair and type, so it cannot choose between them.",
-                found,
-                source_key,
-                target_key
-            ),
-            Some(t) => anyhow::bail!(
-                "{} from {} to {} with type '{}'. This command removes by issue pair and \
-                     type, so it cannot choose between them.",
+                     issue pair and type, so it cannot choose between them. {}",
                 found,
                 source_key,
                 target_key,
-                t
+                by_id_advice(source_key, Some(&matching))
+            ),
+            Some(t) => anyhow::bail!(
+                "{} from {} to {} with type '{}'. This command removes by issue pair and \
+                     type, so it cannot choose between them. {}",
+                found,
+                source_key,
+                target_key,
+                t,
+                by_id_advice(source_key, Some(&matching))
             ),
         },
     }
@@ -841,6 +844,40 @@ pub async fn remove_link(
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("Link ID missing from response"))?;
 
+    remove_link_by_id(link_id, client).await
+}
+
+/// The way through a refusal that could not settle on one link.
+///
+/// `among` is the set the caller offers a choice from. Their ids are named
+/// only where the choice is among those alone and every one of them carried a
+/// readable id: an entry that went unread is a candidate whose id this walk
+/// never saw, and a list without it reads as the whole of them.
+fn by_id_advice(source_key: &str, among: Option<&[&Value]>) -> String {
+    let ids = among.and_then(|links| {
+        links
+            .iter()
+            .map(|link| link["id"].as_str())
+            .collect::<Option<Vec<_>>>()
+    });
+    match ids {
+        Some(ids) => format!(
+            "Pass --id to remove one of them by its own id ({}).",
+            ids.join(", ")
+        ),
+        None => format!(
+            "Pass --id to remove one by its own id, which `jira link list {source_key}` reports."
+        ),
+    }
+}
+
+/// Remove the link an id names, and no other.
+///
+/// The id is the link's whole address: the endpoint takes nothing else, and it
+/// is a field every refusal above could read off entries it could not classify.
+/// Confirming it against the issue pair would put this back behind the walk
+/// those refusals are the way out of, so nothing is read before the delete.
+pub async fn remove_link_by_id(link_id: &str, client: &ApiClient) -> Result<Value> {
     let url = format!("/rest/api/3/issueLink/{}", encode_path_segment(link_id));
     let request = client.delete(Service::Jira, &url).await?;
     client.execute("remove link", request).await?;
@@ -2961,6 +2998,137 @@ mod tests {
         let result = remove_link("MDW-207", "MDW-183", None, &client).await;
 
         assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    /// The id form is the way out of a refusal the walk could not settle, so
+    /// it may not take that walk: an issue the links cannot be read off is
+    /// exactly where this is reached for.
+    #[tokio::test]
+    async fn integ_remove_link_by_id_deletes_without_reading_the_issue() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/issueLink/10001"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let removed = remove_link_by_id("10001", &client).await;
+
+        assert!(removed.is_ok(), "{:?}", removed.err());
+        assert_eq!(removed.unwrap(), json!({}));
+    }
+
+    /// The id reaches a path segment, and one carrying a separator would
+    /// address a different endpoint entirely.
+    #[tokio::test]
+    async fn integ_remove_link_by_id_encodes_the_id_into_one_segment() {
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/issueLink/..%2F..%2Fissue%2FA-1"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let removed = remove_link_by_id("../../issue/A-1", &client).await;
+
+        assert!(removed.is_ok(), "{:?}", removed.err());
+    }
+
+    /// A refusal that cannot choose names what there is to choose between.
+    /// Both forms of it carry the list, because each writes its own message
+    /// and only the one that ran would say so.
+    #[tokio::test]
+    async fn integ_remove_link_names_the_ids_it_offers_a_choice_between() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/A-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "fields": {
+                    "issuelinks": [
+                        { "id": "10001", "type": { "name": "Blocks" }, "outwardIssue": { "key": "B-1" } },
+                        { "id": "10002", "type": { "name": "Blocks" }, "outwardIssue": { "key": "B-1" } }
+                    ]
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        for link_type in [None, Some("Blocks")] {
+            let err = remove_link("A-1", "B-1", link_type, &client)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("--id"), "{err}");
+            assert!(err.contains("10001, 10002"), "{err}");
+        }
+    }
+
+    /// An entry that went unread is a link whose id this walk never saw, so
+    /// the ones it did see are not the whole of what to choose between —
+    /// naming them would offer a choice that leaves one out.
+    #[tokio::test]
+    async fn integ_remove_link_names_no_ids_where_an_entry_went_unread() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/A-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "fields": {
+                    "issuelinks": [
+                        { "id": "10001", "type": { "name": "Blocks" }, "outwardIssue": { "key": "B-1" } },
+                        { "id": "10002", "type": { "name": "Blocks" }, "outwardIssue": "not an issue" }
+                    ]
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = remove_link("A-1", "B-1", None, &client)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("--id"), "{err}");
+        assert!(err.contains("jira link list A-1"), "{err}");
+        assert!(!err.contains("10001"), "{err}");
+    }
+
+    /// The same rule one step in: the choice is among the matches alone, and
+    /// one of them carrying no readable id leaves the list short by that one.
+    #[tokio::test]
+    async fn integ_remove_link_names_no_ids_where_a_match_carries_none() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/A-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "fields": {
+                    "issuelinks": [
+                        { "type": { "name": "Blocks" }, "outwardIssue": { "key": "B-1" } },
+                        { "id": "10002", "type": { "name": "Blocks" }, "outwardIssue": { "key": "B-1" } }
+                    ]
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        let err = remove_link("A-1", "B-1", None, &client)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("jira link list A-1"), "{err}");
+        assert!(!err.contains("10002"), "{err}");
     }
 
     #[tokio::test]

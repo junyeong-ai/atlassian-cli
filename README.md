@@ -362,7 +362,7 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 | `comment delete <KEY> <COMMENT_ID>` | 댓글 삭제 |
 | `transition list <KEY>` | 전환 목록 |
 | `transition apply <KEY> <ID>` | 상태 전환 |
-| `link add/remove/list <KEY...>`, `link types` | 이슈 링크 |
+| `link add/remove/list <KEY...>`, `link types` | 이슈 링크. `remove` 는 이슈 쌍(`--type`) 또는 `--id <링크 id>` — 둘 중 하나만 |
 | `worklog add/list/update/remove <KEY> ...` | 작업시간 기록 |
 | `watcher add/remove/list <KEY>` | 와처 |
 | `list types/priorities/statuses/labels` | 전역 메타데이터 조회 |

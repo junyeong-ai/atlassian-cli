@@ -57,6 +57,9 @@ atlassian-cli jira link types
 atlassian-cli jira link add PROJ-1 PROJ-2 --type Blocks
 atlassian-cli jira link list PROJ-1
 atlassian-cli jira link remove PROJ-1 PROJ-2 --type Blocks   # by issue pair; source is the OUTWARD side, as in `add`
+atlassian-cli jira link remove --id 10001                    # by the link's own id, as `link list` reports it —
+                                                             # the way through any refusal the pair form cannot settle
+                                                             # (two identical links, an entry it could not read)
 
 # Worklogs — time format is "2h 30m" / "1d" / "45m"
 atlassian-cli jira worklog add PROJ-123 "2h 30m" --comment "Investigation"

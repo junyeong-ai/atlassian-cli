@@ -24,7 +24,7 @@ When adding a new write endpoint that takes user text, route through these helpe
 - `create_issue` returns `{"key": ..., "id": ...}` — both fields are stable contract; `key` is the human-readable identifier needed for follow-up commands.
 - Writes that target an identifiable issue sub-resource (`add_comment`, `update_comment`, `add_worklog`, `update_worklog`) return `{"id": ...}` so callers can chain follow-up updates without re-querying.
 - Every id/key/version returned by a write is pulled through `response::require_field`: a 2xx whose body lacks the field bails loudly instead of returning a placeholder `null`, so a caller never chains on a non-existent resource.
-- Side-effect-only writes return `{}` (`update_issue`, `delete_issue`, `delete_comment`, `transition_issue`, `add_link`, `remove_link`, `remove_worklog`, `add_watcher`, `remove_watcher`, `move_issues_to_sprint`, `move_issues_to_backlog`, `assign_issues_to_epic`, `unassign_issues_from_epic`).
+- Side-effect-only writes return `{}` (`update_issue`, `delete_issue`, `delete_comment`, `transition_issue`, `add_link`, `remove_link`, `remove_link_by_id`, `remove_worklog`, `add_watcher`, `remove_watcher`, `move_issues_to_sprint`, `move_issues_to_backlog`, `assign_issues_to_epic`, `unassign_issues_from_epic`).
 
 Keep these shapes stable — downstream tooling (skill, scripts) depends on them.
 

@@ -392,7 +392,7 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 | `comment delete <KEY> <COMMENT_ID>` | Delete comment | `jira comment delete PROJ-123 10042` |
 | `transition list <KEY>` | List transitions | `jira transition list PROJ-123` |
 | `transition apply <KEY> <ID>` | Transition issue | `jira transition apply PROJ-123 31` |
-| `link add/remove/list`, `link types` | Issue links | `jira link add PROJ-1 PROJ-2 --type Blocks` |
+| `link add/remove/list`, `link types` | Issue links. `remove` takes the issue pair (with `--type`) or `--id <link id>`, never both | `jira link remove --id 10001` |
 | `worklog add/list/update/remove` | Time tracking | `jira worklog add PROJ-123 "2h 30m"` |
 | `watcher add/remove/list <KEY>` | Watchers | `jira watcher add PROJ-123` |
 | `list types/priorities/statuses/labels` | Global metadata | `jira list types` |

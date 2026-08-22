@@ -314,12 +314,17 @@ enum LinkAction {
     /// Remove a link between two issues
     Remove {
         /// Source issue key
-        source: String,
+        #[arg(required_unless_present = "id", conflicts_with = "id")]
+        source: Option<String>,
         /// Target issue key
-        target: String,
+        #[arg(required_unless_present = "id", conflicts_with = "id")]
+        target: Option<String>,
         /// Link type (required when multiple link types exist between the pair)
-        #[arg(long = "type")]
+        #[arg(long = "type", conflicts_with = "id")]
         link_type: Option<String>,
+        /// Remove the link with this id, as `jira link list` reports it
+        #[arg(long)]
+        id: Option<String>,
     },
     /// List links on an issue
     List {
@@ -1679,7 +1684,21 @@ async fn handle_jira(
                 source,
                 target,
                 link_type,
-            } => jira::remove_link(&source, &target, link_type.as_deref(), client).await,
+                id,
+            } => match (id, source, target) {
+                (Some(id), _, _) => jira::remove_link_by_id(&id, client).await,
+                (None, Some(source), Some(target)) => {
+                    jira::remove_link(&source, &target, link_type.as_deref(), client).await
+                }
+                // Clap requires the pair wherever `--id` is absent and refuses
+                // the parse otherwise. Said again here because a parse that
+                // stopped enforcing it would otherwise reach a delete with one
+                // end of the link unnamed.
+                (None, ..) => anyhow::bail!(
+                    "Name the two issues the link runs between, or --id to remove one link by \
+                     its own id."
+                ),
+            },
             LinkAction::List { issue_key } => jira::get_links(&issue_key, client).await,
         },
         JiraSubcommand::Worklog { action } => match action {
@@ -2218,6 +2237,39 @@ mod tests {
     // Only the `#[cfg(unix)]` tests below deploy a skill.
     #[cfg(unix)]
     use atlassian_cli::dist::skill;
+
+    /// `link remove` takes the issue pair or one link's id, and the handler's
+    /// last arm rests on the parse refusing everything else. An argument
+    /// relationship names its counterpart by string, so `debug_assert` is here
+    /// too: a rename that dropped one silently would leave a delete reachable
+    /// with an end of the link unnamed.
+    #[test]
+    fn link_remove_takes_the_issue_pair_or_an_id_and_never_both() {
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
+
+        const BIN: &str = "atlassian-cli";
+        for args in [
+            [BIN, "jira", "link", "remove", "A-1", "B-2"].as_slice(),
+            &[
+                BIN, "jira", "link", "remove", "A-1", "B-2", "--type", "Blocks",
+            ],
+            &[BIN, "jira", "link", "remove", "--id", "10001"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok(), "{args:?}");
+        }
+        for args in [
+            [BIN, "jira", "link", "remove", "A-1"].as_slice(),
+            &[BIN, "jira", "link", "remove"],
+            &[BIN, "jira", "link", "remove", "A-1", "--id", "10001"],
+            &[BIN, "jira", "link", "remove", "A-1", "B-2", "--id", "10001"],
+            &[
+                BIN, "jira", "link", "remove", "--id", "10001", "--type", "Blocks",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err(), "{args:?}");
+        }
+    }
 
     /// Where every home-managed artifact is kept by name, only the binary is
     /// to go and its path is known — the guard has nothing to protect.
