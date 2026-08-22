@@ -1153,6 +1153,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_credentials_file_that_cannot_be_opened_says_so() {
+        crate::test_support::require_enforced_modes();
         use std::os::unix::fs::PermissionsExt;
         mock_keychain();
         let dir = tempfile::tempdir().unwrap();

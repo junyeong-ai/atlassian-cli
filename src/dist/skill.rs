@@ -300,6 +300,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_skill_directory_that_cannot_be_read_is_not_reported_absent() {
+        crate::test_support::require_enforced_modes();
         use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("skills").join(SKILL_NAME);
@@ -320,6 +321,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_skill_directory_that_will_not_list_is_neither_reconciled_nor_called_current() {
+        crate::test_support::require_enforced_modes();
         use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join(SKILL_NAME);
@@ -354,6 +356,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_skill_file_that_will_not_open_is_not_reported_stale() {
+        crate::test_support::require_enforced_modes();
         use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join(SKILL_NAME);

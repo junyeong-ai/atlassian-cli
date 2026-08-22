@@ -2258,6 +2258,10 @@ async fn handle_auth(
 }
 
 #[cfg(test)]
+#[path = "test_support.rs"]
+mod test_support;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use atlassian_cli::auth::KeychainAccess;
@@ -2573,6 +2577,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_binary_that_cannot_be_removed_reports_what_already_went() {
+        crate::test_support::require_enforced_modes();
         use std::os::unix::fs::PermissionsExt;
         let home = tempfile::tempdir().unwrap();
         let installation = installation(home.path());
@@ -2743,6 +2748,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_credentials_file_that_cannot_be_reached_stops_the_uninstall() {
+        crate::test_support::require_enforced_modes();
         use std::os::unix::fs::PermissionsExt;
         mock_keychain();
         let home = tempfile::tempdir().unwrap();
@@ -2769,6 +2775,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_skill_directory_that_cannot_be_reached_stops_the_uninstall() {
+        crate::test_support::require_enforced_modes();
         use std::os::unix::fs::PermissionsExt;
         let home = tempfile::tempdir().unwrap();
         let installation = installation(home.path());

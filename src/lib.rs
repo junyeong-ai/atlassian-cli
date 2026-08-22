@@ -11,6 +11,8 @@ pub(crate) mod query_utils;
 pub(crate) mod response;
 
 #[cfg(test)]
+mod test_support;
+#[cfg(test)]
 pub mod test_utils;
 
 /// Whether anything is at this path.
