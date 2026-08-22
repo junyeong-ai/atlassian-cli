@@ -1262,7 +1262,9 @@ async fn clear_stored_tokens(
     }
 
     for profile in &stored.profiles {
-        token_store(installation, profile)?.delete().await?;
+        token_store(installation, profile, keychain)?
+            .delete()
+            .await?;
         record(removed, "credentials", format!("profile:{profile}"));
     }
 
@@ -1307,18 +1309,17 @@ async fn stored_profiles_of(
     atlassian_cli::auth::stored_profiles(installation.credentials_file().as_deref(), keychain).await
 }
 
+/// A store over this installation's own backends rather than the running
+/// machine's, so what an uninstall clears is what it enumerated.
 fn token_store(
     installation: &atlassian_cli::dist::Installation,
     profile: &str,
+    keychain: atlassian_cli::auth::KeychainAccess,
 ) -> Result<atlassian_cli::auth::TokenStore> {
     let file = installation
         .credentials_file()
         .ok_or_else(|| anyhow::anyhow!("Failed to determine home directory"))?;
-    Ok(atlassian_cli::auth::TokenStore::at(
-        profile,
-        file,
-        atlassian_cli::auth::KeychainAccess::from_env(),
-    ))
+    Ok(atlassian_cli::auth::TokenStore::at(profile, file, keychain))
 }
 
 /// Clear a profile's stored session and say what was there.
@@ -2660,6 +2661,65 @@ mod tests {
         // test in this binary touched, and they are reported sorted.
         let reported = report["credentials"]["profiles"].as_array().unwrap();
         assert!(reported.iter().any(|p| p == "default"), "{reported:?}");
+    }
+
+    /// A profile the keychain alone holds is one the uninstall reports cleared,
+    /// and the report is checked against the keychain rather than against
+    /// itself: saying a token went while it is still there is what leaves a
+    /// refresh token on a machine the binary has left.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_keychain_backed_profile_is_gone_from_the_keychain_afterwards() {
+        use atlassian_cli::auth::{TokenSet, TokenStore};
+        use secrecy::SecretString;
+
+        mock_keychain();
+        const PROFILE: &str = "uninstall-clears-the-keychain";
+        let home = tempfile::tempdir().unwrap();
+        let installation = installation(home.path());
+        let file = installation.credentials_file().unwrap();
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+
+        // The save lands in the keychain and clears the file, so this profile
+        // is named by the keychain alone.
+        let backend = TokenStore::at(PROFILE, file.clone(), KeychainAccess::Allowed)
+            .save(&TokenSet {
+                access_token: SecretString::new("access".into()),
+                refresh_token: Some(SecretString::new("refresh".into())),
+                expires_at_unix: 4_102_444_800,
+                scopes: vec!["read:jira-work".to_string()],
+                cloud_id: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(backend, atlassian_cli::auth::TokenStorageBackend::Keyring);
+
+        let report = self_uninstall(&installation, KeychainAccess::Allowed, true, false, false)
+            .await
+            .unwrap();
+
+        let targets: Vec<&str> = report["removed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|entry| entry["target"].as_str())
+            .collect();
+        assert!(
+            targets.contains(&format!("profile:{PROFILE}").as_str()),
+            "{targets:?}"
+        );
+        // Read back through a store with the same backends: the mock keychain
+        // keeps naming an entry it no longer holds, so what is checked is
+        // whether the credential is still readable, which is what was claimed.
+        let left = TokenStore::at(PROFILE, file, KeychainAccess::Allowed)
+            .load()
+            .await
+            .unwrap();
+        assert!(
+            left.is_none(),
+            "reported cleared, still readable from {}",
+            left.unwrap().backend
+        );
     }
 
     /// `ATLASSIAN_NO_KEYCHAIN` is a per-environment setting, so this asserts the
