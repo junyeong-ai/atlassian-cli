@@ -2418,6 +2418,7 @@ mod tests {
                 let fields = &body["fields"];
                 fields["customfield_10010"] == json!("X")
                     && fields["components"] == json!([{ "name": "api" }])
+                    && fields["description"]["type"] == json!("doc")
                     && fields["description"]["content"][0]["content"][0]["text"]
                         == json!("written through --fields")
                     && fields["summary"] == json!("Summary")
