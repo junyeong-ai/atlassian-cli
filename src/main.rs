@@ -311,7 +311,7 @@ enum LinkAction {
         #[arg(long)]
         comment: Option<String>,
     },
-    /// Remove a link between two issues
+    /// Remove a link — by the two issues it runs between, or by its own id
     Remove {
         /// Source issue key
         #[arg(required_unless_present = "id", conflicts_with = "id")]
