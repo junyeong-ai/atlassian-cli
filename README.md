@@ -140,6 +140,7 @@ atlassian-cli self status                     # 버전·경로·skill 상태·�
 atlassian-cli self update                     # 최신 릴리스로 교체
 atlassian-cli self update --version 0.10.0     # 특정 버전 (다운그레이드는 명시할 때만 허용)
 atlassian-cli self update --verify-attestations   # GitHub build provenance 까지 검증 (gh CLI 필요)
+atlassian-cli self update --force              # 이미 그 버전을 보고하는 바이너리도 다시 교체 (재설치)
 atlassian-cli self skill install               # skill 재배포
 atlassian-cli self skill remove --yes
 atlassian-cli self uninstall --yes [--keep-skill] [--keep-credentials] [--purge-config]
@@ -353,7 +354,7 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 |--------|------|
 | `get <KEY>` | 이슈 조회 |
 | `search <JQL>` | JQL 검색 |
-| `create <PROJECT> <SUMMARY> <TYPE>` | 이슈 생성 |
+| `create <PROJECT> <SUMMARY> <TYPE>` | 이슈 생성. 하위작업은 `--parent <KEY>` 필수, 프로젝트가 요구하는 나머지 필드는 `--fields <JSON>` |
 | `update <KEY> <JSON>` | 이슈 수정 |
 | `delete <KEY> --yes [--delete-subtasks]` | 이슈 영구 삭제 (비가역) |
 | `comment add <KEY> <TEXT>` | 댓글 추가 |
@@ -363,7 +364,7 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 | `transition list <KEY>` | 전환 목록 |
 | `transition apply <KEY> <ID>` | 상태 전환 |
 | `link add/remove/list <KEY...>`, `link types` | 이슈 링크. `remove` 는 이슈 쌍(`--type`) 또는 `--id <링크 id>` — 둘 중 하나만 |
-| `worklog add/list/update/remove <KEY> ...` | 작업시간 기록 |
+| `worklog add/list/update/remove <KEY> ...` | 작업시간 기록. `add --started` 는 Jira 형식만 받습니다 — `2026-08-22T09:30:00.000+0900` (밀리초 3자리, 오프셋에 콜론 없음) |
 | `watcher add/remove/list <KEY>` | 와처 |
 | `list types/priorities/statuses/labels` | 전역 메타데이터 조회 |
 | `board list --project <KEY>` | 애자일 보드 목록 |
@@ -405,7 +406,8 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 | `--pretty` | JSON pretty print (글로벌; 서브커맨드 앞에 위치) |
 | `--profile <NAME>` | 설정 프로파일 선택 |
 | `--config <PATH>` | 설정 파일 경로 오버라이드 |
-| `-v` / `-vv` / `-vvv` | 로깅 레벨 (stderr) |
+| `--domain` `--email` `--token` `--client-id` `--client-secret` `--cloud-id` | 인증 필드 오버라이드 — 필드별 우선순위(CLI 플래그 > 환경변수 > 설정 파일)의 최상위 |
+| `-v` / `-vv` / `-vvv` (`--verbose`) | 로깅 레벨 (stderr) |
 | `--format markdown` | ADF/HTML content 필드를 Markdown으로 변환 (JSON envelope 유지) |
 | `--all` | `search`: 전체 페이지네이션 |
 | `--stream` | `search --all`: JSONL을 stdout으로 |

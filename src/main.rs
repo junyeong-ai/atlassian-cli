@@ -61,9 +61,13 @@ impl Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    #[command(about = "Issues, comments, links, worklogs, watchers, and agile boards")]
     Jira(JiraCommand),
+    #[command(about = "Pages, comment threads, labels, properties, spaces, and attachments")]
     Confluence(ConfluenceCommand),
+    #[command(about = "Create, inspect, or validate the configuration this tool reads")]
     Config(ConfigCommand),
+    #[command(about = "Sign in, sign out, and report or refresh the stored session")]
     Auth(AuthCommand),
     #[command(name = "self", about = "Inspect, update, or remove this installation")]
     Selfcmd(SelfCommand),
@@ -2270,6 +2274,70 @@ mod tests {
     // Only the `#[cfg(unix)]` tests below deploy a skill.
     #[cfg(unix)]
     use atlassian_cli::dist::skill;
+
+    /// Every flag this CLI accepts is named in a document someone outside this
+    /// file reads.
+    ///
+    /// Doc drift is silent: a flag added without a line in either README or the
+    /// skill exists only for whoever wrote it. Three audits have found flags in
+    /// that state — `--started`, whose documented format was also wrong, and
+    /// the three auth overrides that were half a table — so the rule is a gate
+    /// rather than a habit. A flag deliberately not worth a line is a decision
+    /// to make here, not one to reach by forgetting.
+    #[test]
+    fn every_flag_is_named_in_a_document() {
+        use clap::CommandFactory;
+        use std::collections::BTreeSet;
+
+        const DOCS: [(&str, &str); 3] = [
+            ("README.md", include_str!("../README.md")),
+            ("README.en.md", include_str!("../README.en.md")),
+            (
+                "SKILL.md",
+                include_str!("../.claude/skills/jira-confluence/SKILL.md"),
+            ),
+        ];
+
+        /// A flag is named only where it stands alone: `--type` inside
+        /// `--content-type` is a different flag, and so is `--fields` inside
+        /// `--fields-from`.
+        fn names(doc: &str, flag: &str) -> bool {
+            let joins = |b: u8| b.is_ascii_alphanumeric() || b == b'-' || b == b'_';
+            let bytes = doc.as_bytes();
+            doc.match_indices(flag).any(|(start, _)| {
+                let end = start + flag.len();
+                (start == 0 || !joins(bytes[start - 1]))
+                    && (end == bytes.len() || !joins(bytes[end]))
+            })
+        }
+
+        fn collect(cmd: &clap::Command, into: &mut BTreeSet<String>) {
+            into.extend(cmd.get_arguments().filter_map(|a| a.get_long()).map(|l| {
+                let mut flag = String::from("--");
+                flag.push_str(l);
+                flag
+            }));
+            for sub in cmd.get_subcommands() {
+                collect(sub, into);
+            }
+        }
+
+        let mut flags = BTreeSet::new();
+        collect(&Cli::command(), &mut flags);
+        // Clap writes this one onto every subcommand; it is the only flag here
+        // this project did not choose.
+        flags.remove("--help");
+
+        let undocumented: Vec<&String> = flags
+            .iter()
+            .filter(|flag| !DOCS.iter().any(|(_, doc)| names(doc, flag)))
+            .collect();
+        assert!(
+            undocumented.is_empty(),
+            "named in none of {:?}: {undocumented:?}",
+            DOCS.map(|(name, _)| name)
+        );
+    }
 
     /// `link remove` takes the issue pair or one link's id, and the handler's
     /// last arm rests on the parse refusing everything else. An argument

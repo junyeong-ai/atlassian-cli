@@ -170,6 +170,7 @@ atlassian-cli self uninstall --yes
 atlassian-cli self status                     # version, paths, skill state, profiles holding tokens (no network)
 atlassian-cli self update                     # replace with the latest release
 atlassian-cli self update --version 0.10.0     # a specific one; going back takes an explicit version
+atlassian-cli self update --force              # replace even a binary already reporting that version
 atlassian-cli self update --verify-attestations   # also check GitHub build provenance (needs the gh CLI)
 atlassian-cli self skill install               # redeploy the skill
 atlassian-cli self skill remove --yes
@@ -393,7 +394,7 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 | `transition list <KEY>` | List transitions | `jira transition list PROJ-123` |
 | `transition apply <KEY> <ID>` | Transition issue | `jira transition apply PROJ-123 31` |
 | `link add/remove/list`, `link types` | Issue links. `remove` takes the issue pair (with `--type`) or `--id <link id>`, never both | `jira link remove --id 10001` |
-| `worklog add/list/update/remove` | Time tracking | `jira worklog add PROJ-123 "2h 30m"` |
+| `worklog add/list/update/remove` | Time tracking. `add --started` takes Jira's format alone — milliseconds, colon-less offset | `jira worklog add PROJ-123 "2h" --started 2026-08-22T09:30:00.000+0900` |
 | `watcher add/remove/list <KEY>` | Watchers | `jira watcher add PROJ-123` |
 | `list types/priorities/statuses/labels` | Global metadata | `jira list types` |
 | `board list --project <KEY>` | Agile boards | `jira board list --project PROJ` |
@@ -436,13 +437,11 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 
 | Option | Description | Applies To |
 |--------|-------------|------------|
-| `--domain` | Override domain | All commands |
-| `--email` | Override email | All commands |
-| `--token` | Override token | All commands |
+| `--domain` `--email` `--token` `--client-id` `--client-secret` `--cloud-id` | Auth field overrides — the highest tier of the per-field precedence (CLI flag > env var > config file) | Global |
 | `--profile <NAME>` | Select config profile | Global |
 | `--config <PATH>` | Override config path | Global |
 | `--pretty` | Pretty-print JSON | Global |
-| `-v` / `-vv` / `-vvv` | stderr logging level | Global |
+| `-v` / `-vv` / `-vvv` (`--verbose`) | stderr logging level | Global |
 | `--limit <N>` | Limit results | search |
 | `--all` | All results (pagination) | jira search, confluence search |
 | `--stream` | JSONL streaming | jira search, confluence search (requires --all) |
