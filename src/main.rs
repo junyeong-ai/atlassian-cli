@@ -2885,11 +2885,8 @@ mod tests {
         mock_keychain();
         let home = tempfile::tempdir().unwrap();
         let file = home.path().join("credentials.json");
-        let store = atlassian_cli::auth::TokenStore::at(
-            "logout-corrupt",
-            file,
-            atlassian_cli::auth::KeychainAccess::Allowed,
-        );
+        let store =
+            atlassian_cli::auth::TokenStore::at("logout-corrupt", file, KeychainAccess::Allowed);
 
         keyring_core::Entry::new("atlassian-cli", "logout-corrupt")
             .unwrap()
