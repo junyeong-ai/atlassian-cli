@@ -2464,11 +2464,14 @@ mod tests {
             .await;
         let client = mock_client(server.uri());
 
+        // Every field this command writes itself, so the refusal is the rule
+        // and not a list of the keys someone thought of.
         for (extra, named) in [
             (json!({ "summary": "another" }), "summary"),
             (json!({ "description": "another" }), "description"),
             (json!({ "parent": { "key": "PROJ-9" } }), "parent"),
             (json!({ "project": { "key": "OTHER" } }), "project"),
+            (json!({ "issuetype": { "name": "Bug" } }), "issuetype"),
         ] {
             let err = create_issue(
                 "PROJ",
