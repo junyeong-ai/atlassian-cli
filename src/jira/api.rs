@@ -2418,7 +2418,8 @@ mod tests {
                 let fields = &body["fields"];
                 fields["customfield_10010"] == json!("X")
                     && fields["components"] == json!([{ "name": "api" }])
-                    && fields["description"]["type"] == json!("doc")
+                    && fields["description"]["content"][0]["content"][0]["text"]
+                        == json!("written through --fields")
                     && fields["summary"] == json!("Summary")
             })
             .respond_with(
@@ -2451,8 +2452,13 @@ mod tests {
     #[tokio::test]
     async fn integ_create_issue_refuses_a_field_given_twice() {
         let server = MockServer::start().await;
+        // A body a create would accept: without the refusal the request goes
+        // out and reads as success, so `unwrap_err` fails on the removal
+        // itself rather than on a response it could not parse.
         Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(201))
+            .respond_with(
+                ResponseTemplate::new(201).set_body_json(json!({ "id": "10006", "key": "PROJ-6" })),
+            )
             .expect(0)
             .mount(&server)
             .await;

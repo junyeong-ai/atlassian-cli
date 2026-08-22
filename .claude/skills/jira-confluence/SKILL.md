@@ -73,10 +73,10 @@ atlassian-cli jira watcher remove PROJ-123
 
 ### Discovery (global metadata)
 
-`list types` is the site-wide union, not what a given project accepts: a name it returns may belong to another project and be rejected by `create`. When a type name is refused, take it from an existing issue in that project (`jira get KEY --fields issuetype`) rather than from this list.
+`list types` answers site-wide, not per project: for an ordinary user it is the union over projects they can browse, and for a Jira admin it is every type on the site including ones no project uses. Either way a name it returns may be refused by `create` in the project you are creating in. `jira get KEY --fields issuetype` on an issue already in that project gives a name that project uses — which is a better starting point than this list, though it is not proof the type can still be created there.
 
 ```bash
-atlassian-cli jira list types        # issue types across every project you can browse
+atlassian-cli jira list types        # site-wide; see the note above before using one with `create`
 atlassian-cli jira list priorities   # priority names for `update`
 atlassian-cli jira list statuses     # status names for JQL / transitions
 atlassian-cli jira list labels       # existing labels
