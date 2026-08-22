@@ -196,6 +196,10 @@ enum JiraSubcommand {
         /// team-managed project puts an issue under its epic
         #[arg(long)]
         parent: Option<String>,
+        /// Any other field the create screen requires, as a JSON object —
+        /// '{"components":[{"name":"api"}],"customfield_10010":"X"}'
+        #[arg(long)]
+        fields: Option<String>,
     },
     /// Update an issue's fields from a JSON object (e.g. '{"summary":"..."}')
     Update { issue_key: String, fields: String },
@@ -1577,16 +1581,28 @@ async fn handle_jira(
             issue_type,
             description,
             parent,
+            fields,
         } => {
             let desc = description
                 .map(serde_json::Value::String)
                 .unwrap_or(serde_json::Value::Null);
+            let extra = fields
+                .map(|raw| {
+                    serde_json::from_str::<serde_json::Value>(&raw).map_err(|e| {
+                        anyhow::anyhow!(
+                            "Invalid JSON for --fields: {}. Example: {{\"labels\":[\"api\"]}}",
+                            e
+                        )
+                    })
+                })
+                .transpose()?;
             jira::create_issue(
                 &project,
                 &summary,
                 &issue_type,
                 desc,
                 parent.as_deref(),
+                extra,
                 client,
             )
             .await

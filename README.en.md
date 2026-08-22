@@ -61,6 +61,7 @@ atlassian-cli jira get PROJ-123
 atlassian-cli jira get PROJ-123 --format markdown  # description as Markdown
 atlassian-cli jira create PROJ "Bug fix" Bug --description "Details"
 atlassian-cli jira create PROJ "Sub-task" Sub-task --parent PROJ-123
+atlassian-cli jira create PROJ "Task" Task --fields '{"components":[{"name":"api"}]}'
 atlassian-cli jira update PROJ-123 '{"summary":"New title"}'
 
 # Comment/Transition
@@ -382,7 +383,7 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 | `search <JQL> --all` | Fetch all results | `jira search "project = PROJ" --all` |
 | `search <JQL> --all --stream` | JSONL streaming | `jira search "project = PROJ" --all --stream` |
 | `search <JQL> --format markdown` | JQL search (Markdown) | `jira search "status = Open" --format markdown` |
-| `create <PROJECT> <SUMMARY> <TYPE>` | Create issue (`--parent` for sub-tasks) | `jira create PROJ "Title" Sub-task --parent PROJ-1` |
+| `create <PROJECT> <SUMMARY> <TYPE>` | Create issue (`--parent` for sub-tasks, `--fields` for the rest) | `jira create PROJ "Title" Sub-task --parent PROJ-1` |
 | `update <KEY> <JSON>` | Update issue | `jira update PROJ-123 '{"summary":"New"}'` |
 | `delete <KEY> --yes [--delete-subtasks]` | Delete issue (irreversible) | `jira delete PROJ-123 --yes` |
 | `comment add <KEY> <TEXT>` | Add comment | `jira comment add PROJ-123 "Done"` |

@@ -36,6 +36,7 @@ atlassian-cli jira search "project = PROJ" --all --stream > issues.jsonl
 # Write — plain text auto-converts to ADF
 atlassian-cli jira create PROJ "Summary" Bug --description "Plain text"
 atlassian-cli jira create PROJ "Summary" Sub-task --parent PROJ-123   # every sub-task type needs a parent
+atlassian-cli jira create PROJ "Summary" Task --fields '{"components":[{"name":"api"}]}'   # anything else the create screen requires
 atlassian-cli jira update PROJ-123 '{"summary": "New title", "description": "Plain text"}'
 atlassian-cli jira comment add PROJ-123 "Comment text"
 atlassian-cli jira comment update PROJ-123 10042 "Edited comment"
@@ -72,8 +73,10 @@ atlassian-cli jira watcher remove PROJ-123
 
 ### Discovery (global metadata)
 
+`list types` is the site-wide union, not what a given project accepts: a name it returns may belong to another project and be rejected by `create`. When a type name is refused, take it from an existing issue in that project (`jira get KEY --fields issuetype`) rather than from this list.
+
 ```bash
-atlassian-cli jira list types        # issue types — names for `create`
+atlassian-cli jira list types        # issue types across every project you can browse
 atlassian-cli jira list priorities   # priority names for `update`
 atlassian-cli jira list statuses     # status names for JQL / transitions
 atlassian-cli jira list labels       # existing labels

@@ -49,6 +49,7 @@ atlassian-cli jira transition list PROJ-123
 # 쓰기 (plain text는 자동으로 ADF로 변환됨)
 atlassian-cli jira create PROJ "Summary" Bug --description "Plain text"
 atlassian-cli jira create PROJ "Summary" Sub-task --parent PROJ-123
+atlassian-cli jira create PROJ "Summary" Task --fields '{"components":[{"name":"api"}]}'
 atlassian-cli jira update PROJ-123 '{"summary":"New title"}'
 atlassian-cli jira comment add PROJ-123 "Comment"
 atlassian-cli jira comment update PROJ-123 10042 "Edited"

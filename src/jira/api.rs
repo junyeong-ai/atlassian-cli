@@ -281,40 +281,80 @@ pub async fn search_all(
     }
 }
 
+/// Fold `--fields` into what the arguments already said.
+///
+/// A field named in both places is refused rather than merged: which of the
+/// two was meant is not something this code can tell, and taking either
+/// silently drops what the caller wrote in the other. `description` is
+/// converted here as `update_issue` converts it, so the same JSON means the
+/// same thing to both commands.
+fn merge_extra_fields(fields: &mut Value, extra: Value) -> Result<()> {
+    let Value::Object(extra) = extra else {
+        anyhow::bail!(
+            "--fields takes a JSON object of Jira field names, e.g. \
+             '{{\"labels\":[\"api\"]}}' — got {extra}"
+        );
+    };
+    let target = fields
+        .as_object_mut()
+        .expect("the fields under construction are an object");
+    for (name, value) in extra {
+        if target.contains_key(&name) {
+            anyhow::bail!(
+                "--fields sets `{name}`, which this command already took from its own \
+                 argument — give it in one place or the other"
+            );
+        }
+        let value = if name == "description" {
+            adf::process_description_input(value)?
+        } else {
+            value
+        };
+        target.insert(name, value);
+    }
+    Ok(())
+}
+
 pub async fn create_issue(
     project_key: &str,
     summary: &str,
     issue_type: &str,
     description: Value,
     parent_key: Option<&str>,
+    extra_fields: Option<Value>,
     client: &ApiClient,
 ) -> Result<Value> {
-    let description_adf = adf::process_description_input(description)?;
-
-    let mut body = json!({
-        "fields": {
-            "project": {
-                "key": project_key
-            },
-            "summary": summary,
-            "issuetype": {
-                "name": issue_type
-            },
-            "description": description_adf
+    // Jira takes only the fields on this type's own create screen, so one
+    // nobody asked for is a create refused rather than a field ignored. Each
+    // optional field is written only where the caller gave it — an omitted
+    // `--description` is not an empty description, it is no description.
+    let mut fields = json!({
+        "project": {
+            "key": project_key
+        },
+        "summary": summary,
+        "issuetype": {
+            "name": issue_type
         }
     });
+    if !description.is_null() {
+        fields["description"] = adf::process_description_input(description)?;
+    }
     // Every sub-task type requires it, and a team-managed project models an
     // epic's children the same way, so the field is what makes either of those
-    // creatable at all. It is sent only when given: on a type that takes no
-    // parent, a `null` there is a value the create screen has no field for.
+    // creatable at all.
     //
     // Which types require it is not decided here. The create screen's own
-    // metadata is the answer, and guessing from the type's name would be
-    // wrong in every language and every renamed scheme — an omission comes
-    // back from Jira naming the field.
+    // metadata is the answer, and guessing from the type's name would be wrong
+    // in every language and every renamed scheme — an omission comes back from
+    // Jira naming the field.
     if let Some(parent) = parent_key {
-        body["fields"]["parent"] = json!({ "key": parent });
+        fields["parent"] = json!({ "key": parent });
     }
+    if let Some(extra) = extra_fields {
+        merge_extra_fields(&mut fields, extra)?;
+    }
+    let body = json!({ "fields": fields });
 
     let request = client
         .post(Service::Jira, "/rest/api/3/issue")
@@ -2272,6 +2312,7 @@ mod tests {
             "Task",
             json!("plain text"),
             None,
+            None,
             &client,
         )
         .await
@@ -2304,6 +2345,7 @@ mod tests {
             "Sub-task",
             json!("plain text"),
             Some("PROJ-1"),
+            None,
             &client,
         )
         .await
@@ -2331,9 +2373,127 @@ mod tests {
             .await;
 
         let client = mock_client(server.uri());
-        create_issue("PROJ", "Summary", "Task", json!("x"), None, &client)
+        create_issue("PROJ", "Summary", "Task", json!("x"), None, None, &client)
             .await
             .expect("a create with no parent");
+    }
+
+    /// Jira takes only the fields on the type's create screen, so a field
+    /// nobody asked for is a create refused. An omitted `--description` is not
+    /// an empty description — the key is absent, as the parent's is.
+    #[tokio::test]
+    async fn integ_create_issue_omits_every_field_it_was_not_given() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/rest/api/3/issue"))
+            .and(|request: &wiremock::Request| {
+                let body: Value = serde_json::from_slice(&request.body).expect("json body");
+                let fields = &body["fields"];
+                fields.get("description").is_none() && fields.get("parent").is_none()
+            })
+            .respond_with(
+                ResponseTemplate::new(201).set_body_json(json!({ "id": "10004", "key": "PROJ-4" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        create_issue("PROJ", "Summary", "Task", Value::Null, None, None, &client)
+            .await
+            .expect("a create with neither a description nor a parent");
+    }
+
+    /// A project may require a field this command has no argument for, and
+    /// then nothing at all can be created through it — the shape the parent
+    /// had. `--fields` carries those, and a `description` inside it becomes
+    /// ADF exactly as `update` makes it.
+    #[tokio::test]
+    async fn integ_create_issue_carries_fields_it_has_no_argument_for() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/rest/api/3/issue"))
+            .and(|request: &wiremock::Request| {
+                let body: Value = serde_json::from_slice(&request.body).expect("json body");
+                let fields = &body["fields"];
+                fields["customfield_10010"] == json!("X")
+                    && fields["components"] == json!([{ "name": "api" }])
+                    && fields["description"]["type"] == json!("doc")
+                    && fields["summary"] == json!("Summary")
+            })
+            .respond_with(
+                ResponseTemplate::new(201).set_body_json(json!({ "id": "10005", "key": "PROJ-5" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = mock_client(server.uri());
+        create_issue(
+            "PROJ",
+            "Summary",
+            "Task",
+            Value::Null,
+            None,
+            Some(json!({
+                "customfield_10010": "X",
+                "components": [{ "name": "api" }],
+                "description": "written through --fields"
+            })),
+            &client,
+        )
+        .await
+        .expect("a create carrying fields this command has no argument for");
+    }
+
+    /// Named in both places, neither is dropped in favour of the other: which
+    /// one was meant is not something this code can tell.
+    #[tokio::test]
+    async fn integ_create_issue_refuses_a_field_given_twice() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(201))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let client = mock_client(server.uri());
+
+        for (extra, named) in [
+            (json!({ "summary": "another" }), "summary"),
+            (json!({ "description": "another" }), "description"),
+            (json!({ "parent": { "key": "PROJ-9" } }), "parent"),
+            (json!({ "project": { "key": "OTHER" } }), "project"),
+        ] {
+            let err = create_issue(
+                "PROJ",
+                "Summary",
+                "Task",
+                json!("a description"),
+                Some("PROJ-1"),
+                Some(extra.clone()),
+                &client,
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+            assert!(err.contains(&format!("`{named}`")), "{extra}: {err}");
+            assert!(err.contains("one place or the other"), "{extra}: {err}");
+        }
+
+        // And a value that is not an object at all names what it takes.
+        let err = create_issue(
+            "PROJ",
+            "Summary",
+            "Task",
+            Value::Null,
+            None,
+            Some(json!(["labels"])),
+            &client,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("JSON object of Jira field names"), "{err}");
     }
 
     #[tokio::test]
@@ -2346,7 +2506,7 @@ mod tests {
             .await;
 
         let client = mock_client(server.uri());
-        let err = create_issue("PROJ", "S", "Task", json!("x"), None, &client)
+        let err = create_issue("PROJ", "S", "Task", json!("x"), None, None, &client)
             .await
             .unwrap_err()
             .to_string();
