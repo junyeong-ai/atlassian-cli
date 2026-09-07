@@ -74,7 +74,7 @@ jobs:
         with:
           key: ${{ matrix.os }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
+      - uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2.87.5
         with:
           tool: cargo-nextest
       - name: Unit + integration tests
@@ -114,7 +114,7 @@ jobs:
         with:
           key: coverage
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
+      - uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2.87.5
         with:
           tool: cargo-llvm-cov,cargo-nextest
       - name: Generate LCOV report
