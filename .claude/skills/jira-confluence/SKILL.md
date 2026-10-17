@@ -1,6 +1,6 @@
 ---
 name: jira-confluence
-version: 0.13.5
+version: 0.13.6
 description: Use atlassian-cli for Atlassian Cloud Jira and Confluence searches, issue and page edits, comments, links, worklogs, agile operations and attachments; also diagnose authentication and manage the CLI installation when requested.
 allowed-tools: Bash
 ---
@@ -228,6 +228,8 @@ atlassian-cli auth logout                # clears the stored session, whatever m
 Switch profiles with `--profile <name>`; never invent profile names — list them via `atlassian-cli config list`. With an explicit `--config <file>`, `config list` includes that file and `config path/edit/init` target it. `--global` on path, edit or init selects the global file instead. `config show` emits the resolved profile as TOML with masked secrets; replace redactions before using it for authentication.
 
 Operational settings omitted from a file inherit from earlier files; `[]` explicitly clears a list. For `config edit`, `EDITOR` uses POSIX quoting on every platform: pass a program and arguments, quoting paths with spaces or backslashes inside the variable value (for example, `'C:\Program Files\Microsoft VS Code\Code.exe' --wait`).
+
+For the selected profile, the highest-priority file defining an `[auth]` section replaces that section entirely. Omit the section to preserve authentication from earlier files; credentials omitted inside it do not inherit from those files. Each credential then resolves as CLI flag > environment variable > selected file auth. When `ATLASSIAN_AUTH_METHOD` selects a different method, supply its credentials through CLI flags or environment variables.
 
 ## The installation itself
 

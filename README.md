@@ -3,7 +3,7 @@
 [![CI](https://github.com/junyeong-ai/atlassian-cli/workflows/CI/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/ci.yml)
 [![Security](https://github.com/junyeong-ai/atlassian-cli/workflows/Security/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/security.yml)
 [![Rust](https://img.shields.io/badge/rust-1.98.0%2B%20(2024%20edition)-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.13.5-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
+[![Version](https://img.shields.io/badge/version-0.13.6-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
 
 > **🌐 한국어** | **[English](README.en.md)**
 
@@ -115,7 +115,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scri
 
 ```bash
 # 특정 릴리스 설치
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.13.5 bash
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.13.6 bash
 
 # 이후 업데이트·제거는 바이너리가 직접 한다 (설치 스크립트 재실행 불필요)
 atlassian-cli self update
@@ -311,7 +311,9 @@ token = "..."
 
 ### 우선순위
 
-필드 단위 우선순위는 `CLI 플래그 > 환경 변수 > --config 파일 > 프로젝트 설정 > 글로벌 설정`입니다. 파일의 운영 설정은 항목을 생략하면 상속하고, `[]`를 명시하면 상위 목록을 지웁니다. `[performance]`의 일부 값만 지정해도 나머지 값은 상속합니다. `ATLASSIAN_AUTH_METHOD` 환경 변수는 설정 파일의 method를 덮어씁니다 (새 method의 자격증명이 env/CLI로 제공되어야 함).
+설정 우선순위는 `CLI 플래그 > 환경 변수 > --config 파일 > 프로젝트 설정 > 글로벌 설정`입니다. 파일의 운영 설정은 항목을 생략하면 상속하고, `[]`를 명시하면 상위 목록을 지웁니다. `[performance]`의 일부 값만 지정해도 나머지 값은 상속합니다.
+
+인증은 선택한 프로필에 `[auth]`가 있는 가장 높은 우선순위 파일의 섹션 전체를 사용합니다. 해당 섹션을 생략하면 하위 파일의 인증 설정을 유지하지만, 섹션 안에서 생략한 자격증명은 하위 파일에서 상속하지 않습니다. 선택한 인증 설정의 각 자격증명에는 `CLI 플래그 > 환경 변수 > 설정 파일` 순서를 적용합니다. `ATLASSIAN_AUTH_METHOD`로 method를 바꾸면 기존 파일 인증의 자격증명을 사용하지 않으며, 새 method에 필요한 값을 CLI나 환경 변수로 제공해야 합니다.
 
 ---
 
@@ -483,7 +485,7 @@ atlassian-cli completions bash > /etc/bash_completion.d/atlassian-cli
 
 **🌐 한국어** | **[English](README.en.md)**
 
-**Version 0.13.5** • Rust 2024 Edition
+**Version 0.13.6** • Rust 2024 Edition
 
 Made with ❤️ for productivity
 

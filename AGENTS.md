@@ -53,6 +53,8 @@ only where their contracts are the same.
 ## User contracts
 
 - Auth selection is explicit: `basic`, `scoped_token`, `service_account`, `oauth`.
+  For the selected profile, the highest-priority file defining an auth section
+  replaces that section entirely; omitted sections preserve the earlier auth.
   Resolve each credential field in order: CLI > environment > config file.
 - Configuration management honors `--config`; `--global` selects the global
   target for init, path and edit. Render resolved configuration through
