@@ -378,18 +378,37 @@ struct ConfigProfile {
     auth: Option<AuthConfig>,
 
     #[serde(default)]
-    jira: JiraConfig,
+    jira: JiraProfile,
 
     #[serde(default)]
-    confluence: ConfluenceConfig,
+    confluence: ConfluenceProfile,
 
-    /// Option distinguishes "section absent" from "section present with defaults".
-    /// Without Option, a child config with no [performance] section would silently
-    /// overwrite a parent's explicit timeout settings with defaults.
-    performance: Option<PerformanceConfig>,
+    #[serde(default)]
+    performance: PerformanceProfile,
 
     #[serde(default)]
     optimization: OptimizationConfig,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JiraProfile {
+    projects_filter: Option<Vec<String>>,
+    search_default_fields: Option<Vec<String>>,
+    search_custom_fields: Option<Vec<String>>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConfluenceProfile {
+    spaces_filter: Option<Vec<String>>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PerformanceProfile {
+    request_timeout_ms: Option<u64>,
+    rate_limit_delay_ms: Option<u64>,
 }
 
 /// Strip the scheme and trailing slash from a configured Atlassian domain and
@@ -703,25 +722,23 @@ impl Config {
             self.auth = other.auth;
         }
 
-        if !other.jira.projects_filter.is_empty() {
-            self.jira.projects_filter = other.jira.projects_filter;
+        if let Some(projects) = other.jira.projects_filter {
+            self.jira.projects_filter = projects;
         }
         if other.jira.search_default_fields.is_some() {
             self.jira.search_default_fields = other.jira.search_default_fields;
         }
-        if !other.jira.search_custom_fields.is_empty() {
-            self.jira.search_custom_fields = other.jira.search_custom_fields;
+        if let Some(fields) = other.jira.search_custom_fields {
+            self.jira.search_custom_fields = fields;
         }
-
-        if !other.confluence.spaces_filter.is_empty() {
-            self.confluence.spaces_filter = other.confluence.spaces_filter;
+        if let Some(spaces) = other.confluence.spaces_filter {
+            self.confluence.spaces_filter = spaces;
         }
-
-        // Only overwrite performance if the child profile explicitly specified it.
-        // This prevents silent data loss where a child without [performance] would
-        // reset the parent's settings to defaults.
-        if let Some(perf) = other.performance {
-            self.performance = perf;
+        if let Some(timeout) = other.performance.request_timeout_ms {
+            self.performance.request_timeout_ms = timeout;
+        }
+        if let Some(delay) = other.performance.rate_limit_delay_ms {
+            self.performance.rate_limit_delay_ms = delay;
         }
 
         if other.optimization.response_exclude_fields.is_some() {
@@ -989,16 +1006,17 @@ impl Config {
 # cloud_id = "..."  # Pin to one site if the user has access to many
 
 [default.jira]
-projects_filter = []
+# Omit fields to inherit them; an explicit [] clears an inherited list.
+# projects_filter = []
 # search_default_fields = ["key", "summary", "status", "assignee"]
 # search_custom_fields = ["customfield_10015"]
 
 [default.confluence]
-spaces_filter = []
+# spaces_filter = []
 
 [default.performance]
-request_timeout_ms = 30000
-rate_limit_delay_ms = 200
+# request_timeout_ms = 30000
+# rate_limit_delay_ms = 200
 
 # [default.optimization]
 # response_exclude_fields = ["avatarUrls", "iconUrl"]
@@ -2080,6 +2098,82 @@ domain = "x.atlassian.net"
     }
 
     #[test]
+    fn file_layers_preserve_omitted_fields_and_apply_explicit_values() {
+        let mut baseline = create_basic_config();
+        baseline.jira.projects_filter = vec!["BASE".into()];
+        baseline.jira.search_custom_fields = vec!["customfield_10001".into()];
+        baseline.confluence.spaces_filter = vec!["BASESPACE".into()];
+        baseline.performance.request_timeout_ms = 15000;
+        baseline.performance.rate_limit_delay_ms = 400;
+
+        for source in ["", "[jira]\n", "[confluence]\n", "[performance]\n"] {
+            let mut config = baseline.clone();
+            config.merge(toml::from_str(source).unwrap());
+            assert_eq!(
+                toml::Table::try_from(config).unwrap(),
+                toml::Table::try_from(&baseline).unwrap()
+            );
+        }
+
+        let mut config = baseline.clone();
+        config.merge(
+            toml::from_str(
+                r#"
+            [jira]
+            projects_filter = []
+            search_custom_fields = []
+            [confluence]
+            spaces_filter = []
+            [performance]
+            rate_limit_delay_ms = 0
+        "#,
+            )
+            .unwrap(),
+        );
+        assert!(config.jira.projects_filter.is_empty());
+        assert!(config.jira.search_custom_fields.is_empty());
+        assert!(config.confluence.spaces_filter.is_empty());
+        assert_eq!(config.performance.request_timeout_ms, 15000);
+        assert_eq!(config.performance.rate_limit_delay_ms, 0);
+
+        config.merge(toml::from_str("[performance]\nrequest_timeout_ms = 30000\n").unwrap());
+        assert_eq!(config.performance.request_timeout_ms, 30000);
+        assert_eq!(config.performance.rate_limit_delay_ms, 0);
+        config.merge(toml::from_str("[jira]\nprojects_filter = ['REPLACEMENT']\n").unwrap());
+        assert_eq!(config.jira.projects_filter, ["REPLACEMENT"]);
+    }
+
+    #[test]
+    fn explicit_invalid_performance_values_are_validated() {
+        let mut config = create_basic_config();
+        config.merge(toml::from_str("[performance]\nrequest_timeout_ms = 0\n").unwrap());
+        assert_eq!(config.performance.request_timeout_ms, 0);
+        assert!(
+            config
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("timeout")
+        );
+    }
+
+    #[test]
+    fn generated_templates_preserve_inherited_operational_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        Config::init_config_at(&path).unwrap();
+        let profile = Config::load_from_file(&path, None).unwrap().unwrap();
+        let mut config = create_basic_config();
+        config.jira.projects_filter = vec!["BASE".into()];
+        config.jira.search_custom_fields = vec!["customfield_10001".into()];
+        config.confluence.spaces_filter = vec!["BASESPACE".into()];
+        config.performance.request_timeout_ms = 15000;
+        let original = toml::Table::try_from(&config).unwrap();
+        config.merge(profile);
+        assert_eq!(toml::Table::try_from(config).unwrap(), original);
+    }
+
+    #[test]
     fn test_merge_performance_preserved_when_child_not_specified() {
         // Regression test: child profile without [performance] must not overwrite
         // parent's explicit timeout with defaults.
@@ -2088,7 +2182,7 @@ domain = "x.atlassian.net"
         config.performance.rate_limit_delay_ms = 100;
 
         let profile = ConfigProfile {
-            performance: None, // [performance] section absent in child TOML
+            performance: PerformanceProfile::default(),
             ..Default::default()
         };
 
@@ -2107,10 +2201,10 @@ domain = "x.atlassian.net"
         config.performance.request_timeout_ms = 5000;
 
         let profile = ConfigProfile {
-            performance: Some(PerformanceConfig {
-                request_timeout_ms: 15000,
-                rate_limit_delay_ms: 500,
-            }),
+            performance: PerformanceProfile {
+                request_timeout_ms: Some(15000),
+                rate_limit_delay_ms: Some(500),
+            },
             ..Default::default()
         };
 

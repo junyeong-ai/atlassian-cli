@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 mod cli;
 mod commands;
+mod editor;
 use cli::*;
 
 impl Cli {
@@ -804,17 +805,25 @@ async fn handle_config(
                 );
             }
 
-            let editor = std::env::var("EDITOR").unwrap_or_else(|_| {
-                if cfg!(target_os = "macos") {
-                    "open".to_string()
-                } else if cfg!(target_os = "windows") {
-                    "notepad".to_string()
-                } else {
-                    "vi".to_string()
+            let editor = match std::env::var("EDITOR") {
+                Ok(editor) => editor,
+                Err(std::env::VarError::NotPresent) => {
+                    if cfg!(target_os = "macos") {
+                        "open".to_string()
+                    } else if cfg!(target_os = "windows") {
+                        "notepad".to_string()
+                    } else {
+                        "vi".to_string()
+                    }
                 }
-            });
+                Err(std::env::VarError::NotUnicode(_)) => {
+                    anyhow::bail!("EDITOR must contain valid UTF-8");
+                }
+            };
 
-            let status = std::process::Command::new(&editor).arg(&path).status()?;
+            let status = editor::command(&editor, &path)?
+                .status()
+                .context("Failed to start editor")?;
 
             if !status.success() {
                 anyhow::bail!("Failed to open editor");

@@ -247,7 +247,7 @@ dependencies = [
 
 [[package]]
 name = "atlassian-cli"
-version = "0.13.4"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "apple-native-keyring-store",
@@ -271,6 +271,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
+ "shlex",
  "tar",
  "tempfile",
  "tokio",

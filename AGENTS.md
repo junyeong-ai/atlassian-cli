@@ -34,6 +34,7 @@ contracts and failure paths rather than repeating implementation details.
 - `src/commands/`: Jira and Confluence command execution.
 - `src/client.rs`: authenticated HTTP requests, API errors and rate-limit retries.
 - `src/config.rs`: profile loading, validation and per-field auth resolution.
+- `src/editor.rs`: editor command parsing and literal file argument construction.
 - `src/jira/api/`: issue, comment, link, worklog and agile operations.
 - `src/confluence/api/`: page, content and space operations; `api.rs` owns search,
   comment traversal and shared cursor pagination.
@@ -56,6 +57,10 @@ only where their contracts are the same.
 - Configuration management honors `--config`; `--global` selects the global
   target for init, path and edit. Render resolved configuration through
   `Config::redacted_toml`, preserving TOML keys and values with masked secrets.
+  File-layer operational DTOs retain field presence; only runtime settings apply
+  defaults. Omitted fields inherit; explicit empty lists clear earlier lists.
+  `EDITOR` uses POSIX quoting on every platform; pass an absolute config path as
+  its own argument.
 - Root options precede the subcommand. `--format markdown` converts content
   inside the JSON envelope. Search streaming emits JSONL without a trailing
   summary; progress and diagnostics use stderr.

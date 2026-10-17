@@ -124,3 +124,71 @@ fn config_edit_passes_the_selected_path_to_the_editor() {
     );
     assert_eq!(std::fs::read_to_string(project).unwrap(), "[default]\n");
 }
+
+#[cfg(unix)]
+#[test]
+fn config_edit_preserves_editor_arguments_and_option_like_filenames() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let editor = dir.path().join("fixture editor");
+    std::fs::write(&editor, "#!/bin/sh\n[ \"$1\" = '--wait' ] || exit 2\nshift\n[ \"$#\" = 1 ] || exit 3\ncase \"$1\" in /*) ;; *) exit 4 ;; esac\nprintf '\\n# editor invoked\\n' >> \"$1\"\n").unwrap();
+    std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let editor_command = format!(
+        "{} --wait",
+        shlex::try_quote(editor.to_str().unwrap()).unwrap()
+    );
+    for filename in [
+        "--help",
+        "--notes $(touch sentinel).toml",
+        "space config.toml",
+    ] {
+        let path = dir.path().join(filename);
+        std::fs::write(&path, "[default]\n").unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_atlassian-cli"))
+            .current_dir(dir.path())
+            .arg(format!("--config={filename}"))
+            .args(["config", "edit"])
+            .env("EDITOR", &editor_command)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{:?}", output.stderr);
+        assert!(
+            std::fs::read_to_string(path)
+                .unwrap()
+                .contains("# editor invoked")
+        );
+    }
+    assert!(!dir.path().join("sentinel").exists());
+}
+
+#[test]
+fn invalid_editor_commands_leave_the_config_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[default]\n").unwrap();
+    let values: Vec<std::ffi::OsString> = ["", "  ", "''", "editor '"]
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    #[cfg(unix)]
+    let values = {
+        use std::os::unix::ffi::OsStringExt;
+        let mut values = values;
+        values.push(std::ffi::OsString::from_vec(vec![0xff]));
+        values
+    };
+    for value in values {
+        let output = Command::new(env!("CARGO_BIN_EXE_atlassian-cli"))
+            .arg("--config")
+            .arg(&path)
+            .args(["config", "edit"])
+            .env("EDITOR", value)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        assert!(serde_json::from_slice::<serde_json::Value>(&output.stderr).is_ok());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[default]\n");
+    }
+}
