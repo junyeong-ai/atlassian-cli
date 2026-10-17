@@ -885,10 +885,9 @@ impl Config {
 
     /// The nearest project config at or above the working directory.
     ///
-    /// Absence is concluded from `NotFound` alone. The walk continues upward
-    /// past a candidate it does not find, so reading a file it merely could not
-    /// stat as absent runs the command against a parent directory's site
-    /// instead of the one the user put in this one.
+    /// `NotFound` and `NotADirectory` mean a candidate is absent. Other metadata
+    /// errors stop discovery; treating an unreadable candidate as absent could
+    /// select a parent directory's site instead.
     pub fn project_config_path() -> Result<Option<PathBuf>> {
         // A working directory that cannot be read is not a directory tree with
         // no project config in it — and answering `None` would run the command
