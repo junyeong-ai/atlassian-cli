@@ -2,11 +2,11 @@
 
 Backs the `self` command group: what this installation is, replacing its binary, and the skill it deploys. Talks to GitHub, not Atlassian, so it shares nothing with `ApiClient`.
 
-Everything runs in-process — `reqwest` for the download, `sha2` for the checksum, `flate2`/`tar` for the archive. Nothing is shelled out to, so an update works wherever the binary does. The one exception is `gh attestation verify`, which is opt-in and is the command a person would run by hand to answer the same question.
+Downloads, checksums and archive reads run in-process through `reqwest`, `sha2` and `flate2`/`tar`. Version verification executes the staged binary; skill compatibility checks and deployment execute the installed successor. These subprocesses use the binary's path directly. Optional provenance verification invokes `gh attestation verify` and requires the `gh` CLI.
 
 ## The skill is compiled in
 
-`skill.rs` carries `SKILL.md` through `include_str!`. There is one artifact, so a deployed copy cannot be a different version from the binary — and `SkillState` is decided by **byte comparison**, not a version string, so an edited copy is detected too. Adding a file to the skill is a line in `FILES`; editing one rebuilds the binary that carries it.
+`skill.rs` carries `SKILL.md` through `include_str!`, so the bundled skill ships with its binary. The deployed copy can differ after an edit, downgrade or failed deployment. `SkillState` compares its bytes with the bundled files and reports `Stale` for a mismatch, even when version strings match. Adding a file to the skill is a line in `FILES`; editing one rebuilds the binary that carries it.
 
 `deploy` also removes the files in the skill directory that this binary does not carry, so the directory states this version and nothing else. That set is deliberately narrow, because it is a set the code *deletes*: regular files, one level deep, classified with `symlink_metadata`, and named by `OsString` — a lossy `String` does not name the file it came from, so pruning one would fail on a name the platform allows and take every deploy with it. Following a symlink resolves the deletion somewhere it was never pointed — a link inside the directory, or a skill directory the user redirected into a dotfiles repository. For a directory this tool does not reconcile, `reconcilable_files` answers `None` rather than an empty set, and the distinction is load-bearing in both directions: nothing to prune, and nothing there that `state` counts as a difference. An empty set would make a redirected directory read `stale` forever, immediately after a deploy that had just written it correctly. `FILES` must stay flat; a test enforces it, along with `SKILL.md`'s `version:` equalling `CARGO_PKG_VERSION`.
 

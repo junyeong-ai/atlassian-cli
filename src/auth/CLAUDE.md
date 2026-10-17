@@ -245,8 +245,9 @@ spells the separator the same way so both builders read identically.
 
 ## Blank-value policy
 
-Empty / whitespace-only env vars and CLI flags are treated as **absent**
-(`config::non_blank*`). `export VAR=""` no longer shadows the config file
-value — silent override is a worst-class credential bug. The rule applies
-to `ATLASSIAN_AUTH_METHOD`, every `--*` flag, `ENV_DOMAIN`, and the list-
-style envs (`JIRA_PROJECTS_FILTER`, etc.).
+Empty or whitespace-only credential and domain CLI overrides are treated as
+**absent** through `config::non_blank*`. The same policy applies to authentication
+environment overrides and the domain, list and timeout environment variables
+read by `Config::load`: a blank override preserves the next source in precedence.
+Command content has its own contract; empty descriptions and whitespace remain
+meaningful payload values.
