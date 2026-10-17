@@ -8,10 +8,12 @@ Public functions remain exported through `jira::api` and `jira`.
 
 Every write path that accepts a description or comment body routes through `jira::adf::process_description_input` or `process_comment_input`:
 
-- `Value::String` → **total**: a string that parses to a valid ADF object is used as-is; everything else (plain prose, or JSON-object-shaped text like `{"status":"done"}` that isn't valid ADF) is wrapped in a minimal ADF `doc`. String input never errors, so any text can be posted verbatim.
-- `Value::Object` that is valid ADF → passed through after `validate_adf`; an invalid object `bail!`s (an explicit object unambiguously intends ADF).
+- `Value::String` → a string that parses to an object passing `validate_adf` is used as-is; other strings, including JSON-shaped prose like `{"status":"done"}`, are wrapped in a minimal ADF `doc`. Normalization accepts every string; the API can still reject nested ADF content.
+- `Value::Object` → passed through after `validate_adf`; an object failing that check `bail!`s.
 - `Value::Null` → treated as an empty ADF doc (not an error; users send `null` when clearing fields).
 - Anything else (number, bool, array) → `bail!` with the field name in the message.
+
+`validate_adf` checks only the root: `type = "doc"`, integer `version = 1`, and an array `content`. Jira validates the nested node schema.
 
 When adding a new write endpoint that takes user text, route through these helpers rather than sending the raw string. Do not accept plain strings at the API boundary without conversion — Jira's v3 API rejects them.
 

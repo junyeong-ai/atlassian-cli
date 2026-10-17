@@ -1,6 +1,6 @@
 ---
 name: jira-confluence
-version: 0.13.6
+version: 0.13.7
 description: Use atlassian-cli for Atlassian Cloud Jira and Confluence searches, issue and page edits, comments, links, worklogs, agile operations and attachments; also diagnose authentication and manage the CLI installation when requested.
 allowed-tools: Bash
 ---
@@ -117,7 +117,7 @@ Marks on text: `{"type":"text","text":"bold","marks":[{"type":"strong"}]}` — s
 
 List nesting is strict: `bulletList → listItem → paragraph → text`.
 
-A string arg is treated as ADF **only** if it parses to a complete valid ADF document; any other string — plain prose, or JSON-shaped text like `{"status":"done"}` — is posted verbatim as the literal body. So passing partial/invalid ADF silently lands as text rather than erroring; send a full, valid `doc` when you mean rich text.
+A string arg is treated as ADF when it parses to an object with `type: "doc"`, `version: 1` and an array `content`. Other strings, including JSON-shaped text like `{"status":"done"}`, are wrapped as literal text. The CLI checks only this root structure; Jira validates the nested nodes and can reject a document that passes the local check.
 
 ## Confluence
 
@@ -185,6 +185,8 @@ atlassian-cli confluence attachment upload 12345 ./icon.svg --content-type image
 | Stream to disk / pipe | `--all --stream` (outputs JSONL) |
 | Pick fields (Jira `get` & `search`) | `--fields key,summary,status` (or `*all` on `get` for the full issue) |
 | Expand fields (Confluence `search` only) | `--expand ancestors,space` — `get` has no `--expand`; read `spaceId` from `get`, then map it via `space list` |
+
+Jira `--all` requests 100 issues per page and ignores `--limit`. Confluence `--all` uses `--limit` for the first page only, capped at 50; subsequent requests follow the server's cursor links.
 
 `--stream` writes JSONL to stdout and progress to stderr — never mix it with `--pretty`.
 

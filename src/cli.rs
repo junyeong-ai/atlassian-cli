@@ -164,7 +164,11 @@ pub(crate) enum JiraSubcommand {
     /// Search issues with JQL; the configured project filter is auto-injected
     Search {
         jql: String,
-        #[arg(long, default_value = "100", help = "Results per page")]
+        #[arg(
+            long,
+            default_value = "100",
+            help = "Results per page without --all; --all requests 100 per page"
+        )]
         limit: u32,
         #[arg(long, help = "Fetch all results via token pagination")]
         all: bool,

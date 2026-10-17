@@ -125,7 +125,7 @@ Arguments:
 
 Options:
       --limit <LIMIT>
-          Results per page
+          Results per page without --all; --all requests 100 per page
 
           [default: 100]
 

@@ -52,7 +52,7 @@ body:
       label: Command that triggered the bug
       render: shell
       placeholder: |
-        atlassian-cli jira search --jql 'project = ABC'
+        atlassian-cli jira search 'project = ABC'
     validations:
       required: true
 

@@ -3,7 +3,7 @@
 [![CI](https://github.com/junyeong-ai/atlassian-cli/workflows/CI/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/ci.yml)
 [![Security](https://github.com/junyeong-ai/atlassian-cli/workflows/Security/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/security.yml)
 [![Rust](https://img.shields.io/badge/rust-1.98.0%2B%20(2024%20edition)-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.13.6-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
+[![Version](https://img.shields.io/badge/version-0.13.7-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
 [![DeepWiki](https://img.shields.io/badge/DeepWiki-junyeong--ai%2Fatlassian--cli-blue.svg?logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACwAAAAyCAYAAAAnWDnqAAAAAXNSR0IArs4c6QAAA05JREFUaEPtmUtyEzEQhtWTQyQLHNak2AB7ZnyXZMEjXMGeK/AIi+QuHrMnbChYY7MIh8g01fJoopFb0uhhEqqcbWTp06/uv1saEDv4O3n3dV60RfP947Mm9/SQc0ICFQgzfc4CYZoTPAswgSJCCUJUnAAoRHOAUOcATwbmVLWdGoH//PB8mnKqScAhsD0kYP3j/Yt5LPQe2KvcXmGvRHcDnpxfL2zOYJ1mFwrryWTz0advv1Ut4CJgf5uhDuDj5eUcAUoahrdY/56ebRWeraTjMt/00Sh3UDtjgHtQNHwcRGOC98BJEAEymycmYcWwOprTgcB6VZ5JK5TAJ+fXGLBm3FDAmn6oPPjR4rKCAoJCal2eAiQp2x0vxTPB3ALO2CRkwmDy5WohzBDwSEFKRwPbknEggCPB/imwrycgxX2NzoMCHhPkDwqYMr9tRcP5qNrMZHkVnOjRMWwLCcr8ohBVb1OMjxLwGCvjTikrsBOiA6fNyCrm8V1rP93iVPpwaE+gO0SsWmPiXB+jikdf6SizrT5qKasx5j8ABbHpFTx+vFXp9EnYQmLx02h1QTTrl6eDqxLnGjporxl3NL3agEvXdT0WmEost648sQOYAeJS9Q7bfUVoMGnjo4AZdUMQku50McDcMWcBPvr0SzbTAFDfvJqwLzgxwATnCgnp4wDl6Aa+Ax283gghmj+vj7feE2KBBRMW3FzOpLOADl0Isb5587h/U4gGvkt5v60Z1VLG8BhYjbzRwyQZemwAd6cCR5/XFWLYZRIMpX39AR0tjaGGiGzLVyhse5C9RKC6ai42ppWPKiBagOvaYk8lO7DajerabOZP46Lby5wKjw1HCRx7p9sVMOWGzb/vA1hwiWc6jm3MvQDTogQkiqIhJV0nBQBTU+3okKCFDy9WwferkHjtxib7t3xIUQtHxnIwtx4mpg26/HfwVNVDb4oI9RHmx5WGelRVlrtiw43zboCLaxv46AZeB3IlTkwouebTr1y2NjSpHz68WNFjHvupy3q8TFn3Hos2IAk4Ju5dCo8B3wP7VPr/FGaKiG+T+v+TQqIrOqMTL1VdWV1DdmcbO8KXBz6esmYWYKPwDL5b5FA1a0hwapHiom0r/cKaoqr+27/XcrS5UwSMbQAAAABJRU5ErkJggg==)](https://deepwiki.com/junyeong-ai/atlassian-cli)
 
 > **🌐 [한국어](README.md)** | **English**
@@ -145,24 +145,32 @@ Installs the latest prebuilt binary, which then deploys the `jira-confluence` Cl
 
 ```bash
 # Install a specific release
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.13.6 bash
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.13.7 bash
 
 # After that the binary manages itself — no need to re-run the installer
 atlassian-cli self update
 atlassian-cli self uninstall --yes
 ```
 
-**Manual install**:
-1. Download binary from [Releases](https://github.com/junyeong-ai/atlassian-cli/releases)
-2. Extract: `tar -xzf atlassian-cli-*.tar.gz`
-3. Move to PATH: `mv atlassian-cli ~/.local/bin/`
+**Manual install (Linux/macOS)**:
+
+Download the archive matching your platform and its `.sha256` file from [Releases](https://github.com/junyeong-ai/atlassian-cli/releases). Verify the checksum with `sha256sum -c` (Linux) or `shasum -a 256 -c` (macOS), passing the checksum filename, then extract that archive with `tar -xzf`.
+
+```bash
+mkdir -p "$HOME/.local/bin"
+mv atlassian-cli "$HOME/.local/bin/"
+export PATH="$HOME/.local/bin:$PATH"
+atlassian-cli --version
+```
+
+Add the `export PATH` line to your shell startup file for future terminals. Install the bundled skill separately with `atlassian-cli self skill install`.
 
 **Supported Platforms**:
 - Linux: x86_64, aarch64
 - macOS: Intel (x86_64), Apple Silicon (aarch64)
 - Windows: x86_64
 
-`install.sh` supports Linux/macOS automation. Windows builds are published as release binaries for manual installation. Every platform publishes a `.tar.gz`, so `self update` works everywhere.
+`install.sh` supports Linux/macOS automation. On Windows, extract `atlassian-cli.exe` from the release `.zip` into a directory on your user PATH. Every platform publishes a `.tar.gz`, so `self update` works everywhere.
 
 ### Managing the installation
 
@@ -181,14 +189,19 @@ atlassian-cli self uninstall --yes [--keep-skill] [--keep-credentials] [--purge-
 - `self update` runs the downloaded binary and checks the version it reports **before** replacing anything, so a binary that will not run on this machine leaves the installation untouched.
 - `self uninstall` also clears OAuth tokens from the OS keychain (`--keep-credentials` to keep them), and **refuses** when a keychain exists but will not be read — locked, or `ATLASSIAN_NO_KEYCHAIN` forbidding the look — because leaving tokens behind with no tool that knows where they are is the worst outcome. A keychain that will not answer takes two runs: the first clears `credentials.json` and refuses, naming what it removed, and `--keep-credentials` finishes the second. `auth logout` exits non-zero against a keychain that would not answer, for the same reason — every released target has a keychain compiled in, so "could not reach it" is not "there was nothing in it". Under `ATLASSIAN_NO_KEYCHAIN` it exits zero and says the keychain was not touched: nothing was asked of it, and unsetting the flag for one run is the way to clear what it holds. `--purge-config` removes the config file this tool writes and the directory only if that leaves it empty, so `credentials.json` survives alongside `--keep-credentials`. The directory is also kept if the credential-free `credentials.json.lock` remains. Project-local `.atlassian.toml` is never touched.
 
-### Method 2: Build from Source
+### Method 2: Build from Source (Linux/macOS)
 
 ```bash
 git clone https://github.com/junyeong-ai/atlassian-cli
 cd atlassian-cli
 cargo build --release --locked   # toolchain pinned by rust-toolchain.toml (1.99.1)
-cp target/release/atlassian-cli ~/.local/bin/
+mkdir -p "$HOME/.local/bin"
+cp target/release/atlassian-cli "$HOME/.local/bin/"
+export PATH="$HOME/.local/bin:$PATH"
+atlassian-cli --version
 ```
+
+Add the `export PATH` line to your shell startup file for future terminals. Install the bundled skill separately with `atlassian-cli self skill install`.
 
 **Requirements**: Rust 1.98.0+; development builds use the pinned Rust 1.99.1 toolchain
 
@@ -469,7 +482,7 @@ Root options must precede the subcommand.
 | `--config <PATH>` | Override config path | Global |
 | `--pretty` | Pretty-print JSON | Global |
 | `-v` / `-vv` / `-vvv` (`--verbose`) | stderr logging level | Global |
-| `--limit <N>` | Limit results | search |
+| `--limit <N>` | Page size (ignored by Jira `--all`) | search |
 | `--all` | All results (pagination) | jira search, confluence search |
 | `--stream` | JSONL streaming | jira search, confluence search (requires --all) |
 | `--expand` | Additional expand fields (ancestors, etc.; body.storage included by default) | confluence search |
@@ -532,7 +545,7 @@ Supported: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 
 **🌐 [한국어](README.md)** | **English**
 
-**Version 0.13.6** • Rust 2024 Edition
+**Version 0.13.7** • Rust 2024 Edition
 
 Made with ❤️ for productivity
 
