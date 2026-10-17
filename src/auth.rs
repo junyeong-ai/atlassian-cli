@@ -16,7 +16,7 @@
 //! Adding a method is one module + one enum variant — no `ApiClient` or
 //! call-site changes.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 mod basic;
@@ -355,14 +355,27 @@ impl AuthConfig {
         }
     }
 
-    /// Render this config as TOML-flavored lines for `config show` output.
-    /// Secrets are masked. Each variant owns its own formatting so adding a
-    /// new variant does not require touching `main.rs`.
+    pub(crate) fn redacted_table(&self) -> Result<toml::Table> {
+        let mut table =
+            toml::Table::try_from(self).context("Failed to serialize authentication settings")?;
+        let (key, secret) = match self {
+            Self::Basic { token, .. } | Self::ScopedToken { token, .. } => ("token", token),
+            Self::ServiceAccount { client_secret, .. } | Self::OAuth { client_secret, .. } => {
+                ("client_secret", client_secret)
+            }
+        };
+        if !secret.is_empty() {
+            table.insert(key.into(), toml::Value::String(mask_secret(secret)));
+        }
+        Ok(table)
+    }
+
+    /// Render authentication settings as TOML lines with secrets masked.
     pub fn display_lines(&self) -> Vec<String> {
         let mut out = vec![format!("method = \"{}\"", self.method())];
         match self {
             AuthConfig::Basic { email, token } => {
-                out.push(format!("email = {:?}", email));
+                out.push(format!("email = {}", toml::Value::String(email.clone())));
                 push_secret(&mut out, "token", token, "ATLASSIAN_API_TOKEN");
             }
             AuthConfig::ScopedToken {
@@ -370,10 +383,12 @@ impl AuthConfig {
                 token,
                 cloud_id,
             } => {
-                out.push(format!("email = {:?}", email));
+                out.push(format!("email = {}", toml::Value::String(email.clone())));
                 push_secret(&mut out, "token", token, "ATLASSIAN_API_TOKEN");
                 match cloud_id {
-                    Some(cid) => out.push(format!("cloud_id = {:?}", cid)),
+                    Some(cid) => {
+                        out.push(format!("cloud_id = {}", toml::Value::String(cid.clone())))
+                    }
                     None => out.push("# cloud_id = (will be resolved from the site domain)".into()),
                 }
             }
@@ -382,7 +397,10 @@ impl AuthConfig {
                 client_secret,
                 cloud_id,
             } => {
-                out.push(format!("client_id = {:?}", client_id));
+                out.push(format!(
+                    "client_id = {}",
+                    toml::Value::String(client_id.clone())
+                ));
                 push_secret(
                     &mut out,
                     "client_secret",
@@ -390,7 +408,9 @@ impl AuthConfig {
                     "ATLASSIAN_CLIENT_SECRET",
                 );
                 match cloud_id {
-                    Some(cid) => out.push(format!("cloud_id = {:?}", cid)),
+                    Some(cid) => {
+                        out.push(format!("cloud_id = {}", toml::Value::String(cid.clone())))
+                    }
                     None => out.push("# cloud_id = (will be auto-discovered)".into()),
                 }
             }
@@ -401,7 +421,10 @@ impl AuthConfig {
                 scopes,
                 cloud_id,
             } => {
-                out.push(format!("client_id = {:?}", client_id));
+                out.push(format!(
+                    "client_id = {}",
+                    toml::Value::String(client_id.clone())
+                ));
                 push_secret(
                     &mut out,
                     "client_secret",
@@ -409,9 +432,14 @@ impl AuthConfig {
                     "ATLASSIAN_CLIENT_SECRET",
                 );
                 out.push(format!("redirect_port = {}", redirect_port));
-                out.push(format!("scopes = {:?}", scopes));
+                out.push(format!(
+                    "scopes = {}",
+                    toml::Value::Array(scopes.iter().cloned().map(toml::Value::String).collect())
+                ));
                 match cloud_id {
-                    Some(cid) => out.push(format!("cloud_id = {:?}", cid)),
+                    Some(cid) => {
+                        out.push(format!("cloud_id = {}", toml::Value::String(cid.clone())))
+                    }
                     None => out.push("# cloud_id = (will be discovered at login)".into()),
                 }
             }
@@ -424,7 +452,10 @@ fn push_secret(out: &mut Vec<String>, key: &str, value: &str, env: &str) {
     if value.is_empty() {
         out.push(format!("# {key} = (not set — provide via {env})"));
     } else {
-        out.push(format!("{key} = \"{}\"", mask_secret(value)));
+        out.push(format!(
+            "{key} = {}",
+            toml::Value::String(mask_secret(value))
+        ));
     }
 }
 
@@ -713,6 +744,42 @@ mod tests {
         assert_eq!(mask_secret("ab"), "***");
         assert_eq!(mask_secret("abcd"), "abcd***");
         assert_eq!(mask_secret("abcdef"), "abcd***");
+    }
+
+    #[test]
+    fn display_lines_preserve_toml_strings_and_mask_escaped_secrets() {
+        let value = "quote\"backslash\\newline\nnull\0";
+        let secret = "\"\\\n\0private-secret";
+        let cases = [
+            AuthConfig::Basic {
+                email: value.into(),
+                token: secret.into(),
+            },
+            AuthConfig::OAuth {
+                client_id: value.into(),
+                client_secret: secret.into(),
+                redirect_port: 8976,
+                scopes: vec![value.into()],
+                cloud_id: Some(value.into()),
+            },
+        ];
+        for auth in cases {
+            let output = auth.display_lines().join("\n");
+            let table: toml::Table = toml::from_str(&output).unwrap();
+            assert!(!output.contains("private-secret"));
+            match auth {
+                AuthConfig::Basic { .. } => {
+                    assert_eq!(table["email"].as_str(), Some(value));
+                    assert_eq!(table["token"].as_str(), Some("\"\\\n\0***"));
+                }
+                _ => {
+                    assert_eq!(table["client_id"].as_str(), Some(value));
+                    assert_eq!(table["cloud_id"].as_str(), Some(value));
+                    assert_eq!(table["scopes"][0].as_str(), Some(value));
+                    assert_eq!(table["client_secret"].as_str(), Some("\"\\\n\0***"));
+                }
+            }
+        }
     }
 
     /// Regression guard: every `AuthConfig` variant must redact its secret

@@ -3,7 +3,7 @@
 [![CI](https://github.com/junyeong-ai/atlassian-cli/workflows/CI/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/ci.yml)
 [![Security](https://github.com/junyeong-ai/atlassian-cli/workflows/Security/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/security.yml)
 [![Rust](https://img.shields.io/badge/rust-1.98.0%2B%20(2024%20edition)-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.13.3-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
+[![Version](https://img.shields.io/badge/version-0.13.4-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
 
 > **🌐 한국어** | **[English](README.en.md)**
 
@@ -115,7 +115,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scri
 
 ```bash
 # 특정 릴리스 설치
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.13.3 bash
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.13.4 bash
 
 # 이후 업데이트·제거는 바이너리가 직접 한다 (설치 스크립트 재실행 불필요)
 atlassian-cli self update
@@ -305,6 +305,8 @@ token = "..."
 
 **OAuth scope**: 사용하는 엔드포인트가 요구하는 scope를 앱에 허용하고 프로파일의 `scopes`에 추가한 뒤 `auth login`을 다시 실행하세요. 프로파일은 계정·사이트·권한 구성을 분리할 때 사용합니다. [공식 OAuth 설정 안내](https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/)를 참고하세요.
 
+`config path/edit`는 `--config` 파일을 우선 선택합니다. `--global`을 함께 지정하면 글로벌 파일을 선택합니다. `--config <파일> config init`은 해당 경로에 설정을 생성하며 기존 파일을 덮어쓰지 않습니다. `config list`는 명시한 파일의 프로필도 포함합니다. `config show`는 비밀값을 마스킹한 TOML을 출력하며, 프로필 이름과 문자열을 그대로 보존합니다.
+
 ### 우선순위
 
 필드 단위 우선순위는 `CLI 플래그 > 환경 변수 > --config 파일 > 프로젝트 설정 > 글로벌 설정`입니다. `ATLASSIAN_AUTH_METHOD` 환경 변수는 설정 파일의 method를 덮어씁니다 (새 method의 자격증명이 env/CLI로 제공되어야 함).
@@ -479,7 +481,7 @@ atlassian-cli completions bash > /etc/bash_completion.d/atlassian-cli
 
 **🌐 한국어** | **[English](README.en.md)**
 
-**Version 0.13.3** • Rust 2024 Edition
+**Version 0.13.4** • Rust 2024 Edition
 
 Made with ❤️ for productivity
 

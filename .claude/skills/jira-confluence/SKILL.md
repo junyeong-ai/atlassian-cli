@@ -1,6 +1,6 @@
 ---
 name: jira-confluence
-version: 0.13.3
+version: 0.13.4
 description: Use atlassian-cli for Atlassian Cloud Jira and Confluence searches, issue and page edits, comments, links, worklogs, agile operations and attachments; also diagnose authentication and manage the CLI installation when requested.
 allowed-tools: Bash
 ---
@@ -225,7 +225,7 @@ atlassian-cli auth refresh               # force token refresh (debugging)
 atlassian-cli auth logout                # clears the stored session, whatever method the profile is on
 ```
 
-Switch profiles with `--profile <name>`; never invent profile names — list them via `atlassian-cli config list`.
+Switch profiles with `--profile <name>`; never invent profile names — list them via `atlassian-cli config list`. With an explicit `--config <file>`, `config list` includes that file and `config path/edit/init` target it. `--global` on path, edit or init selects the global file instead. `config show` emits the resolved profile as TOML with masked secrets; replace redactions before using it for authentication.
 
 ## The installation itself
 

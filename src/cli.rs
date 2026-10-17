@@ -686,11 +686,11 @@ pub(crate) struct ConfigCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum ConfigSubcommand {
-    /// Create a starter config file at the global or project location.
+    /// Create a starter config at --config, the global or project location.
     Init {
         #[arg(
             long,
-            help = "Write to ~/.config/atlassian-cli/config.toml instead of ./.atlassian.toml"
+            help = "Write the global config instead of --config or ./.atlassian.toml"
         )]
         global: bool,
     },
@@ -702,7 +702,7 @@ pub(crate) enum ConfigSubcommand {
     Edit {
         #[arg(
             long,
-            help = "Edit the global config even when a project config exists"
+            help = "Edit the global config instead of --config or the project config"
         )]
         global: bool,
     },
@@ -710,7 +710,7 @@ pub(crate) enum ConfigSubcommand {
     Path {
         #[arg(
             long,
-            help = "Print the global config path even when a project config exists"
+            help = "Print the global config path instead of --config or the project config"
         )]
         global: bool,
     },

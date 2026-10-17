@@ -53,6 +53,9 @@ only where their contracts are the same.
 
 - Auth selection is explicit: `basic`, `scoped_token`, `service_account`, `oauth`.
   Resolve each credential field in order: CLI > environment > config file.
+- Configuration management honors `--config`; `--global` selects the global
+  target for init, path and edit. Render resolved configuration through
+  `Config::redacted_toml`, preserving TOML keys and values with masked secrets.
 - Root options precede the subcommand. `--format markdown` converts content
   inside the JSON envelope. Search streaming emits JSONL without a trailing
   summary; progress and diagnostics use stderr.

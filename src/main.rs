@@ -705,7 +705,10 @@ async fn handle_config(
 ) -> Result<()> {
     match cmd.subcommand {
         ConfigSubcommand::Init { global } => {
-            let path = atlassian_cli::Config::init_config(global)?;
+            let path = match config_path.filter(|_| !global) {
+                Some(path) => atlassian_cli::Config::init_config_at(path)?,
+                None => atlassian_cli::Config::init_config(global)?,
+            };
             println!("Created config file: {:?}", path);
             println!("Edit it and add your credentials.");
             Ok(())
@@ -714,7 +717,7 @@ async fn handle_config(
             // Respect --config, --profile, and CLI overrides for accurate "resolved" view.
             let config =
                 atlassian_cli::Config::load_without_validation(config_path, profile, overrides)?;
-            print_resolved_config(&config);
+            print!("{}", config.redacted_toml()?);
             Ok(())
         }
         ConfigSubcommand::List => {
@@ -734,19 +737,23 @@ async fn handle_config(
                 Ok(())
             };
 
+            if let Some(custom) = config_path {
+                let there = atlassian_cli::path_present(custom)?;
+                println!("Custom:  {:?} {}", custom, if there { "✓" } else { "✗" });
+                collect(custom)?;
+            }
+            if let Some(project) = atlassian_cli::Config::project_config_path()? {
+                println!("Project: {:?} ✓", project);
+                collect(&project)?;
+            } else {
+                println!("Project: (none)");
+            }
             if let Some(global) = atlassian_cli::Config::global_config_path() {
                 let there = atlassian_cli::path_present(&global)?;
                 println!("Global:  {:?} {}", global, if there { "✓" } else { "✗" });
                 if there {
                     collect(&global)?;
                 }
-            }
-
-            if let Some(project) = atlassian_cli::Config::project_config_path()? {
-                println!("Project: {:?} ✓", project);
-                collect(&project)?;
-            } else {
-                println!("Project: (none)");
             }
 
             println!("\nProfiles (use --profile <name>):");
@@ -778,35 +785,22 @@ async fn handle_config(
             Ok(())
         }
         ConfigSubcommand::Path { global } => {
-            let path = if global {
-                atlassian_cli::Config::global_config_path()
-            } else {
-                atlassian_cli::Config::project_config_path()?
-                    .or_else(atlassian_cli::Config::global_config_path)
-            };
-
-            if let Some(p) = path {
-                println!("{}", p.display());
-            } else {
-                anyhow::bail!("Config file not found");
-            }
+            let path = atlassian_cli::Config::active_config_path(
+                config_path.map(PathBuf::as_path),
+                global,
+            )?;
+            println!("{}", path.display());
             Ok(())
         }
         ConfigSubcommand::Edit { global } => {
-            let path = if global {
-                atlassian_cli::Config::global_config_path()
-            } else {
-                atlassian_cli::Config::project_config_path()?
-                    .or_else(atlassian_cli::Config::global_config_path)
-            };
-
-            let path = path.ok_or_else(|| anyhow::anyhow!("Config file not found"))?;
-
+            let path = atlassian_cli::Config::active_config_path(
+                config_path.map(PathBuf::as_path),
+                global,
+            )?;
             if !atlassian_cli::path_present(&path)? {
                 anyhow::bail!(
-                    "Config file does not exist: {:?}\nRun 'atlassian-cli config init{}' to create it.",
-                    path,
-                    if global { " --global" } else { "" }
+                    "Config file does not exist: {:?}. Create it with config init using the same --config or --global selection.",
+                    path
                 );
             }
 
@@ -877,65 +871,6 @@ fn output_json(value: &serde_json::Value, pretty: bool) {
         println!("{}", serde_json::to_string_pretty(value).unwrap());
     } else {
         println!("{}", serde_json::to_string(value).unwrap());
-    }
-}
-
-/// Print the resolved config as TOML for the active profile. Secrets are
-/// masked via each `AuthConfig` variant's `display_lines`. Output is
-/// copy-pasteable after replacing redactions with real secrets.
-fn print_resolved_config(config: &atlassian_cli::Config) {
-    let profile = &config.profile;
-    println!("[{profile}]");
-    match &config.domain {
-        Some(d) => println!("domain = {:?}", d),
-        None => println!("# domain = (not set)"),
-    }
-
-    println!();
-    match &config.auth {
-        Some(auth) => {
-            println!("[{profile}.auth]");
-            for line in auth.display_lines() {
-                println!("{}", line);
-            }
-        }
-        None => {
-            println!("# [{profile}.auth] (not configured — set ATLASSIAN_AUTH_METHOD)");
-        }
-    }
-
-    println!();
-    println!("[{profile}.jira]");
-    println!("projects_filter = {:?}", config.jira.projects_filter);
-    if let Some(ref fields) = config.jira.search_default_fields {
-        println!("search_default_fields = {:?}", fields);
-    }
-    if !config.jira.search_custom_fields.is_empty() {
-        println!(
-            "search_custom_fields = {:?}",
-            config.jira.search_custom_fields
-        );
-    }
-
-    println!();
-    println!("[{profile}.confluence]");
-    println!("spaces_filter = {:?}", config.confluence.spaces_filter);
-
-    println!();
-    println!("[{profile}.performance]");
-    println!(
-        "request_timeout_ms = {}",
-        config.performance.request_timeout_ms
-    );
-    println!(
-        "rate_limit_delay_ms = {}",
-        config.performance.rate_limit_delay_ms
-    );
-
-    if let Some(ref excludes) = config.optimization.response_exclude_fields {
-        println!();
-        println!("[{profile}.optimization]");
-        println!("response_exclude_fields = {:?}", excludes);
     }
 }
 

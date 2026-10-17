@@ -5,6 +5,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 // Environment variable names — centralized to keep env/CLI wiring in sync.
@@ -535,7 +536,7 @@ impl Config {
         };
         // Track whether the requested profile was found in any config file.
         // A profile must exist in at least one file to be usable.
-        let mut profile_found = profile.is_none(); // "default" is always considered found
+        let mut profile_found = config.profile == "default";
 
         // 1. Load global config
         if let Some(global_path) = Self::global_config_path()
@@ -652,7 +653,7 @@ impl Config {
     /// Load a profile from a config file.
     /// Returns `Ok(None)` if the named profile doesn't exist in this file
     /// (other config files may still have it).
-    /// Returns `Ok(Some(default))` when no profile is specified.
+    /// Returns `Ok(Some(default))` for an implicit or explicit default profile.
     /// Returns `Err` only for parse/IO errors.
     fn load_from_file(path: &Path, profile: Option<&String>) -> Result<Option<ConfigProfile>> {
         #[cfg(unix)]
@@ -664,9 +665,9 @@ impl Config {
         let config_file: ConfigFile =
             toml::from_str(&content).map_err(|e| parse_failure(path, &content, e))?;
 
-        match profile {
+        match profile.map(String::as_str) {
+            None | Some("default") => Ok(Some(config_file.default)),
             Some(profile_name) => Ok(config_file.profiles.get(profile_name).cloned()),
-            None => Ok(Some(config_file.default)),
         }
     }
 
@@ -896,6 +897,33 @@ impl Config {
         }
     }
 
+    /// Select the file managed by `config path` and `config edit`.
+    /// `global` selects the global file; otherwise an explicit path takes
+    /// precedence over project discovery and the global fallback.
+    pub fn active_config_path(config_path: Option<&Path>, global: bool) -> Result<PathBuf> {
+        if global {
+            return Self::global_config_path().context("Failed to determine global config path");
+        }
+        if let Some(path) = config_path {
+            return Ok(path.to_path_buf());
+        }
+        Self::project_config_path()?
+            .or_else(Self::global_config_path)
+            .context("Config file not found")
+    }
+
+    /// Serialize this profile as TOML with credentials masked for display.
+    pub fn redacted_toml(&self) -> Result<String> {
+        let mut profile =
+            toml::Table::try_from(self).context("Failed to serialize resolved config")?;
+        if let Some(auth) = &self.auth {
+            profile.insert("auth".into(), toml::Value::Table(auth.redacted_table()?));
+        }
+        let mut document = toml::Table::new();
+        document.insert(self.profile.clone(), toml::Value::Table(profile));
+        toml::to_string_pretty(&document).context("Failed to render resolved config as TOML")
+    }
+
     pub fn init_config(global: bool) -> Result<PathBuf> {
         let path = if global {
             Self::global_config_path().context("Failed to determine global config path")?
@@ -903,7 +931,12 @@ impl Config {
             PathBuf::from(".atlassian.toml")
         };
 
-        if crate::path_present(&path)? {
+        Self::init_config_at(&path)
+    }
+
+    /// Create a starter configuration at an explicit destination.
+    pub fn init_config_at(path: &Path) -> Result<PathBuf> {
+        if crate::path_present(path)? {
             bail!("Config file already exists: {:?}", path);
         }
 
@@ -994,17 +1027,20 @@ rate_limit_delay_ms = 200
 
 "#;
 
-        fs::write(&path, template)?;
-
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&path)?.permissions();
-            perms.set_mode(0o600);
-            fs::set_permissions(&path, perms)?;
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
         }
+        let mut file = options
+            .open(path)
+            .with_context(|| format!("Failed to create config file {path:?}"))?;
+        file.write_all(template.as_bytes())
+            .with_context(|| format!("Failed to write config file {path:?}"))?;
 
-        Ok(path)
+        Ok(path.to_path_buf())
     }
 }
 
@@ -1012,6 +1048,141 @@ rate_limit_delay_ms = 200
 #[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_default_selects_the_same_profile_as_an_implicit_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        for content in [
+            "[default]\ndomain = \"example.atlassian.net\"\n",
+            "[work]\n",
+        ] {
+            fs::write(&path, content).unwrap();
+            let implicit = Config::load_from_file(&path, None).unwrap().unwrap();
+            let explicit = Config::load_from_file(&path, Some(&"default".into()))
+                .unwrap()
+                .unwrap();
+            assert_eq!(implicit.domain, explicit.domain);
+        }
+    }
+
+    #[test]
+    fn redacted_toml_preserves_profile_keys_and_settings() {
+        let secret = "private-secret-never-rendered";
+        let auth_methods = [
+            AuthConfig::Basic {
+                email: "quote\"slash\\line\n\0@example.com".into(),
+                token: secret.into(),
+            },
+            AuthConfig::ScopedToken {
+                email: "운영@example.com".into(),
+                token: secret.into(),
+                cloud_id: None,
+            },
+            AuthConfig::ServiceAccount {
+                client_id: "quoted\"identifier\\\n\0".into(),
+                client_secret: secret.into(),
+                cloud_id: Some("cloud-1".into()),
+            },
+            AuthConfig::OAuth {
+                client_id: "client".into(),
+                client_secret: secret.into(),
+                redirect_port: 8976,
+                scopes: vec!["offline_access".into(), "escaped\"\\\n\0".into()],
+                cloud_id: None,
+            },
+        ];
+        for profile in ["default", "prod.eu", "운영", "qa team", "", "quote\"\\\n\0"] {
+            for auth in &auth_methods {
+                let config = Config {
+                    profile: profile.into(),
+                    domain: Some("example.atlassian.net".into()),
+                    auth: Some(auth.clone()),
+                    jira: JiraConfig {
+                        projects_filter: vec!["quoted\"\\\n\0".into()],
+                        search_default_fields: Some(vec!["summary".into()]),
+                        search_custom_fields: vec!["customfield_10001".into()],
+                    },
+                    optimization: OptimizationConfig {
+                        response_exclude_fields: Some(vec!["self".into()]),
+                    },
+                    ..Config::default()
+                };
+                let rendered = config.redacted_toml().unwrap();
+                assert!(!rendered.contains(secret));
+                let document: toml::Table = toml::from_str(&rendered).unwrap();
+                assert_eq!(document.len(), 1);
+                let value = document.get(profile).unwrap().clone();
+                let restored: Config = value.try_into().unwrap();
+                assert_eq!(
+                    toml::Table::try_from(&restored).unwrap(),
+                    toml::Table::try_from(&config).unwrap()
+                );
+                let auth_table = document[profile]["auth"].as_table().unwrap();
+                let key = match auth {
+                    AuthConfig::Basic { .. } | AuthConfig::ScopedToken { .. } => "token",
+                    _ => "client_secret",
+                };
+                assert_eq!(auth_table[key].as_str(), Some("priv***"));
+                let _: ConfigFile = toml::from_str(&rendered).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn redacted_toml_omits_unset_credentials() {
+        for auth in [
+            None,
+            Some(AuthConfig::Basic {
+                email: "user@example.com".into(),
+                token: String::new(),
+            }),
+        ] {
+            let config = Config {
+                profile: "default".into(),
+                auth,
+                ..Config::default()
+            };
+            let document: toml::Table = toml::from_str(&config.redacted_toml().unwrap()).unwrap();
+            if config.auth.is_some() {
+                assert!(document["default"]["auth"].get("token").is_none());
+            } else {
+                assert!(document["default"].get("auth").is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_config_targets_take_precedence_over_discovery() {
+        let custom = Path::new("custom.toml");
+        assert_eq!(
+            Config::active_config_path(Some(custom), false).unwrap(),
+            custom
+        );
+        assert_eq!(
+            Config::active_config_path(Some(custom), true).unwrap(),
+            Config::global_config_path().unwrap()
+        );
+    }
+
+    #[test]
+    fn initializing_a_custom_config_preserves_existing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("custom.toml");
+        assert_eq!(Config::init_config_at(&path).unwrap(), path);
+        let original = fs::read(&path).unwrap();
+        let _: ConfigFile = toml::from_str(std::str::from_utf8(&original).unwrap()).unwrap();
+        assert!(Config::init_config_at(&path).is_err());
+        assert_eq!(fs::read(&path).unwrap(), original);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
 
     #[test]
     fn profile_names_lists_default_first_then_sorted() {

@@ -1462,7 +1462,7 @@ Create, inspect, or validate the configuration this tool reads
 Usage: atlassian-cli config <COMMAND>
 
 Commands:
-  init      Create a starter config file at the global or project location
+  init      Create a starter config at --config, the global or project location
   show      Print the resolved config (secrets masked)
   list      List config file paths and environment variable status
   edit      Open the active config file in $EDITOR
@@ -1478,13 +1478,13 @@ Options:
 ## `atlassian-cli config init`
 
 ```text
-Create a starter config file at the global or project location
+Create a starter config at --config, the global or project location
 
 Usage: atlassian-cli config init [OPTIONS]
 
 Options:
       --global
-          Write to ~/.config/atlassian-cli/config.toml instead of ./.atlassian.toml
+          Write the global config instead of --config or ./.atlassian.toml
 
   -h, --help
           Print help
@@ -1523,7 +1523,7 @@ Usage: atlassian-cli config edit [OPTIONS]
 
 Options:
       --global
-          Edit the global config even when a project config exists
+          Edit the global config instead of --config or the project config
 
   -h, --help
           Print help
@@ -1538,7 +1538,7 @@ Usage: atlassian-cli config path [OPTIONS]
 
 Options:
       --global
-          Print the global config path even when a project config exists
+          Print the global config path instead of --config or the project config
 
   -h, --help
           Print help

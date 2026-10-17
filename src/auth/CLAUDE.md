@@ -34,6 +34,11 @@ The shared `/myself` probe lives in `strategy::probe_myself`, and
 `strategy::encode_basic_credential` holds the one copy of the `email:token`
 base64 encoding, so no strategy reaches into another module to share either.
 
+`Config::redacted_toml` serializes the resolved profile through TOML. Ordinary
+`AuthConfig` serialization excludes secrets; `redacted_table` adds only masked
+values for display. Keep both paths free of raw credentials and use TOML string
+serialization in the public `display_lines` formatter too.
+
 ## Single source of truth
 
 Every OAuth default and lifecycle constant is declared in `auth.rs`:
