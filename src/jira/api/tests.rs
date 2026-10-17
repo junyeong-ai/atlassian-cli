@@ -77,7 +77,10 @@ fn test_add_comment_missing_comment() {
     assert!(comment_result.is_ok());
     let comment_adf = comment_result.unwrap();
     assert_eq!(comment_adf["type"], "doc");
-    assert_eq!(comment_adf["content"][0]["content"][0]["text"], "");
+    assert_eq!(
+        comment_adf["content"],
+        json!([{ "type": "paragraph", "content": [] }])
+    );
 }
 
 // -- Integration tests for Phase 1-3 endpoints --
@@ -1359,39 +1362,45 @@ async fn integ_watchers_envelope_must_be_a_list() {
 /// it away looked green.
 #[tokio::test]
 async fn integ_search_all_returns_every_page_it_fetched() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/rest/api/3/search/jql"))
-        .and(body_string_contains("nextPageToken"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!({ "issues": [{ "key": "X-2" }] })),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/rest/api/3/search/jql"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(json!({ "issues": [{ "key": "X-1" }], "nextPageToken": "P2" })),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
+    for stream in [false, true] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/rest/api/3/search/jql"))
+            .and(body_string_contains("nextPageToken"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "issues": [{ "key": "X-2" }] })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/rest/api/3/search/jql"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "issues": [{ "key": "X-1" }], "nextPageToken": "P2" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
 
-    let client = mock_client(server.uri());
-    let result = search_all("project = X", None, false, false, &client)
-        .await
-        .unwrap();
+        let client = mock_client(server.uri());
+        let result = search_all("project = X", None, stream, false, &client)
+            .await
+            .unwrap();
 
-    assert_eq!(result["total"], 2, "{result}");
-    let keys: Vec<&str> = result["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|i| i["key"].as_str().unwrap())
-        .collect();
-    assert_eq!(keys, vec!["X-1", "X-2"], "{result}");
+        if stream {
+            assert!(result.is_null());
+            continue;
+        }
+        assert_eq!(result["total"], 2, "{result}");
+        let keys: Vec<&str> = result["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["key"].as_str().unwrap())
+            .collect();
+        assert_eq!(keys, vec!["X-1", "X-2"], "{result}");
+    }
 }
 
 /// An empty page with a live token is not the end of the results; a token
@@ -2614,6 +2623,48 @@ async fn integ_update_issue_wraps_fields_and_converts_description() {
         body["fields"]["description"]["content"][0]["content"][0]["text"],
         "plain text"
     );
+}
+
+#[tokio::test]
+async fn integ_update_issue_preserves_empty_null_and_omitted_descriptions() {
+    let server = MockServer::start().await;
+    let client = mock_client(server.uri());
+    for (input, expected) in [
+        (
+            json!({ "description": "" }),
+            json!({ "description": {
+                "type": "doc", "version": 1,
+                "content": [{ "type": "paragraph", "content": [] }]
+            } }),
+        ),
+        (
+            json!({ "description": null }),
+            json!({ "description": null }),
+        ),
+        (json!({ "summary": "new" }), json!({ "summary": "new" })),
+        (
+            json!({ "description": " \t\n" }),
+            json!({ "description": {
+                "type": "doc", "version": 1,
+                "content": [{ "type": "paragraph", "content": [
+                    { "type": "text", "text": " \t\n" }
+                ] }]
+            } }),
+        ),
+    ] {
+        Mock::given(method("PUT"))
+            .and(path("/rest/api/3/issue/MDW-1"))
+            .and(body_json(json!({ "fields": expected })))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        assert_eq!(
+            update_issue("MDW-1", input, &client).await.unwrap(),
+            json!({})
+        );
+    }
 }
 
 #[tokio::test]

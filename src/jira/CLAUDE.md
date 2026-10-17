@@ -6,14 +6,16 @@ Public functions remain exported through `jira::api` and `jira`.
 
 ## ADF input normalization
 
-Every write path that accepts a description or comment body routes through `jira::adf::process_description_input` or `process_comment_input`:
+Description and comment bodies normalize through `jira::adf::process_description_input` or `process_comment_input`:
 
 - `Value::String` → a string that parses to an object passing `validate_adf` is used as-is; other strings, including JSON-shaped prose like `{"status":"done"}`, are wrapped in a minimal ADF `doc`. Normalization accepts every string; the API can still reject nested ADF content.
 - `Value::Object` → passed through after `validate_adf`; an object failing that check `bail!`s.
-- `Value::Null` → treated as an empty ADF doc (not an error; users send `null` when clearing fields).
+- `Value::Null` → the normalization helper returns an empty ADF paragraph.
 - Anything else (number, bool, array) → `bail!` with the field name in the message.
 
 `validate_adf` checks only the root: `type = "doc"`, integer `version = 1`, and an array `content`. Jira validates the nested node schema.
+
+Empty strings become empty ADF paragraphs without empty text nodes; whitespace is preserved. Issue updates send an explicit `description: null` unchanged to clear the field. An omitted description is not sent and leaves it unchanged.
 
 When adding a new write endpoint that takes user text, route through these helpers rather than sending the raw string. Do not accept plain strings at the API boundary without conversion — Jira's v3 API rejects them.
 

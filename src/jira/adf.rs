@@ -69,15 +69,17 @@ pub fn validate_adf(value: &Value) -> Result<()> {
 /// assert_eq!(adf["type"], "doc");
 /// ```
 pub fn text_to_adf(text: &str) -> Value {
+    let content = if text.is_empty() {
+        Vec::new()
+    } else {
+        vec![json!({ "type": "text", "text": text })]
+    };
     json!({
         "type": "doc",
         "version": 1,
         "content": [{
             "type": "paragraph",
-            "content": [{
-                "type": "text",
-                "text": text
-            }]
+            "content": content
         }]
     })
 }
@@ -308,7 +310,10 @@ mod tests {
 
         assert_eq!(adf["type"], "doc");
         assert_eq!(adf["version"], 1);
-        assert_eq!(adf["content"][0]["content"][0]["text"], "");
+        assert_eq!(
+            adf["content"],
+            json!([{ "type": "paragraph", "content": [] }])
+        );
     }
 
     #[test]
@@ -353,7 +358,10 @@ mod tests {
         let result = process_adf_input(input, "test_field").unwrap();
 
         assert_eq!(result["type"], "doc");
-        assert_eq!(result["content"][0]["content"][0]["text"], "");
+        assert_eq!(
+            result["content"],
+            json!([{ "type": "paragraph", "content": [] }])
+        );
     }
 
     #[test]
@@ -461,7 +469,10 @@ mod tests {
         let result = process_adf_input(input, "test_field").unwrap();
 
         assert_eq!(result["type"], "doc");
-        assert_eq!(result["content"][0]["content"][0]["text"], "");
+        assert_eq!(
+            result["content"],
+            json!([{ "type": "paragraph", "content": [] }])
+        );
     }
 
     #[test]

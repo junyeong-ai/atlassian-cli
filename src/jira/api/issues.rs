@@ -130,6 +130,7 @@ pub async fn search_all(
     // counterpart of `CursorTrail`'s repeated path.
     const MAX_PAGES: u32 = 10_000;
     let mut all_issues: Vec<Value> = Vec::new();
+    let mut total = 0usize;
     let mut next_page_token: Option<String> = None;
     let mut seen_tokens: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -182,15 +183,16 @@ pub async fn search_all(
             io::stdout().flush()?;
         }
 
-        all_issues.extend(processed_issues);
+        total += count;
+        if !stream {
+            all_issues.extend(processed_issues);
+        }
 
         // Jira's /search/jql endpoint does not return a total count — only
         // nextPageToken/isLast. Show cumulative fetched count instead.
         eprintln!(
             "  Page {}: {} issues (cumulative: {})",
-            page_num,
-            count,
-            all_issues.len()
+            page_num, count, total
         );
 
         // Absent or null is the endpoint's own end-of-results signal; a token
@@ -236,7 +238,7 @@ pub async fn search_all(
         anyhow::bail!("search did not finish within {MAX_PAGES} pages");
     }
 
-    eprintln!("\nTotal: {} issues fetched", all_issues.len());
+    eprintln!("\nTotal: {} issues fetched", total);
 
     // Stream mode already wrote each item to stdout above. Returning Null signals
     // the caller to skip stdout output — any further JSON would corrupt the JSONL
@@ -246,7 +248,7 @@ pub async fn search_all(
     } else {
         Ok(json!({
             "items": all_issues,
-            "total": all_issues.len()
+            "total": total
         }))
     }
 }
@@ -255,9 +257,8 @@ pub async fn search_all(
 ///
 /// A field named in both places is refused rather than merged: which of the
 /// two was meant is not something this code can tell, and taking either
-/// silently drops what the caller wrote in the other. `description` is
-/// converted here as `update_issue` converts it, so the same JSON means the
-/// same thing to both commands.
+/// silently drops what the caller wrote in the other. Description values are
+/// normalized to ADF before insertion.
 fn merge_extra_fields(fields: &mut Value, extra: Value) -> Result<()> {
     let Value::Object(extra) = extra else {
         anyhow::bail!(
@@ -349,6 +350,7 @@ pub async fn update_issue(
 
     if let Some(fields_obj) = fields_value.as_object_mut()
         && let Some(description_ref) = fields_obj.get_mut("description")
+        && !description_ref.is_null()
     {
         let description = std::mem::replace(description_ref, Value::Null);
         let description_adf = adf::process_description_input(description)?;

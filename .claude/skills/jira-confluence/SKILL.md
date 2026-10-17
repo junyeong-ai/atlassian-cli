@@ -1,6 +1,6 @@
 ---
 name: jira-confluence
-version: 0.13.8
+version: 0.13.9
 description: Use atlassian-cli for Atlassian Cloud Jira and Confluence searches, issue and page edits, comments, links, worklogs, agile operations and attachments; also diagnose authentication and manage the CLI installation when requested.
 allowed-tools: Bash
 ---
@@ -118,6 +118,8 @@ Marks on text: `{"type":"text","text":"bold","marks":[{"type":"strong"}]}` — s
 List nesting is strict: `bulletList → listItem → paragraph → text`.
 
 A string arg is treated as ADF when it parses to an object with `type: "doc"`, `version: 1` and an array `content`. Other strings, including JSON-shaped text like `{"status":"done"}`, are wrapped as literal text. The CLI checks only this root structure; Jira validates the nested nodes and can reject a document that passes the local check.
+
+An empty string becomes an empty ADF paragraph; whitespace is preserved. Use `jira update KEY '{"description":null}'` to clear a description. Omitting `description` leaves it unchanged.
 
 A depth-limit marker in Markdown means content was truncated; inspect unconverted content with `--format html`.
 

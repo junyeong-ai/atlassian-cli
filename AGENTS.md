@@ -65,7 +65,8 @@ only where their contracts are the same.
   its own argument.
 - Root options precede the subcommand. `--format markdown` converts content
   inside the JSON envelope. Search streaming emits JSONL without a trailing
-  summary; progress and diagnostics use stderr.
+  summary; progress and diagnostics use stderr. Retain search results only in
+  non-streaming mode; streaming keeps a cumulative count and cursor history.
 - Runtime failures emit one JSON error object to stderr. Clap usage errors use
   text and exit 2. Exit codes: 1 generic, 3 auth/permission, 4 missing resource,
   5 rate limit, 6 server error. Output may precede a later failure.

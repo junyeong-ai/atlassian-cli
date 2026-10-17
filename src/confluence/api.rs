@@ -182,6 +182,7 @@ pub async fn search_all(
     // was reached at.
     const MAX_PAGES: u32 = 10_000;
     let mut all_items: Vec<Value> = Vec::new();
+    let mut total = 0usize;
     let mut next_url: Option<String> = None;
     let mut total_size: u64 = 0;
     let mut trail = CursorTrail::default();
@@ -196,7 +197,7 @@ pub async fn search_all(
 
         if page_num == 1 {
             // Progress-only: feeds the stderr "fetched X/Y" line. The returned
-            // envelope's `total` is the exact `all_items.len()` (see below), so
+            // envelope's `total` is the exact fetched count, so
             // unlike single-page `search` this estimate is non-load-bearing and
             // a missing `totalSize` degrades to 0 rather than aborting the crawl.
             total_size = data["totalSize"].as_u64().unwrap_or(0);
@@ -218,14 +219,14 @@ pub async fn search_all(
             io::stdout().flush()?;
         }
 
-        all_items.extend(items);
+        total += count;
+        if !stream {
+            all_items.extend(items);
+        }
 
         eprintln!(
             "  Page {}: {} items (fetched: {}/{})",
-            page_num,
-            count,
-            all_items.len(),
-            total_size
+            page_num, count, total, total_size
         );
 
         // Absent or null is the API's end-of-results signal; a `next` that is
@@ -263,7 +264,7 @@ pub async fn search_all(
         );
     }
 
-    eprintln!("\nTotal: {} items fetched", all_items.len());
+    eprintln!("\nTotal: {} items fetched", total);
 
     // See `jira::search_all` — Null signals `output_json` to skip, so the
     // trailing summary doesn't pollute the JSONL stream.
@@ -272,7 +273,7 @@ pub async fn search_all(
     } else {
         Ok(json!({
             "items": all_items,
-            "total": all_items.len()
+            "total": total
         }))
     }
 }

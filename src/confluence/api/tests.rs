@@ -1585,43 +1585,49 @@ async fn integ_list_follows_absolute_next_cursor_on_the_configured_host() {
 /// threw it away would look green.
 #[tokio::test]
 async fn integ_v1_search_all_returns_every_page_it_fetched() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/wiki/rest/api/search"))
-        .and(query_param_is_missing("cursor"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "results": [{ "content": { "id": "1", "title": "a" } }],
-            "totalSize": 2,
-            "_links": {
-                "base": format!("{}/wiki", server.uri()),
-                "next": "/rest/api/search?cursor=P2"
-            }
-        })))
-        .expect(1)
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/wiki/rest/api/search"))
-        .and(query_param("cursor", "P2"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "results": [{ "content": { "id": "2", "title": "b" } }]
-        })))
-        .expect(1)
-        .mount(&server)
-        .await;
+    for stream in [false, true] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/rest/api/search"))
+            .and(query_param_is_missing("cursor"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{ "content": { "id": "1", "title": "a" } }],
+                "totalSize": 2,
+                "_links": {
+                    "base": format!("{}/wiki", server.uri()),
+                    "next": "/rest/api/search?cursor=P2"
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/rest/api/search"))
+            .and(query_param("cursor", "P2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{ "content": { "id": "2", "title": "b" } }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
 
-    let client = mock_client(server.uri());
-    let result = search_all("type = page", 50, None, None, false, false, &client)
-        .await
-        .unwrap();
-    let ids: Vec<&str> = result["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|i| i["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(ids, vec!["1", "2"], "{result}");
-    assert_eq!(result["total"], 2, "{result}");
+        let client = mock_client(server.uri());
+        let result = search_all("type = page", 50, None, None, stream, false, &client)
+            .await
+            .unwrap();
+        if stream {
+            assert!(result.is_null());
+            continue;
+        }
+        let ids: Vec<&str> = result["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, vec!["1", "2"], "{result}");
+        assert_eq!(result["total"], 2, "{result}");
+    }
 }
 
 /// A page can come back empty while `next` is still live — v1 trims

@@ -3,7 +3,7 @@
 [![CI](https://github.com/junyeong-ai/atlassian-cli/workflows/CI/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/ci.yml)
 [![Security](https://github.com/junyeong-ai/atlassian-cli/workflows/Security/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/security.yml)
 [![Rust](https://img.shields.io/badge/rust-1.98.0%2B%20(2024%20edition)-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.13.8-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
+[![Version](https://img.shields.io/badge/version-0.13.9-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
 
 > **🌐 한국어** | **[English](README.en.md)**
 
@@ -116,7 +116,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scri
 
 ```bash
 # 특정 릴리스 설치
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.13.8 bash
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.13.9 bash
 
 # 이후 업데이트·제거는 바이너리가 직접 한다 (설치 스크립트 재실행 불필요)
 atlassian-cli self update
@@ -390,7 +390,7 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 | `list types/priorities/statuses/labels` | 전역 메타데이터 조회 |
 | `board list --project <KEY>` | 애자일 보드 목록 |
 | `sprint list [--project <KEY> | --board <ID>] [--state active]`, `sprint move/backlog ...` | 스프린트 조회 / 백로그 이동 |
-| `epic assign/unassign <EPIC> <KEY...>` | 에픽 연결 / 해제 |
+| `epic assign <EPIC> <KEY...>`, `epic unassign <KEY...>` | 에픽 연결 / 해제 |
 
 ### Confluence
 | 명령어 | 설명 |
@@ -489,7 +489,7 @@ atlassian-cli completions bash > /etc/bash_completion.d/atlassian-cli
 
 **🌐 한국어** | **[English](README.en.md)**
 
-**Version 0.13.8** • Rust 2024 Edition
+**Version 0.13.9** • Rust 2024 Edition
 
 Made with ❤️ for productivity
 
