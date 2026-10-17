@@ -90,7 +90,9 @@ only where their contracts are the same.
 
 ## Releases and documentation
 
-Commit `Cargo.lock`; pin GitHub Actions to complete commit SHAs. Keep the release
+Text files use LF on every platform through `.gitattributes`; embedded skill and
+generated reference content must remain byte-stable. Commit `Cargo.lock`; pin
+GitHub Actions to complete commit SHAs. Keep the release
 matrix and `dist::target` aligned. Preserve checksum verification before staging
 or running a downloaded binary and verify its version before replacement.
 
