@@ -1,19 +1,18 @@
 //! Loopback OAuth callback receiver (RFC 8252 §7.3).
 //!
-//! Binds 127.0.0.1:{port}, accepts a single connection, parses the redirect URI
-//! query for `code` + `state`, validates CSRF state, returns an HTML page, and
-//! shuts down. No third-party HTTP framework — direct tokio TCP, ~80 lines.
+//! Receives one bounded HTTP request on 127.0.0.1, validates its callback
+//! path and CSRF state, and returns an HTML result to the browser.
 
 use anyhow::{Context, Result, bail};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
 const ACCEPT_TIMEOUT: Duration = Duration::from_secs(300);
-const READ_BUFFER: usize = 8192;
+const REQUEST_LINE_LIMIT: u64 = 8192;
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
-#[derive(Debug)]
 pub(super) struct CallbackResult {
     pub code: String,
 }
@@ -35,20 +34,17 @@ pub(super) async fn receive(listener: TcpListener, expected_state: &str) -> Resu
         .context("Timed out waiting for OAuth callback (5 min)")?
         .context("Failed to accept callback connection")?;
 
-    // Read up to READ_BUFFER bytes — request line + headers fit easily.
-    let mut buf = vec![0u8; READ_BUFFER];
-    let n = stream
-        .read(&mut buf)
+    let mut request_line = String::new();
+    let mut reader = BufReader::new(&mut stream).take(REQUEST_LINE_LIMIT);
+    tokio::time::timeout(REQUEST_TIMEOUT, reader.read_line(&mut request_line))
         .await
+        .context("Timed out reading OAuth callback")?
         .context("Failed to read callback request")?;
-    let request = String::from_utf8_lossy(&buf[..n]);
+    if !request_line.ends_with("\r\n") {
+        bail!("OAuth callback request line is incomplete or too long");
+    }
 
-    let request_line = request
-        .lines()
-        .next()
-        .context("Empty HTTP request from OAuth callback")?;
-
-    let outcome = parse_callback(request_line, expected_state);
+    let outcome = parse_callback(request_line.trim_end_matches("\r\n"), expected_state);
 
     let response_body = render_response(&outcome);
     let response = format!(
@@ -57,8 +53,11 @@ pub(super) async fn receive(listener: TcpListener, expected_state: &str) -> Resu
         response_body
     );
     // Best-effort write; if it fails the browser still got the redirect.
-    let _ = stream.write_all(response.as_bytes()).await;
-    let _ = stream.shutdown().await;
+    let _ = tokio::time::timeout(REQUEST_TIMEOUT, async {
+        stream.write_all(response.as_bytes()).await?;
+        stream.shutdown().await
+    })
+    .await;
 
     match outcome {
         Outcome::Ok { code } => Ok(CallbackResult { code }),
@@ -90,92 +89,58 @@ enum Outcome {
 }
 
 fn parse_callback(request_line: &str, expected_state: &str) -> Outcome {
-    // Expected: "GET /callback?code=...&state=... HTTP/1.1"
-    let mut parts = request_line.split_whitespace();
-    let method = parts.next();
-    let target = parts.next();
-
-    let Some(target) = target else {
-        return Outcome::BadRequest("malformed request line".into());
+    let mut parts = request_line.split(' ');
+    let (Some("GET"), Some(target), Some("HTTP/1.0" | "HTTP/1.1"), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Outcome::BadRequest("expected a GET request line".into());
     };
-    if method != Some("GET") {
-        return Outcome::BadRequest(format!("expected GET, got {:?}", method));
+    if target.split('?').next() != Some("/callback") {
+        return Outcome::BadRequest("expected /callback".into());
     }
-
-    let query = target.split_once('?').map(|(_, q)| q).unwrap_or("");
+    let Ok(url) = reqwest::Url::parse(&format!("http://127.0.0.1{target}")) else {
+        return Outcome::BadRequest("invalid callback URL".into());
+    };
+    if url.fragment().is_some() {
+        return Outcome::BadRequest("callback target contains a fragment".into());
+    }
 
     let mut code = None;
     let mut state = None;
     let mut provider_error = None;
     let mut error_description = None;
-
-    for pair in query.split('&') {
-        let Some((k, v)) = pair.split_once('=') else {
-            continue;
+    for (key, value) in url.query_pairs() {
+        let field = match key.as_ref() {
+            "code" => &mut code,
+            "state" => &mut state,
+            "error" => &mut provider_error,
+            "error_description" => &mut error_description,
+            _ => continue,
         };
-        let decoded = url_decode(v);
-        match k {
-            "code" => code = Some(decoded),
-            "state" => state = Some(decoded),
-            "error" => provider_error = Some(decoded),
-            "error_description" => error_description = Some(decoded),
-            _ => {}
+        if field.replace(value.into_owned()).is_some() {
+            return Outcome::BadRequest(format!("duplicate {key} parameter"));
         }
     }
 
-    if let Some(err) = provider_error {
-        return Outcome::ProviderError {
-            error: err,
-            description: error_description,
-        };
-    }
-
     let Some(state) = state else {
-        return Outcome::BadRequest("missing `state` parameter".into());
+        return Outcome::BadRequest("missing state parameter".into());
     };
     if state != expected_state {
         return Outcome::StateMismatch;
     }
-
-    match code {
-        Some(c) => Outcome::Ok { code: c },
-        None => Outcome::MissingCode,
-    }
-}
-
-/// Minimal percent-decoding for OAuth query values.
-/// `+` → space, `%XX` → byte. Tolerant: malformed escapes pass through.
-fn url_decode(input: &str) -> String {
-    let bytes = input.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'+' => {
-                out.push(b' ');
-                i += 1;
-            }
-            b'%' if i + 2 < bytes.len() => {
-                let hi = (bytes[i + 1] as char).to_digit(16);
-                let lo = (bytes[i + 2] as char).to_digit(16);
-                match (hi, lo) {
-                    (Some(h), Some(l)) => {
-                        out.push((h * 16 + l) as u8);
-                        i += 3;
-                    }
-                    _ => {
-                        out.push(bytes[i]);
-                        i += 1;
-                    }
-                }
-            }
-            b => {
-                out.push(b);
-                i += 1;
-            }
+    if let Some(error) = provider_error {
+        if code.is_some() || error.is_empty() {
+            return Outcome::BadRequest("invalid authorization error response".into());
         }
+        return Outcome::ProviderError {
+            error,
+            description: error_description,
+        };
     }
-    String::from_utf8_lossy(&out).into_owned()
+    match code {
+        Some(code) if !code.is_empty() => Outcome::Ok { code },
+        _ => Outcome::MissingCode,
+    }
 }
 
 fn render_response(outcome: &Outcome) -> String {
@@ -202,6 +167,10 @@ fn render_response(outcome: &Outcome) -> String {
         ),
         Outcome::BadRequest(reason) => ("Bad request", reason.as_str(), "#cf222e"),
     };
+    let body = body
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
     format!(
         r#"<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><title>atlassian-cli — {title}</title>
@@ -246,13 +215,11 @@ mod tests {
     }
 
     #[test]
-    fn provider_error_skips_state_check() {
-        // If the provider returns an error, we surface it even without state.
+    fn provider_errors_require_the_expected_state() {
         let req = "GET /callback?error=invalid_scope HTTP/1.1";
-        match parse_callback(req, "x") {
-            Outcome::ProviderError { error, .. } => assert_eq!(error, "invalid_scope"),
-            o => panic!("expected ProviderError, got {:?}", o),
-        }
+        assert!(matches!(parse_callback(req, "x"), Outcome::BadRequest(_)));
+        let req = "GET /callback?error=invalid_scope&state=wrong HTTP/1.1";
+        assert_eq!(parse_callback(req, "x"), Outcome::StateMismatch);
     }
 
     #[test]
@@ -289,14 +256,47 @@ mod tests {
     }
 
     #[test]
-    fn url_decode_handles_plus_as_space() {
-        assert_eq!(url_decode("hello+world"), "hello world");
+    fn rejects_ambiguous_or_misdirected_callbacks() {
+        for target in [
+            "/elsewhere?code=A&state=x",
+            "/callback?code=A&state=x&state=x",
+            "/callback?code=A&code=B&state=x",
+            "/callback?error=denied&code=A&state=x",
+            "/callback?code=A&state=x#fragment",
+        ] {
+            assert!(
+                matches!(
+                    parse_callback(&format!("GET {target} HTTP/1.1"), "x"),
+                    Outcome::BadRequest(_)
+                ),
+                "{target}"
+            );
+        }
+        assert_eq!(
+            parse_callback("GET /callback?code=&state=x HTTP/1.1", "x"),
+            Outcome::MissingCode
+        );
     }
 
     #[test]
-    fn url_decode_tolerates_bad_escape() {
-        // Malformed %ZZ should pass through (not panic)
-        assert_eq!(url_decode("a%ZZb"), "a%ZZb");
+    fn decodes_form_query_values() {
+        let req = "GET /callback?code=a%2Bb+c&st%61te=x HTTP/1.1";
+        assert_eq!(
+            parse_callback(req, "x"),
+            Outcome::Ok {
+                code: "a+b c".into()
+            }
+        );
+    }
+
+    #[test]
+    fn browser_response_escapes_provider_text() {
+        let html = render_response(&Outcome::ProviderError {
+            error: "denied".into(),
+            description: Some("<script>alert(1)</script>&".into()),
+        });
+        assert!(!html.contains("<script>"));
+        assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;&amp;"));
     }
 
     #[tokio::test]
@@ -310,11 +310,16 @@ mod tests {
         // Pretend to be the browser
         let client = tokio::spawn(async move {
             let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
-            s.write_all(
-                b"GET /callback?code=success-code&state=state-abc HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
-            )
-            .await
-            .unwrap();
+            s.write_all(b"GET /callback?code=success-").await.unwrap();
+            let mut early_response = [0u8; 1];
+            assert!(
+                tokio::time::timeout(Duration::from_millis(20), s.read(&mut early_response))
+                    .await
+                    .is_err()
+            );
+            s.write_all(b"code&state=state-abc HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+                .await
+                .unwrap();
             let mut buf = String::new();
             tokio::io::AsyncReadExt::read_to_string(&mut s, &mut buf)
                 .await

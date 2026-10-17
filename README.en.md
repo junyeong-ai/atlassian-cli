@@ -3,7 +3,7 @@
 [![CI](https://github.com/junyeong-ai/atlassian-cli/workflows/CI/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/ci.yml)
 [![Security](https://github.com/junyeong-ai/atlassian-cli/workflows/Security/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/security.yml)
 [![Rust](https://img.shields.io/badge/rust-1.98.0%2B%20(2024%20edition)-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.12.1-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
+[![Version](https://img.shields.io/badge/version-0.13.0-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
 [![DeepWiki](https://img.shields.io/badge/DeepWiki-junyeong--ai%2Fatlassian--cli-blue.svg?logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACwAAAAyCAYAAAAnWDnqAAAAAXNSR0IArs4c6QAAA05JREFUaEPtmUtyEzEQhtWTQyQLHNak2AB7ZnyXZMEjXMGeK/AIi+QuHrMnbChYY7MIh8g01fJoopFb0uhhEqqcbWTp06/uv1saEDv4O3n3dV60RfP947Mm9/SQc0ICFQgzfc4CYZoTPAswgSJCCUJUnAAoRHOAUOcATwbmVLWdGoH//PB8mnKqScAhsD0kYP3j/Yt5LPQe2KvcXmGvRHcDnpxfL2zOYJ1mFwrryWTz0advv1Ut4CJgf5uhDuDj5eUcAUoahrdY/56ebRWeraTjMt/00Sh3UDtjgHtQNHwcRGOC98BJEAEymycmYcWwOprTgcB6VZ5JK5TAJ+fXGLBm3FDAmn6oPPjR4rKCAoJCal2eAiQp2x0vxTPB3ALO2CRkwmDy5WohzBDwSEFKRwPbknEggCPB/imwrycgxX2NzoMCHhPkDwqYMr9tRcP5qNrMZHkVnOjRMWwLCcr8ohBVb1OMjxLwGCvjTikrsBOiA6fNyCrm8V1rP93iVPpwaE+gO0SsWmPiXB+jikdf6SizrT5qKasx5j8ABbHpFTx+vFXp9EnYQmLx02h1QTTrl6eDqxLnGjporxl3NL3agEvXdT0WmEost648sQOYAeJS9Q7bfUVoMGnjo4AZdUMQku50McDcMWcBPvr0SzbTAFDfvJqwLzgxwATnCgnp4wDl6Aa+Ax283gghmj+vj7feE2KBBRMW3FzOpLOADl0Isb5587h/U4gGvkt5v60Z1VLG8BhYjbzRwyQZemwAd6cCR5/XFWLYZRIMpX39AR0tjaGGiGzLVyhse5C9RKC6ai42ppWPKiBagOvaYk8lO7DajerabOZP46Lby5wKjw1HCRx7p9sVMOWGzb/vA1hwiWc6jm3MvQDTogQkiqIhJV0nBQBTU+3okKCFDy9WwferkHjtxib7t3xIUQtHxnIwtx4mpg26/HfwVNVDb4oI9RHmx5WGelRVlrtiw43zboCLaxv46AZeB3IlTkwouebTr1y2NjSpHz68WNFjHvupy3q8TFn3Hos2IAk4Ju5dCo8B3wP7VPr/FGaKiG+T+v+TQqIrOqMTL1VdWV1DdmcbO8KXBz6esmYWYKPwDL5b5FA1a0hwapHiom0r/cKaoqr+27/XcrS5UwSMbQAAAABJRU5ErkJggg==)](https://deepwiki.com/junyeong-ai/atlassian-cli)
 
 > **🌐 [한국어](README.md)** | **English**
@@ -145,7 +145,7 @@ Installs the latest prebuilt binary, which then deploys the `jira-confluence` Cl
 
 ```bash
 # Install a specific release
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.12.1 bash
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.13.0 bash
 
 # After that the binary manages itself — no need to re-run the installer
 atlassian-cli self update
@@ -186,11 +186,11 @@ atlassian-cli self uninstall --yes [--keep-skill] [--keep-credentials] [--purge-
 ```bash
 git clone https://github.com/junyeong-ai/atlassian-cli
 cd atlassian-cli
-cargo build --release   # toolchain pinned by rust-toolchain.toml (1.98.0)
+cargo build --release --locked   # toolchain pinned by rust-toolchain.toml (1.99.1)
 cp target/release/atlassian-cli ~/.local/bin/
 ```
 
-**Requirements**: Rust 1.98.0+
+**Requirements**: Rust 1.98.0+; development builds use the pinned Rust 1.99.1 toolchain
 
 ### 🤖 Claude Code Skill
 
@@ -241,6 +241,7 @@ redirect_port = 8976       # must match the Callback URL on the OAuth app
 
 ```bash
 atlassian-cli auth login       # browser → Atlassian → tokens persisted
+# Without a browser, use: atlassian-cli auth login --no-browser
 atlassian-cli auth status      # expiry, scopes, storage backend
 atlassian-cli auth refresh     # force refresh (debugging)
 atlassian-cli auth logout      # clears stored tokens
@@ -251,6 +252,8 @@ Prereqs at <https://developer.atlassian.com/console/myapps/>:
 2. Add `http://127.0.0.1:8976/callback` as the Callback URL (port must match `redirect_port`).
 3. Grant the scopes you list in config — unscoped scopes are rejected at consent.
 4. Copy `client_id` / `client_secret` from Settings.
+
+Request each endpoint’s required OAuth scopes in the profile after enabling them on the app, then run `auth login` again. Separate profiles when account, site or permission needs differ. See the [official OAuth setup guide](https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/).
 
 ### Service Account / API tokens — environment variables
 
@@ -275,9 +278,9 @@ export ATLASSIAN_EMAIL="user@example.com"
 export ATLASSIAN_API_TOKEN="..."
 ```
 
-Atlassian is retiring classic tokens — every token issued before 2024-12-15
-expired between 2026-03-14 and 2026-05-12, and newly issued tokens carry
-scopes. Prefer `scoped_token` for anything created from now on.
+Tokens issued before 2024-12-15 expired between 2026-03-14 and 2026-05-12.
+Atlassian recommends scoped tokens; choose the auth method matching the token
+you create. See [API token management](https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/).
 
 `scoped_token` resolves `cloud_id` from `https://{domain}/_edge/tenant_info`,
 which needs no credentials. That lookup is the only part of this method that
@@ -317,7 +320,7 @@ CLI flags > Environment variables > `--config` file > Project config > Global co
 ## 🏗️ Core Architecture
 
 Layered config priority, ADF auto-conversion, field optimization (17 default fields), cursor-based pagination.
-For detailed architecture, see [CLAUDE.md](CLAUDE.md).
+For detailed architecture, see [AGENTS.md](AGENTS.md).
 
 ---
 
@@ -398,7 +401,7 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 | `watcher add/remove/list <KEY>` | Watchers | `jira watcher add PROJ-123` |
 | `list types/priorities/statuses/labels` | Global metadata | `jira list types` |
 | `board list --project <KEY>` | Agile boards | `jira board list --project PROJ` |
-| `sprint list/move/backlog` | Sprints / backlog | `jira sprint move 55 PROJ-1 PROJ-2` |
+| `sprint list [--board <ID>] [--state active]`, `sprint move/backlog` | Sprints / backlog | `jira sprint move 55 PROJ-1 PROJ-2` |
 | `epic assign/unassign <EPIC> <KEY...>` | Epic membership | `jira epic assign EPIC-1 PROJ-1` |
 
 ### Confluence Commands
@@ -420,7 +423,7 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 | `label list/add/remove <ID> [LABEL]` | Page labels | `confluence label add 123456 needs-review` |
 | `property list/set/delete <ID> [KEY] [JSON]` | Content properties (value is strict JSON) | `confluence property set 123456 review '{"status":"done"}'` |
 | `space list`, `space get <KEY>` | Spaces | `confluence space get TEAM` |
-| `attachment list/upload <ID> [FILE] [--content-type <MIME>]` | Attachments (Content-Type auto-mapped from extension; `--content-type` overrides) | `confluence attachment upload 123456 ./a.png` |
+| `attachment list/upload <ID> [FILE] [--content-type <MIME>] [--minor]` | Attachments (`--minor` suppresses notifications; Content-Type auto-mapped from extension; `--content-type` overrides) | `confluence attachment upload 123456 ./a.png` |
 
 ### Config Commands
 
@@ -433,7 +436,11 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 | `list` | List locations | `config list` |
 | `validate` | Construct the strategy and probe the identity; a service account with a pinned `cloud_id` has no identity to probe, so nothing reaches that site | `config validate` |
 
+See the generated [CLI reference](docs/cli.md) for every command, argument and default. Use `atlassian-cli <command> --help` for the installed version.
+
 ### Common Options
+
+Root options must precede the subcommand.
 
 | Option | Description | Applies To |
 |--------|-------------|------------|
@@ -451,8 +458,9 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 
 ### Errors & exit codes
 
-Failures print a single-line JSON object to **stderr**; stdout carries results
-only. A command that has already printed can still fail — `--stream` emits each
+Runtime failures print a single-line JSON object to **stderr**. CLI usage errors
+(invalid options or missing arguments) use text diagnostics and exit code `2`.
+Stdout carries results only. A command that has already printed can still fail — `--stream` emits each
 page as it arrives, `auth status` reports what it could establish before failing
 on the rest — so read the exit code rather than the presence of output:
 
@@ -462,8 +470,9 @@ on the rest — so read the exit code rather than the presence of output:
 
 API failures include `status` and `operation`; a `hint` field appears when a
 known remediation exists (e.g. an API token sent to the host that refuses its
-shape). Rate
-limits (429) are retried automatically up to 3 times, honoring `Retry-After`.
+shape). Replayable requests retry 429 responses up to three times. `Retry-After`
+supports seconds and HTTP dates; waits over 60 seconds return exit code `5`
+without retrying early. Multipart uploads are not automatically retried.
 
 | Exit code | Meaning |
 |---|---|
@@ -488,14 +497,14 @@ Supported: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 
 ## 🚀 Developer Guide
 
-**Architecture, debugging, contribution guide**: See [CLAUDE.md](CLAUDE.md)
+**Architecture, debugging, contribution guide**: See [AGENTS.md](AGENTS.md)
 
 ---
 
 ## 💬 Support
 
 - **GitHub Issues**: [Report issues](https://github.com/junyeong-ai/atlassian-cli/issues)
-- **Developer Docs**: [CLAUDE.md](CLAUDE.md)
+- **Developer Docs**: [AGENTS.md](AGENTS.md)
 
 ---
 
@@ -503,7 +512,7 @@ Supported: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 
 **🌐 [한국어](README.md)** | **English**
 
-**Version 0.12.1** • Rust 2024 Edition
+**Version 0.13.0** • Rust 2024 Edition
 
 Made with ❤️ for productivity
 

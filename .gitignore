@@ -39,7 +39,7 @@ after-*.txt
 final-*.txt
 
 # Development tools
-.claude/
+.claude/*
 !.claude/skills/
 .specify/
 .serena/

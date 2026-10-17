@@ -187,7 +187,7 @@ cargo_build_release() {
 
     # rust-toolchain.toml in the checkout pins the toolchain; a rustup-managed
     # cargo resolves it automatically, so no version is hardcoded here.
-    cargo build --release
+    cargo build --release --locked
 }
 
 build_from_source() {

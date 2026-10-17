@@ -3,7 +3,7 @@
 [![CI](https://github.com/junyeong-ai/atlassian-cli/workflows/CI/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/ci.yml)
 [![Security](https://github.com/junyeong-ai/atlassian-cli/workflows/Security/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/security.yml)
 [![Rust](https://img.shields.io/badge/rust-1.98.0%2B%20(2024%20edition)-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.12.1-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
+[![Version](https://img.shields.io/badge/version-0.13.0-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
 
 > **🌐 한국어** | **[English](README.en.md)**
 
@@ -25,6 +25,7 @@ atlassian-cli config edit --global
 
 # 4. (oauth 인 경우만) 브라우저로 로그인
 atlassian-cli auth login
+# 브라우저가 없는 환경에서는 위 명령 대신: atlassian-cli auth login --no-browser
 
 # 5. 검증
 atlassian-cli config validate
@@ -114,7 +115,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scri
 
 ```bash
 # 특정 릴리스 설치
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.12.1 bash
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.13.0 bash
 
 # 이후 업데이트·제거는 바이너리가 직접 한다 (설치 스크립트 재실행 불필요)
 atlassian-cli self update
@@ -127,7 +128,7 @@ atlassian-cli self uninstall --yes
 ```bash
 git clone https://github.com/junyeong-ai/atlassian-cli
 cd atlassian-cli
-cargo build --release   # toolchain pinned by rust-toolchain.toml (1.98.0)
+cargo build --release --locked   # toolchain pinned by rust-toolchain.toml (1.99.1)
 cp target/release/atlassian-cli ~/.local/bin/
 ```
 
@@ -149,7 +150,7 @@ atlassian-cli self uninstall --yes [--keep-skill] [--keep-credentials] [--purge-
 - skill 은 바이너리에 컴파일되어 들어가므로, 바이너리가 들고 다니는 사본은 언제나 자기 것입니다. 디스크에 배포된 사본은 별개이고, `self status` 가 그걸 **바이트 비교**로 판정해 직접 수정했거나 다운그레이드가 남긴 이전 버전을 `stale` 로 잡습니다.
 - `self update` 는 내려받은 바이너리를 **교체 전에** 실행해 버전을 확인합니다. 이 기계에서 돌지 않는 바이너리는 아무것도 건드리지 않고 실패합니다.
 - `self uninstall` 은 OS 키체인에 남은 OAuth 토큰까지 지웁니다 (`--keep-credentials` 로 보존). 키체인이 있는데 읽을 수 없으면(잠김, 또는 `ATLASSIAN_NO_KEYCHAIN` 로 열람 금지) **거부**합니다 — 토큰을 남긴 채 바이너리만 사라지는 게 최악이기 때문입니다. 키체인이 응답하지 않는 환경에서는 두 번에 나눠 끝납니다 — 첫 실행이 `credentials.json` 을 지우고 지운 것을 밝히며 거부하고, `--keep-credentials` 로 두 번째 실행이 완료합니다. `auth logout` 도 **응답하지 않는** 키체인에 대해서는 같은 이유로 0이 아닌 코드로 끝납니다 — 모든 릴리스 타깃이 키체인을 포함하므로 "닿지 못함"을 "없음"으로 읽을 수 없습니다. `ATLASSIAN_NO_KEYCHAIN` 이 켜져 있을 때는 0으로 끝나고 키체인을 건드리지 않았다고 알립니다 — 물어본 적이 없기 때문이며, 거기 있는 것을 지우려면 플래그를 한 번 끄고 실행하면 됩니다. `--purge-config` 는 이 도구가 쓴 설정 파일을 지우고 디렉터리는 비었을 때만 지우므로, `--keep-credentials` 와 함께 써도 `credentials.json` 은 남습니다. 프로젝트 로컬 설정(`.atlassian.toml`)은 건드리지 않습니다.
-**Requirement**: Rust 1.98.0+ (소스 빌드 시).
+**Requirement**: 소스 빌드 최소 지원 버전은 Rust 1.98.0이며, 기본 도구체인은 Rust 1.99.1입니다.
 
 ---
 
@@ -247,7 +248,7 @@ API token 발급: <https://id.atlassian.com/manage-profile/security/api-tokens>
 
 ### Scoped API token (scope 가 붙은 토큰)
 
-Atlassian 은 classic 토큰을 단계적으로 폐지하고 있습니다 — 2024-12-15 이전에 발급된 토큰은 2026-03-14 ~ 05-12 사이에 만료되었고, 새로 발급하는 토큰은 scope 를 선택합니다. scope 가 붙은 토큰은 사이트 URL 이 아니라 `api.atlassian.com` 게이트웨이로만 통합니다.
+2024-12-15 이전에 발급된 토큰은 2026-03-14 ~ 05-12 사이에 만료되었습니다. Atlassian은 scoped 토큰을 권장합니다. 생성한 토큰의 종류에 맞는 인증 방식을 선택하세요. [공식 토큰 관리 안내](https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/)를 참고하세요. scope 가 붙은 토큰은 사이트 URL 이 아니라 `api.atlassian.com` 게이트웨이로만 통합니다.
 
 ```bash
 export ATLASSIAN_AUTH_METHOD=scoped_token
@@ -292,7 +293,7 @@ token = "..."
 
 사용: `atlassian-cli --profile work ...`
 
-**Classic ↔ Granular scope 분리**: 한 OAuth 토큰은 classic과 granular scope를 혼용할 수 없습니다(Atlassian 규칙). 두 모델을 모두 쓰려면 **모델별로 프로파일을 나누고** `--profile`로 선택하세요. `scopes`는 자유 목록이라 앱이 부여한 무엇이든 넣을 수 있습니다. 예: classic `default`(core Jira) + granular `agile`(board/sprint/epic). 각 프로파일은 자체 토큰을 저장하므로 프로파일마다 `auth login` 합니다. granular는 **완전한 세트**여야 하며(빠진 scope는 해당 명령이 401), 정확한 문자열은 developer.atlassian.com 앱 Permissions에서 복사하세요.
+**OAuth scope**: 사용하는 엔드포인트가 요구하는 scope를 앱에 허용하고 프로파일의 `scopes`에 추가한 뒤 `auth login`을 다시 실행하세요. 프로파일은 계정·사이트·권한 구성을 분리할 때 사용합니다. [공식 OAuth 설정 안내](https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/)를 참고하세요.
 
 ### 우선순위
 
@@ -329,9 +330,9 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 
 ## 문제 해결
 
-**401 Unauthorized (basic / scoped_token)** — 토큰 종류와 method 가 어긋난 경우입니다. scope 가 붙은 토큰은 `scoped_token`, classic 토큰은 `basic` 이어야 합니다. 에러의 `hint` 필드가 바꿔야 할 method 를 알려줍니다.
+**401 Unauthorized (basic / scoped_token)** — 토큰 만료, 인증 방식 불일치 또는 scope 부족을 확인하세요. Scoped 토큰은 `scoped_token`, classic 토큰은 `basic`을 사용합니다. `hint`는 가능한 원인과 확인할 항목을 안내합니다.
 
-**Failed to resolve cloud_id from ...** — `_edge/tenant_info` 조회가 실패했습니다. 이 네트워크에서 사이트 호스트가 응답하지 않는 경우이니 `cloud_id` 를 직접 지정하세요 (`ATLASSIAN_CLOUD_ID` 또는 `[auth].cloud_id`).
+**Failed to resolve cloud_id from ...** — `_edge/tenant_info` 조회가 실패했습니다. 사이트 호스트 접근·도메인 설정을 확인하고, 해당 조회를 사용할 수 없다면 `cloud_id` 를 직접 지정하세요 (`ATLASSIAN_CLOUD_ID` 또는 `[auth].cloud_id`).
 
 **API 토큰 관리자 차단 (403)** — OAuth 2.0 service account로 전환. 관리자에게 OAuth 2.0 client credentials 요청.
 
@@ -368,7 +369,7 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 | `watcher add/remove/list <KEY>` | 와처 |
 | `list types/priorities/statuses/labels` | 전역 메타데이터 조회 |
 | `board list --project <KEY>` | 애자일 보드 목록 |
-| `sprint list/move/backlog ...` | 스프린트 / 백로그 이동 |
+| `sprint list [--project <KEY> | --board <ID>] [--state active]`, `sprint move/backlog ...` | 스프린트 조회 / 백로그 이동 |
 | `epic assign/unassign <EPIC> <KEY...>` | 에픽 연결 / 해제 |
 
 ### Confluence
@@ -388,7 +389,7 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 | `label list/add/remove <ID> [LABEL]` | 페이지 라벨 |
 | `property list/set/delete <ID> [KEY] [JSON]` | 콘텐츠 속성 (값은 strict JSON) |
 | `space list`, `space get <KEY>` | 스페이스 조회 |
-| `attachment list <ID>`, `attachment upload <ID> <FILE> [--content-type <MIME>]` | 첨부 조회 / 업로드 (Content-Type은 확장자에서 자동 매핑, `--content-type`로 오버라이드) |
+| `attachment list <ID>`, `attachment upload <ID> <FILE> [--content-type <MIME>] [--minor]` | 첨부 조회 / 업로드 (`--minor`: 알림 억제; Content-Type은 확장자에서 자동 매핑, `--content-type`로 오버라이드) |
 
 ### Config
 | 명령어 | 설명 |
@@ -399,6 +400,8 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 | `path [--global]` | 활성 설정 파일 경로 |
 | `edit [--global]` | `$EDITOR`로 편집 |
 | `validate` | 전략을 구성하고 신원을 확인 — `cloud_id` 가 고정된 service account 는 확인할 신원이 없어 해당 사이트로는 요청이 가지 않습니다 |
+
+전체 명령·인자·기본값은 [CLI 참조](docs/cli.md)에서 확인할 수 있습니다. 설치된 버전은 `atlassian-cli <명령> --help`로 확인하세요.
 
 ### 공통 옵션
 | 옵션 | 설명 |
@@ -417,13 +420,13 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 
 ### 에러와 종료 코드
 
-실패 시 **stderr**로 한 줄짜리 JSON 객체를 출력하고, stdout은 결과 전용입니다. 이미 출력을 시작한 명령도 실패할 수 있습니다 — `--stream` 은 페이지를 받는 대로 내보내고, `auth status` 는 확인한 부분까지 보고한 뒤 나머지에서 실패합니다. 출력이 있는지가 아니라 종료 코드를 읽으세요:
+실행 중 발생한 실패는 **stderr**로 한 줄짜리 JSON 객체를 출력합니다. 잘못된 옵션·누락된 인자 등 CLI 사용법 오류는 텍스트 도움말과 종료 코드 `2`를 반환합니다. stdout은 결과 전용입니다. 이미 출력을 시작한 명령도 실패할 수 있습니다 — `--stream` 은 페이지를 받는 대로 내보내고, `auth status` 는 확인한 부분까지 보고한 뒤 나머지에서 실패합니다. 출력이 있는지가 아니라 종료 코드를 읽으세요:
 
 ```json
 {"error":{"message":"Failed to get issue (404 Not Found): ...","operation":"get issue","status":404}}
 ```
 
-API 실패에는 `status`/`operation`이 포함되고, 알려진 해결책이 있으면 `hint` 필드가 붙습니다 (예: `basic` 인증에 scoped 토큰 사용). 429 (rate limit)는 `Retry-After`를 존중하며 최대 3회 자동 재시도됩니다.
+API 실패에는 `status`/`operation`이 포함되고, 알려진 해결책이 있으면 `hint` 필드가 붙습니다 (예: `basic` 인증에 scoped 토큰 사용). 복제 가능한 요청의 429 (rate limit)는 최대 3회 재시도합니다. `Retry-After`의 초 단위·HTTP 날짜 형식을 지원하며, 대기 시간이 60초를 넘으면 조기 재시도 없이 종료 코드 `5`로 반환합니다. Multipart 업로드는 자동 재시도하지 않습니다.
 
 | 종료 코드 | 의미 |
 |---|---|
@@ -448,7 +451,7 @@ atlassian-cli completions bash > /etc/bash_completion.d/atlassian-cli
 
 ## 개발자 가이드
 
-아키텍처, auth 모델, API 버전 믹스의 이유, 새 명령 추가 워크플로는 [CLAUDE.md](CLAUDE.md) 참고.
+개발 명령, 아키텍처, 호환성 계약은 [AGENTS.md](AGENTS.md)를 참고하세요. 개발 컴파일러는 Rust 1.99.1로 고정하며 최소 지원 버전은 `Cargo.toml`에서 관리합니다.
 
 ## Claude Code Skill
 
@@ -466,7 +469,7 @@ atlassian-cli completions bash > /etc/bash_completion.d/atlassian-cli
 
 **🌐 한국어** | **[English](README.en.md)**
 
-**Version 0.12.1** • Rust 2024 Edition
+**Version 0.13.0** • Rust 2024 Edition
 
 Made with ❤️ for productivity
 

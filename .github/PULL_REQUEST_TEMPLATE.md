@@ -13,8 +13,11 @@
 ## Test plan
 
 - [ ] `cargo fmt --all --check`
-- [ ] `cargo clippy --workspace --all-targets --all-features --locked`
+- [ ] `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`
 - [ ] `cargo nextest run --workspace --all-features --locked`
+- [ ] `cargo test --workspace --all-features --doc --locked`
+- [ ] `cargo deny check advisories bans licenses sources` (dependency changes)
+- [ ] CLI reference regenerated when commands change
 - [ ] Verified against a real Atlassian Cloud workspace (if applicable)
 
 ## Auth / config impact

@@ -1,5 +1,9 @@
 # confluence module
 
+`api.rs` owns search, comment traversal and cursor pagination. `api/pages.rs`,
+`content.rs` and `spaces.rs` own page, metadata/attachment and space operations.
+Public functions remain exported through `confluence::api` and `confluence`.
+
 ## v1 search + v2 everything else, plus three v1 writes
 
 `search`/`search_all` call `/wiki/rest/api/search` (v1) because v2 has no CQL endpoint. Pages, comments, properties, spaces, and label/attachment *reads* use `/wiki/api/v2/*`. Three writes use v1 because v2 exposes no equivalent — do not move them to v2:

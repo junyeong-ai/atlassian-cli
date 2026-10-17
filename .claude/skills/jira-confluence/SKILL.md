@@ -1,14 +1,13 @@
 ---
 name: jira-confluence
-version: 0.12.1
-description: Run Jira/Confluence operations through atlassian-cli — JQL/CQL search, issue CRUD, comments, transitions, issue links, worklogs, watchers, sprint/board/epic moves; Confluence page CRUD, comment threads (footer and inline, replies included), labels, content properties, spaces, and attachment upload, with ADF/HTML body editing. Also handles OAuth sign-in flows (`auth login/status/refresh`) when the user reports an auth problem or asks to switch accounts, and the tool's own installation (`self status/update/skill install`).
-when_to_use: Trigger on Jira tickets, Confluence pages, sprint planning, time logging, "내 이슈", "위키 검색", auth trouble or account switching, updating atlassian-cli itself, or any Atlassian workspace request.
+version: 0.13.0
+description: Use atlassian-cli for Atlassian Cloud Jira and Confluence searches, issue and page edits, comments, links, worklogs, agile operations and attachments; also diagnose authentication and manage the CLI installation when requested.
 allowed-tools: Bash
 ---
 
 # atlassian-cli
 
-Always pass **global flags before the subcommand**:
+Pass **root options before the subcommand**. Use `atlassian-cli --help` or `atlassian-cli <command> --help` for the installed version’s exact arguments and defaults:
 
 ```bash
 atlassian-cli --profile work jira get PROJ-123 --format markdown
@@ -172,7 +171,7 @@ atlassian-cli confluence attachment upload 12345 ./icon.svg --content-type image
 - `--location` defaults to `footer` on `comment get`/`replies` — an id from an inline thread needs `--location inline`, and every entry `comment list` returns already states which it is. A wrong `--location` is a 404, not a fallback.
 - `property set` values are **strict JSON** — quote bare strings as `'"text"'`, not `text`.
 - `attachment upload` upserts by filename; add `--minor` to suppress watcher notifications on re-upload. The `Content-Type` is mapped from the file extension (so `diagram.png` → `image/png` and renders inline instead of becoming an opaque download); pass `--content-type <mime>` to override. Note: Confluence Cloud often blocks **inline SVG** rendering for security, so embed diagrams as PNG when you need them to display.
-- Under OAuth, Confluence v2 writes need granular scopes on the token, not just classic ones. A `401 "scope does not match"` means the scope was never requested at login: add it to the profile's `scopes` in config and re-run `auth login` (having it enabled on the OAuth app is not enough — the token only carries scopes the login *requested*). The write↔scope map: comment → `write:comment:confluence`, property → `write:content:confluence`, attachment → `write:attachment:confluence`, page create/update → `write:page:confluence`, page delete → `delete:page:confluence`, `space`/page-create space lookup → `read:space:confluence`.
+- Under OAuth, Confluence v2 writes need granular scopes on the token, not just classic ones. A `401 "scope does not match"` can indicate missing grants. Compare the endpoint’s required scopes with the app permissions and the profile’s requested scopes before reauthorizing; enabling a scope on the app alone does not update an existing token. The write↔scope map: comment → `write:comment:confluence`, property → `write:content:confluence`, attachment → `write:attachment:confluence`, page create/update → `write:page:confluence`, page delete → `delete:page:confluence`, `space`/page-create space lookup → `read:space:confluence`.
 - CQL: searching by user requires account IDs or public names — username fields are restricted in Atlassian Cloud.
 
 ## Pagination & output cheatsheet
@@ -189,17 +188,17 @@ atlassian-cli confluence attachment upload 12345 ./icon.svg --content-type image
 
 ## Errors & exit codes
 
-Failures print a single-line JSON object to **stderr**; stdout stays results-only:
+Runtime failures print a single-line JSON object to **stderr**; stdout stays results-only. CLI usage errors use text diagnostics and exit code `2`:
 
 ```json
 {"error":{"message":"Failed to get issue (404 Not Found): ...","operation":"get issue","status":404}}
 ```
 
-Parse `status`/`operation` instead of regexing the message; `hint` (present only when a known remediation exists, e.g. a 401 from an API token sent to the host that refuses its shape) is the remediation to relay to the user. Exit codes: `0` ok, `1` generic, `2` usage, `3` auth (401/403), `4` not found, `5` rate limited (429 — already retried 3× with `Retry-After`; back off before rerunning), `6` server error (5xx).
+Parse `status`/`operation` instead of regexing the message; `hint` (present only when a known remediation exists, e.g. a 401 from an API token sent to the host that refuses its shape) is the remediation to relay to the user. Exit codes: `0` ok, `1` generic, `2` usage, `3` auth (401/403), `4` not found, `5` rate limited (429 — at most three retries; waits over 60 seconds and multipart uploads return without replay), `6` server error (5xx).
 
 ## Authentication
 
-Credentials are pre-configured. **Do not print, request, infer, or modify secrets.**
+Use the configured profile. **Do not print secrets or invent credentials.**
 
 The active profile dictates what identity the call runs as:
 
@@ -210,9 +209,9 @@ The active profile dictates what identity the call runs as:
 | `basic` | the API-token owner, with their full permissions (classic/**unscoped** token) |
 | `service_account` | a non-human service principal |
 
-`basic` and `scoped_token` differ only in which host the token goes to, and each host accepts exactly one token shape. A 401 on either carries a `hint` naming the other — relay it; the fix is a config change, not a retry.
+`basic` and `scoped_token` differ only in which host the token goes to, and each host accepts exactly one token shape. A 401 can mean an expired credential, a routing mismatch or insufficient scopes. Relay the `hint` and verify the relevant cause before changing configuration or asking the user to log in again.
 
-Run `atlassian-cli config validate` first when a request will write or fetch many pages — it prints the resolved identity and fails fast on bad credentials. Caveat: the identity probe hits a Jira endpoint, so on any Confluence-only-scoped profile (`oauth` or `scoped_token`) it returns a 401 "scope does not match" even when the profile works — treat that specific failure as expected and confirm with a cheap read (e.g. `space list`) instead.
+Use `config validate` to diagnose Jira credentials. Its identity probe calls Jira, so a Confluence-only profile can fail that probe while remaining valid for Confluence. Diagnose that profile with a small Confluence read such as `confluence space list`. Do not replace credentials solely because an unrelated endpoint returned 401.
 
 When the user reports auth trouble or asks to switch accounts:
 
@@ -235,7 +234,7 @@ atlassian-cli self update --version 0.10.0  # a downgrade needs the version name
 atlassian-cli self skill install         # rewrite this skill from the running binary
 ```
 
-The skill is compiled into the binary, so `self status` reporting `stale` means the deployed copy differs byte-for-byte from what this binary carries — `self skill install` is the fix, and the two can never be different versions. `self update` changes nothing when the binary is already current. `self uninstall` and `self skill remove` remove things and take `--yes`; leave them to the user rather than running them on your own initiative.
+The skill is compiled into the binary. If `self status` reports `stale`, the deployed copy differs from that binary; `self skill install` restores its bundled copy. `self update` changes nothing when the binary is already current. `self uninstall` and `self skill remove` remove things and take `--yes`; leave them to the user rather than running them on your own initiative.
 
 ## Behaviour worth knowing
 

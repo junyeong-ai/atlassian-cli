@@ -1,5 +1,9 @@
 # jira module
 
+`api.rs` owns shared pagination, filtering and metadata; `api/issues.rs`,
+`comments.rs`, `links.rs`, `worklogs.rs` and `agile.rs` own their operations.
+Public functions remain exported through `jira::api` and `jira`.
+
 ## ADF input normalization
 
 Every write path that accepts a description or comment body routes through `jira::adf::process_description_input` or `process_comment_input`:

@@ -27,7 +27,8 @@ coordinated disclosure date has been agreed.
 - Every Cargo PR runs `cargo-deny` (`advisories` + `licenses` + `bans` +
   `sources`), so new transitive dependencies are policy-checked before merge.
   GitHub Dependabot Alerts cover real-time CVE notifications.
-- Workflow definitions are linted with `zizmor` on every push.
+- Workflow definitions are linted with `zizmor` on pushes to `main`, relevant
+  pull requests, merge groups, and a weekly schedule.
 - Releases include SLSA build provenance attestations
   (`actions/attest-build-provenance`), per-artifact SHA-256 checksums, and an
   SPDX SBOM (`anchore/sbom-action`).
@@ -38,11 +39,21 @@ coordinated disclosure date has been agreed.
 
 `atlassian-cli` resolves credentials in strict precedence order:
 **CLI flag → environment variable → config file**, mediated by
-`config::AuthResolver` (see [`CLAUDE.md`](../CLAUDE.md)). Tokens are:
+`config::AuthResolver` (see [AGENTS.md](../AGENTS.md)).
+Credential storage depends on the authentication method:
 
-- never logged at any verbosity level;
-- never serialised back to disk (`#[serde(skip_serializing)]`);
-- masked to first-4 characters plus `***` in `config show` output.
+- API tokens and OAuth client secrets are supplied by CLI, environment or a
+  user-managed config file. Auth configuration excludes secrets when serialized.
+- Service-account access tokens are cached in memory.
+- OAuth access and refresh tokens are stored in the OS keychain, with an atomic
+  `credentials.json` fallback (0600 file inside a 0700 directory on Unix).
+  `ATLASSIAN_NO_KEYCHAIN` selects file-only access and leaves existing keychain
+  entries untouched.
+
+Resolved config output masks secrets. Authentication Debug output and HTTP
+Authorization headers are redacted; CLI help hides environment variable values.
+OAuth callbacks validate the path, state and parameter uniqueness, and escape
+provider text before displaying it in the browser.
 
 Config files at permissive permissions trigger a runtime warning. We
 recommend `chmod 600` on any file containing an API token or service

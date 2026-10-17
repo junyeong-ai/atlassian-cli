@@ -81,7 +81,7 @@ spells the separator the same way so both builders read identically.
 
 ## Secret hygiene
 
-- Every secret-bearing field is wrapped in `secrecy::SecretString`
+- Strategy credential fields are wrapped in `secrecy::SecretString`
   (`encoded` in basic, `client_secret` in service_account token manager,
   `access_token` / `refresh_token` in oauth `TokenSet`).
 - `AuthConfig`, `OAuthParams`, and `CliOverrides` all have **manual `Debug`
@@ -99,7 +99,10 @@ spells the separator the same way so both builders read identically.
   single reqwest in the dependency tree.
 - `callback.rs` is a one-shot loopback HTTP receiver on
   `127.0.0.1:{redirect_port}/callback` (RFC 8252). Pure tokio TCP — no
-  HTTP framework dependency.
+  HTTP framework dependency. Request lines have a size and read deadline; parse
+  query parameters through the URL library, require the configured callback
+  path and unique parameters, and validate state for success and error responses.
+  Provider text is escaped before being rendered as HTML.
 - `store.rs` persists tokens. `TokenStore::{save,load,delete}` are async.
   Tries OS keychain first (Keychain / Credential Manager / Secret Service —
   Linux uses pure-Rust zbus, no system `libdbus`); falls back to
@@ -191,7 +194,7 @@ spells the separator the same way so both builders read identically.
   is already driving futures. `stored_profiles` therefore reads each entry's
   specifiers inside the closure and returns the profile names, not the entries.
 - `strategy.rs` holds the `OAuthStrategy`. `tokens: Mutex<TokenSet>` so
-  concurrent callers serialize on refresh — at most one token-endpoint
+  callers sharing the strategy serialize on refresh — at most one token-endpoint
   round trip when the cache is stale. Refresh tokens **rotate** on every
   use; the merged set replaces the stored one atomically.
 - OAuth redirect URI must use `127.0.0.1` literally, never `localhost`.

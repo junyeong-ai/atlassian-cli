@@ -3,20 +3,14 @@ use crate::config::Config;
 use anyhow::{Context, Result};
 use reqwest::StatusCode;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 pub(crate) const ATLASSIAN_PROXY_BASE: &str = "https://api.atlassian.com";
 
-/// Ceiling on 429 retries per request. Atlassian's point-based rate limits
-/// refill continuously, so a few short waits clear transient exhaustion;
-/// anything that survives this many retries is a budget problem the caller
-/// must see.
+/// Maximum automatic retries after a rate-limit response.
 const MAX_RATE_LIMIT_RETRIES: u32 = 3;
 
-/// Upper bound on any single retry wait. A server-provided `Retry-After`
-/// beyond this indicates an exhausted budget, not a transient spike — the
-/// capped wait gives one last attempt instead of stalling a pipeline for
-/// minutes.
+/// Longer server-requested waits are returned to the caller as rate limits.
 const RATE_LIMIT_DELAY_CAP: Duration = Duration::from_secs(60);
 
 /// Base delay for the exponential backoff used when a 429 carries no
@@ -52,17 +46,32 @@ impl std::fmt::Display for ApiError {
 
 impl std::error::Error for ApiError {}
 
-/// Delay before a 429 retry: the server's `Retry-After` (delta-seconds form)
-/// when present and parseable, else exponential backoff. Capped either way —
-/// see [`RATE_LIMIT_DELAY_CAP`].
-fn rate_limit_delay(headers: &reqwest::header::HeaderMap, attempt: u32) -> Duration {
-    headers
+/// `None` means the server requires a longer wait than automatic retries allow.
+fn rate_limit_delay(
+    headers: &reqwest::header::HeaderMap,
+    attempt: u32,
+    now: SystemTime,
+) -> Option<Duration> {
+    let delay = headers
         .get(reqwest::header::RETRY_AFTER)
         .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.trim().parse::<u64>().ok())
-        .map(Duration::from_secs)
-        .unwrap_or_else(|| RATE_LIMIT_BACKOFF_BASE * 2u32.saturating_pow(attempt))
-        .min(RATE_LIMIT_DELAY_CAP)
+        .and_then(|s| {
+            let value = s.trim();
+            if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
+                Some(
+                    value
+                        .parse::<u64>()
+                        .map(Duration::from_secs)
+                        .unwrap_or(Duration::MAX),
+                )
+            } else {
+                httpdate::parse_http_date(value)
+                    .ok()
+                    .map(|deadline| deadline.duration_since(now).unwrap_or_default())
+            }
+        })
+        .unwrap_or_else(|| RATE_LIMIT_BACKOFF_BASE * 2u32.saturating_pow(attempt));
+    (delay <= RATE_LIMIT_DELAY_CAP).then_some(delay)
 }
 
 /// Borrow everything after the authority of an absolute URL — path, query and
@@ -130,11 +139,7 @@ impl ApiClient {
             .clone()
             .context("Authentication not configured")?;
 
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_millis(config.performance.request_timeout_ms))
-            .connect_timeout(Duration::from_secs(10))
-            .build()
-            .context("Failed to create HTTP client")?;
+        let http = Self::http_client(&config)?;
 
         let strategy: Arc<dyn AuthStrategy> = auth_config
             .into_strategy(config.domain.as_deref(), &config.profile, &http)
@@ -150,16 +155,35 @@ impl ApiClient {
 
     #[cfg(test)]
     pub(crate) fn new_with_strategy(strategy: Arc<dyn AuthStrategy>, config: Config) -> Self {
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_millis(config.performance.request_timeout_ms))
-            .connect_timeout(Duration::from_secs(10))
-            .build()
-            .expect("test http client builds");
+        let http = Self::http_client(&config).expect("test HTTP client builds");
         Self {
             http,
             strategy,
             config,
         }
+    }
+
+    fn http_client(config: &Config) -> Result<reqwest::Client> {
+        reqwest::Client::builder()
+            .timeout(Duration::from_millis(config.performance.request_timeout_ms))
+            .connect_timeout(Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .context("Failed to create HTTP client")
+    }
+
+    async fn request(
+        &self,
+        method: reqwest::Method,
+        service: Service,
+        path: &str,
+    ) -> Result<reqwest::RequestBuilder> {
+        let url = self.strategy.build_url(service, path);
+        let header = sensitive_authorization(self.strategy.authorization(&self.http).await?)?;
+        Ok(self
+            .http
+            .request(method, url)
+            .header(reqwest::header::AUTHORIZATION, header))
     }
 
     pub fn config(&self) -> &Config {
@@ -176,27 +200,19 @@ impl ApiClient {
     }
 
     pub async fn get(&self, service: Service, path: &str) -> Result<reqwest::RequestBuilder> {
-        let url = self.strategy.build_url(service, path);
-        let header = self.strategy.authorization(&self.http).await?;
-        Ok(self.http.get(&url).header("Authorization", header))
+        self.request(reqwest::Method::GET, service, path).await
     }
 
     pub async fn post(&self, service: Service, path: &str) -> Result<reqwest::RequestBuilder> {
-        let url = self.strategy.build_url(service, path);
-        let header = self.strategy.authorization(&self.http).await?;
-        Ok(self.http.post(&url).header("Authorization", header))
+        self.request(reqwest::Method::POST, service, path).await
     }
 
     pub async fn put(&self, service: Service, path: &str) -> Result<reqwest::RequestBuilder> {
-        let url = self.strategy.build_url(service, path);
-        let header = self.strategy.authorization(&self.http).await?;
-        Ok(self.http.put(&url).header("Authorization", header))
+        self.request(reqwest::Method::PUT, service, path).await
     }
 
     pub async fn delete(&self, service: Service, path: &str) -> Result<reqwest::RequestBuilder> {
-        let url = self.strategy.build_url(service, path);
-        let header = self.strategy.authorization(&self.http).await?;
-        Ok(self.http.delete(&url).header("Authorization", header))
+        self.request(reqwest::Method::DELETE, service, path).await
     }
 
     /// Send a prepared request, retrying rate-limited attempts and converting
@@ -225,11 +241,12 @@ impl ApiClient {
             if status.is_success() {
                 return Ok(response);
             }
+            let delay = rate_limit_delay(response.headers(), attempt, SystemTime::now());
             if status == StatusCode::TOO_MANY_REQUESTS
                 && attempt < MAX_RATE_LIMIT_RETRIES
+                && let Some(delay) = delay
                 && let Some(mut next) = retry
             {
-                let delay = rate_limit_delay(response.headers(), attempt);
                 tracing::warn!(
                     operation,
                     attempt = attempt + 1,
@@ -240,9 +257,7 @@ impl ApiClient {
                 let authorization = self.strategy.authorization(&self.http).await?;
                 next.headers_mut().insert(
                     reqwest::header::AUTHORIZATION,
-                    authorization
-                        .parse()
-                        .context("Authorization header is not a valid header value")?,
+                    sensitive_authorization(authorization)?,
                 );
                 request = next;
                 attempt += 1;
@@ -253,7 +268,11 @@ impl ApiClient {
                 operation: operation.to_string(),
                 status,
                 body,
-                hint: self.error_hint(status),
+                hint: if status == StatusCode::TOO_MANY_REQUESTS && delay.is_none() {
+                    Some("Retry-After exceeds the 60-second automatic wait limit; wait for the server's requested interval before trying again")
+                } else {
+                    self.error_hint(status)
+                },
             }
             .into());
         }
@@ -282,6 +301,13 @@ impl ApiClient {
             AuthMethod::ServiceAccount | AuthMethod::OAuth => None,
         }
     }
+}
+
+fn sensitive_authorization(value: String) -> Result<reqwest::header::HeaderValue> {
+    let mut header = reqwest::header::HeaderValue::from_str(&value)
+        .context("Authorization header is not a valid header value")?;
+    header.set_sensitive(true);
+    Ok(header)
 }
 
 #[cfg(test)]
@@ -358,34 +384,136 @@ mod tests {
     fn rate_limit_delay_honors_retry_after_seconds() {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(reqwest::header::RETRY_AFTER, "2".parse().unwrap());
-        assert_eq!(rate_limit_delay(&headers, 0), Duration::from_secs(2));
+        assert_eq!(
+            rate_limit_delay(&headers, 0, SystemTime::UNIX_EPOCH),
+            Some(Duration::from_secs(2))
+        );
     }
 
     #[test]
-    fn rate_limit_delay_caps_excessive_retry_after() {
+    fn rate_limit_delay_refuses_excessive_retry_after() {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(reqwest::header::RETRY_AFTER, "3600".parse().unwrap());
-        assert_eq!(rate_limit_delay(&headers, 0), RATE_LIMIT_DELAY_CAP);
+        assert_eq!(rate_limit_delay(&headers, 0, SystemTime::UNIX_EPOCH), None);
+        headers.insert(
+            reqwest::header::RETRY_AFTER,
+            "18446744073709551616".parse().unwrap(),
+        );
+        assert_eq!(rate_limit_delay(&headers, 0, SystemTime::UNIX_EPOCH), None);
     }
 
     #[test]
     fn rate_limit_delay_backs_off_exponentially_without_header() {
         let headers = reqwest::header::HeaderMap::new();
-        assert_eq!(rate_limit_delay(&headers, 0), RATE_LIMIT_BACKOFF_BASE);
-        assert_eq!(rate_limit_delay(&headers, 1), RATE_LIMIT_BACKOFF_BASE * 2);
-        assert_eq!(rate_limit_delay(&headers, 2), RATE_LIMIT_BACKOFF_BASE * 4);
+        assert_eq!(
+            rate_limit_delay(&headers, 0, SystemTime::UNIX_EPOCH),
+            Some(RATE_LIMIT_BACKOFF_BASE)
+        );
+        assert_eq!(
+            rate_limit_delay(&headers, 1, SystemTime::UNIX_EPOCH),
+            Some(RATE_LIMIT_BACKOFF_BASE * 2)
+        );
+        assert_eq!(
+            rate_limit_delay(&headers, 2, SystemTime::UNIX_EPOCH),
+            Some(RATE_LIMIT_BACKOFF_BASE * 4)
+        );
     }
 
     #[test]
-    fn rate_limit_delay_falls_back_on_http_date_form() {
-        // The HTTP-date form of Retry-After is valid per RFC 9110 but rare
-        // from Atlassian; it must select the backoff path, not panic.
+    fn rate_limit_delay_honors_http_dates() {
+        let deadline = httpdate::parse_http_date("Sat, 17 Oct 2026 08:00:00 GMT").unwrap();
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             reqwest::header::RETRY_AFTER,
-            "Fri, 11 Jul 2026 08:00:00 GMT".parse().unwrap(),
+            httpdate::fmt_http_date(deadline).parse().unwrap(),
         );
-        assert_eq!(rate_limit_delay(&headers, 0), RATE_LIMIT_BACKOFF_BASE);
+        assert_eq!(
+            rate_limit_delay(&headers, 0, deadline - Duration::from_secs(30)),
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(
+            rate_limit_delay(&headers, 0, deadline + Duration::from_secs(30)),
+            Some(Duration::ZERO)
+        );
+        assert_eq!(
+            rate_limit_delay(&headers, 0, deadline - Duration::from_secs(3600)),
+            None
+        );
+    }
+
+    #[test]
+    fn rate_limit_delay_uses_backoff_for_an_invalid_header() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(reqwest::header::RETRY_AFTER, "invalid".parse().unwrap());
+        assert_eq!(
+            rate_limit_delay(&headers, 1, SystemTime::UNIX_EPOCH),
+            Some(RATE_LIMIT_BACKOFF_BASE * 2)
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_does_not_retry_before_the_server_allows() {
+        use crate::test_utils::mock_client;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/probe"))
+            .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "3600"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = mock_client(server.uri());
+        let request = client.post(Service::Jira, "/probe").await.unwrap();
+        let error = client.execute("probe", request).await.unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<ApiError>().unwrap().status,
+            StatusCode::TOO_MANY_REQUESTS
+        );
+    }
+
+    #[tokio::test]
+    async fn requests_redact_authorization_from_debug_output() {
+        let client = crate::test_utils::mock_client("http://127.0.0.1");
+        let request = client
+            .get(Service::Jira, "/probe")
+            .await
+            .unwrap()
+            .build()
+            .unwrap();
+        assert!(request.headers()[reqwest::header::AUTHORIZATION].is_sensitive());
+        assert!(!format!("{request:?}").contains("test-token"));
+    }
+
+    #[tokio::test]
+    async fn execute_does_not_follow_redirects() {
+        use crate::test_utils::mock_client;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/probe"))
+            .respond_with(
+                ResponseTemplate::new(307)
+                    .insert_header("Location", format!("{}/redirected", server.uri())),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(path("/redirected"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let client = mock_client(server.uri());
+        let request = client.post(Service::Jira, "/probe").await.unwrap();
+        let error = client.execute("probe", request).await.unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<ApiError>().unwrap().status.as_u16(),
+            307
+        );
     }
 
     #[tokio::test]
