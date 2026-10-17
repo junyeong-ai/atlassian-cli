@@ -3,7 +3,7 @@
 [![CI](https://github.com/junyeong-ai/atlassian-cli/workflows/CI/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/ci.yml)
 [![Security](https://github.com/junyeong-ai/atlassian-cli/workflows/Security/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/security.yml)
 [![Rust](https://img.shields.io/badge/rust-1.98.0%2B%20(2024%20edition)-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.13.1-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
+[![Version](https://img.shields.io/badge/version-0.13.2-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
 [![DeepWiki](https://img.shields.io/badge/DeepWiki-junyeong--ai%2Fatlassian--cli-blue.svg?logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACwAAAAyCAYAAAAnWDnqAAAAAXNSR0IArs4c6QAAA05JREFUaEPtmUtyEzEQhtWTQyQLHNak2AB7ZnyXZMEjXMGeK/AIi+QuHrMnbChYY7MIh8g01fJoopFb0uhhEqqcbWTp06/uv1saEDv4O3n3dV60RfP947Mm9/SQc0ICFQgzfc4CYZoTPAswgSJCCUJUnAAoRHOAUOcATwbmVLWdGoH//PB8mnKqScAhsD0kYP3j/Yt5LPQe2KvcXmGvRHcDnpxfL2zOYJ1mFwrryWTz0advv1Ut4CJgf5uhDuDj5eUcAUoahrdY/56ebRWeraTjMt/00Sh3UDtjgHtQNHwcRGOC98BJEAEymycmYcWwOprTgcB6VZ5JK5TAJ+fXGLBm3FDAmn6oPPjR4rKCAoJCal2eAiQp2x0vxTPB3ALO2CRkwmDy5WohzBDwSEFKRwPbknEggCPB/imwrycgxX2NzoMCHhPkDwqYMr9tRcP5qNrMZHkVnOjRMWwLCcr8ohBVb1OMjxLwGCvjTikrsBOiA6fNyCrm8V1rP93iVPpwaE+gO0SsWmPiXB+jikdf6SizrT5qKasx5j8ABbHpFTx+vFXp9EnYQmLx02h1QTTrl6eDqxLnGjporxl3NL3agEvXdT0WmEost648sQOYAeJS9Q7bfUVoMGnjo4AZdUMQku50McDcMWcBPvr0SzbTAFDfvJqwLzgxwATnCgnp4wDl6Aa+Ax283gghmj+vj7feE2KBBRMW3FzOpLOADl0Isb5587h/U4gGvkt5v60Z1VLG8BhYjbzRwyQZemwAd6cCR5/XFWLYZRIMpX39AR0tjaGGiGzLVyhse5C9RKC6ai42ppWPKiBagOvaYk8lO7DajerabOZP46Lby5wKjw1HCRx7p9sVMOWGzb/vA1hwiWc6jm3MvQDTogQkiqIhJV0nBQBTU+3okKCFDy9WwferkHjtxib7t3xIUQtHxnIwtx4mpg26/HfwVNVDb4oI9RHmx5WGelRVlrtiw43zboCLaxv46AZeB3IlTkwouebTr1y2NjSpHz68WNFjHvupy3q8TFn3Hos2IAk4Ju5dCo8B3wP7VPr/FGaKiG+T+v+TQqIrOqMTL1VdWV1DdmcbO8KXBz6esmYWYKPwDL5b5FA1a0hwapHiom0r/cKaoqr+27/XcrS5UwSMbQAAAABJRU5ErkJggg==)](https://deepwiki.com/junyeong-ai/atlassian-cli)
 
 > **🌐 [한국어](README.md)** | **English**
@@ -13,7 +13,7 @@
 > **⚡ Fast and Powerful Atlassian Cloud Command-Line Tool**
 >
 > - 🚀 **Single binary** (no runtime required)
-> - 🎯 **60-70% response optimization** (field filtering)
+> - 🎯 **Response field filtering** (configurable defaults and custom fields)
 > - 📄 **Full pagination** (fetch all results with `--all`)
 > - 📝 **Markdown conversion** (`--format markdown` for HTML→Markdown)
 > - 🔧 **Layered config** (CLI → ENV → `--config` → Project → Global)
@@ -145,7 +145,7 @@ Installs the latest prebuilt binary, which then deploys the `jira-confluence` Cl
 
 ```bash
 # Install a specific release
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.13.1 bash
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.13.2 bash
 
 # After that the binary manages itself — no need to re-run the installer
 atlassian-cli self update
@@ -211,13 +211,15 @@ Pick one explicitly (no auto-detection):
 
 The two token methods do not accept each other's tokens: the site host silently
 ignores a token carrying scopes and answers 401, and the gateway rejects a
-classic one. On a 401 the CLI's `hint` field names the other method. Issue
+classic one. On a 401, `hint` describes possible causes such as expiry, routing
+mismatch or missing scopes. Check the token before changing configuration. Issue
 either kind at <https://id.atlassian.com/manage-profile/security/api-tokens>.
 
 ### OAuth 2.0 (3LO) — recommended
 
-Sign in once via the browser; tokens persist in the OS keychain (with a 0600
-file fallback) and refresh ~5 minutes before expiry.
+Sign in via the browser; tokens persist in the OS keychain with a 0600 file
+fallback. Sessions with a refresh token refresh about five minutes before
+expiry; sessions without one remain usable until actual access-token expiry.
 
 ```toml
 # ~/.config/atlassian-cli/config.toml
@@ -227,15 +229,25 @@ client_id = "..."          # issued at developer.atlassian.com
 client_secret = "..."      # prefer ATLASSIAN_CLIENT_SECRET env var
 redirect_port = 8976       # must match the Callback URL on the OAuth app
 # scopes defaults to ["read:jira-user", "read:jira-work", "write:jira-work", "offline_access"]
-# Add Confluence scopes only after granting them on the OAuth app:
+# Example grants for Confluence search, page reads and space reads (writes need additional scopes):
 #   scopes = ["read:jira-user", "read:jira-work", "write:jira-work",
-#             "read:confluence-content.all", "read:confluence-space.summary",
-#             "write:confluence-content", "offline_access"]
-# board/sprint/epic (agile) commands need extra Jira Software scopes beyond the defaults:
-#   "read:board-scope:jira-software", "read:sprint:jira-software",
-#   "write:sprint:jira-software", "read:epic:jira-software"
+#             "read:confluence-content.all", "read:page:confluence",
+#             "read:space:confluence", "offline_access"]
 # cloud_id = "..."          # pin one site when the user has access to many
 ```
+
+
+Add only the scopes needed for the commands you use, beyond the core Jira grants. `sprint list --project` also needs board discovery permissions.
+
+| Command | Additional OAuth scopes | Official API |
+|---|---|---|
+| `board list` | `read:board-scope:jira-software`, `read:project:jira` | [Board](https://developer.atlassian.com/cloud/jira/software/rest/api-group-board/) |
+| `sprint list --board` | `read:sprint:jira-software` | [Board sprints](https://developer.atlassian.com/cloud/jira/software/rest/api-group-board/#api-rest-agile-1-0-board-boardid-sprint-get) |
+| `sprint move` | `write:sprint:jira-software` | [Sprint](https://developer.atlassian.com/cloud/jira/software/rest/api-group-sprint/) |
+| `sprint backlog` | `write:board-scope:jira-software` | [Backlog](https://developer.atlassian.com/cloud/jira/software/rest/api-group-backlog/) |
+| `epic assign/unassign` | `write:epic:jira-software` | [Epic](https://developer.atlassian.com/cloud/jira/software/rest/api-group-epic/) |
+
+For Confluence writes, check the [scope requirements of each endpoint](https://developer.atlassian.com/cloud/confluence/rest/v2/intro/). Page-property changes need `read:page:confluence` and `write:page:confluence`; comment deletion needs `delete:comment:confluence`. Commands that read before writing need both steps' grants. Enable scopes on the app, request them in the profile, then run `auth login` to authorize again.
 
 > **Headless / AI agent**: on a desktop OS the keychain may block with a GUI prompt. Set `ATLASSIAN_NO_KEYCHAIN=1` to skip the keychain and use the 0600 file store. Treat it as a per-environment setting (don't toggle it on/off) — while set, `auth logout` clears only the file store. If you previously logged in with the keychain, run `auth logout` once without the flag to clear it.
 
@@ -344,8 +356,8 @@ atlassian-cli config init --global
 - [ ] Email format valid
 - [ ] Token correct (watch for copy/paste spaces)
 - [ ] Token shape matches the method — a token with scopes needs `scoped_token`,
-      a classic one needs `basic`. On a 401 the error's `hint` names the method
-      to switch to.
+      a classic one needs `basic`. Check the error's `hint` for possible causes
+      before changing the method or replacing credentials.
 
 ### `Failed to resolve cloud_id from ...`
 
@@ -512,7 +524,7 @@ Supported: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 
 **🌐 [한국어](README.md)** | **English**
 
-**Version 0.13.1** • Rust 2024 Edition
+**Version 0.13.2** • Rust 2024 Edition
 
 Made with ❤️ for productivity
 

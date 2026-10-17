@@ -952,12 +952,22 @@ async fn handle_auth(
             )?;
             let params = config.oauth_params()?;
             let http = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(60))
+                .timeout(std::time::Duration::from_millis(
+                    config.performance.request_timeout_ms,
+                ))
                 .connect_timeout(std::time::Duration::from_secs(10))
+                .redirect(reqwest::redirect::Policy::none())
                 .build()?;
 
             let store = TokenStore::new(&config.profile)?;
-            let outcome = OAuthStrategy::login(params, store, &http, !no_browser).await?;
+            let outcome = OAuthStrategy::login_with_timeout(
+                params,
+                store,
+                &http,
+                !no_browser,
+                std::time::Duration::from_millis(config.performance.request_timeout_ms),
+            )
+            .await?;
 
             println!("✓ Logged in (profile: {})", config.profile);
             if let Some(cid) = outcome.tokens.cloud_id.as_deref() {
@@ -1102,7 +1112,12 @@ async fn handle_auth(
                 atlassian_cli::Config::load(config_path.as_ref(), profile.as_ref(), overrides)?;
             let params = config.oauth_params()?;
             let store = TokenStore::new(&config.profile)?;
-            let strategy = OAuthStrategy::resume(params, store).await?;
+            let strategy = OAuthStrategy::resume_with_timeout(
+                params,
+                store,
+                std::time::Duration::from_millis(config.performance.request_timeout_ms),
+            )
+            .await?;
             let refreshed = strategy.force_refresh().await?;
             println!("✓ Token refreshed (profile: {})", config.profile);
             println!(

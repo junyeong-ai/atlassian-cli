@@ -87,15 +87,12 @@ v2 `/wiki/api/v2/pages/{id}/children` returns metadata only (no body), so the `-
 
 ## Space filter injection
 
-`apply_space_filter` parallels the JQL project-filter logic in `jira/api.rs`:
-detect a user-written `space` clause with the `SPACE_CLAUSE_RE` word-boundary
-regex applied to `query_utils::mask_string_literals(cql)`. Masking blanks
-the contents of every `"…"` literal before matching, so a query like
-`title ~ "deep space"` does not suppress the configured filter and an
-identifier like `mySpace = X` does not false-positive on the `space`
-keyword. When the regex misses, the original CQL is wrapped with
-`space IN ("S1","S2") AND (…)` — match the Jira-side pattern exactly so
-future query-language additions inherit the same defense.
+`apply_space_filter` and Jira's `apply_project_filter` share `query_utils::inject_filter`.
+Its lexer preserves original byte offsets, distinguishes quoted field names from
+values at condition boundaries, and separates top-level `ORDER BY` tokens from
+nested expressions. Explicit scope conditions preserve the original query;
+otherwise the configured scope wraps the conditions while the original sorting
+suffix remains intact. Syntax validation belongs to Atlassian.
 
 ## URL path encoding
 

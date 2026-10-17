@@ -2,12 +2,10 @@ use crate::client::{ApiClient, Service};
 use crate::config::Config;
 use crate::filter;
 use crate::http_utils::encode_path_segment;
-use crate::query_utils::{clause_detector, inject_filter};
+use crate::query_utils::inject_filter;
 use crate::response::{WHOLE_BODY, require_array};
 use anyhow::Result;
-use regex::Regex;
 use serde_json::{Value, json};
-use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -28,11 +26,6 @@ pub use agile::{
     resolve_board_id, unassign_issues_from_epic,
 };
 
-/// Detects an existing `project` scope so the configured project filter is not
-/// injected on top of it. See `query_utils::clause_detector` for the operator
-/// coverage and word-boundary rationale.
-static PROJECT_CLAUSE_RE: LazyLock<Regex> = LazyLock::new(|| clause_detector("project"));
-
 const MAX_RESULTS_PER_PAGE: u32 = 100;
 
 fn apply_project_filter(jql: &str, config: &Config) -> String {
@@ -48,11 +41,7 @@ fn apply_project_filter(jql: &str, config: &Config) -> String {
         .collect::<Vec<_>>()
         .join(",");
 
-    inject_filter(
-        jql,
-        &PROJECT_CLAUSE_RE,
-        &format!("project IN ({})", projects),
-    )
+    inject_filter(jql, "project", &format!("project IN ({})", projects))
 }
 
 async fn get_myself(client: &ApiClient) -> Result<Value> {

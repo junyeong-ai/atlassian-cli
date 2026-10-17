@@ -93,7 +93,7 @@ spells the separator the same way so both builders read identically.
 - `flow.rs` runs the authorize → code → token exchange via the `oauth2`
   crate (PKCE S256, `audience=api.atlassian.com`, `prompt=consent`).
   The crate's bundled `reqwest` feature is disabled; token-endpoint calls
-  bridge into the binary's own reqwest/rustls client through
+  bridge into a dedicated reqwest/rustls client through
   `perform_oauth_request` (redirects hard-disabled — a followed redirect
   would hand the client credentials to the redirect target), keeping a
   single reqwest in the dependency tree.
@@ -199,6 +199,12 @@ spells the separator the same way so both builders read identically.
   callers sharing the strategy serialize on refresh — at most one token-endpoint
   round trip when the cache is stale. Refresh tokens **rotate** on every
   use; the merged set replaces the stored one atomically.
+- Token exchanges use the shared HTTP policy: configured request timeout,
+  ten-second connection timeout, and redirects disabled. `OAuthStrategy` owns
+  its token client; the client supplied for site discovery is never reused for
+  credential-bearing token requests. Existing library constructors use the
+  default timeout; `login_with_timeout` and `resume_with_timeout` accept an
+  explicit policy duration.
 - OAuth redirect URI must use `127.0.0.1` literally, never `localhost`.
 - `OAuthStrategy::login` returns `LoginOutcome` only. It takes the
   `TokenStore` rather than a profile name, so `OAuthParams` holds pure config

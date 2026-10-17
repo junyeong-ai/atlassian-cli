@@ -75,16 +75,6 @@ fn build_client(inputs: &FlowInputs<'_>) -> Result<ConfiguredClient> {
     )
 }
 
-fn oauth_http_client() -> Result<reqwest::Client> {
-    // Atlassian's auth.atlassian.com handles redirects internally; disabling
-    // here matches the oauth2 crate's recommendation and prevents leaking
-    // credentials to a redirected host.
-    reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .context("Failed to build OAuth HTTP client")
-}
-
 /// Execute one `oauth2`-crate request and reshape the reply into the crate's
 /// generic `HttpResponse`. Both sides speak the same `http` 1.x types, so the
 /// bridge is a direct move of method, URI, headers, and body bytes; the
@@ -116,10 +106,10 @@ async fn perform_oauth_request(
 pub async fn login(
     inputs: &FlowInputs<'_>,
     api_http: &reqwest::Client,
+    oauth_http: &reqwest::Client,
     open_browser: bool,
 ) -> Result<LoginOutcome> {
     let client = build_client(inputs)?;
-    let oa_http = oauth_http_client()?;
     let listener = callback::bind(inputs.redirect_port).await?;
 
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
@@ -146,7 +136,7 @@ pub async fn login(
 
     let result = callback::receive(listener, csrf.secret()).await?;
 
-    let send = |req| perform_oauth_request(oa_http.clone(), req);
+    let send = |req| perform_oauth_request(oauth_http.clone(), req);
     let token_response: BasicTokenResponse = client
         .exchange_code(AuthorizationCode::new(result.code))
         .set_pkce_verifier(pkce_verifier)
@@ -172,10 +162,10 @@ pub async fn refresh(
     inputs: &FlowInputs<'_>,
     refresh_token: &SecretString,
     existing_cloud_id: String,
+    oauth_http: &reqwest::Client,
 ) -> Result<TokenSet> {
     let client = build_client(inputs)?;
-    let oa_http = oauth_http_client()?;
-    let send = |req| perform_oauth_request(oa_http.clone(), req);
+    let send = |req| perform_oauth_request(oauth_http.clone(), req);
     let token_response: BasicTokenResponse = client
         .exchange_refresh_token(&RefreshToken::new(
             refresh_token.expose_secret().to_string(),
@@ -320,9 +310,12 @@ mod tests {
             .body(b"grant_type=authorization_code&code=abc".to_vec())
             .unwrap();
 
-        let response = perform_oauth_request(oauth_http_client().unwrap(), request)
-            .await
-            .unwrap();
+        let response = perform_oauth_request(
+            crate::client::http_client(Duration::from_secs(30)).unwrap(),
+            request,
+        )
+        .await
+        .unwrap();
 
         // Non-2xx must pass through untouched — the oauth2 crate parses the
         // RFC 6749 error body itself.
@@ -337,28 +330,62 @@ mod tests {
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/oauth/token"))
-            .respond_with(
-                ResponseTemplate::new(302).insert_header("Location", "https://attacker.example/"),
+        Mock::given(path("/forwarded"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        for status in [302, 307, 308] {
+            let endpoint = format!("/oauth/token/{status}");
+            Mock::given(method("POST"))
+                .and(path(&endpoint))
+                .respond_with(
+                    ResponseTemplate::new(status)
+                        .insert_header("Location", format!("{}/forwarded", server.uri())),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            let request = http::Request::builder()
+                .method("POST")
+                .uri(format!("{}{endpoint}", server.uri()))
+                .body(b"client_secret=test-secret".to_vec())
+                .unwrap();
+            let response = perform_oauth_request(
+                crate::client::http_client(Duration::from_secs(30)).unwrap(),
+                request,
             )
+            .await
+            .unwrap();
+            assert_eq!(response.status(), status);
+        }
+    }
+
+    #[tokio::test]
+    async fn token_exchange_respects_the_request_deadline() {
+        use wiremock::matchers::path;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(path("/oauth/token"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(2)))
             .expect(1)
             .mount(&server)
             .await;
-
         let request = http::Request::builder()
             .method("POST")
             .uri(format!("{}/oauth/token", server.uri()))
             .body(Vec::new())
             .unwrap();
-
-        let response = perform_oauth_request(oauth_http_client().unwrap(), request)
-            .await
-            .unwrap();
-
-        // Following the redirect would replay the client credentials to the
-        // Location target; the 302 must surface as-is instead.
-        assert_eq!(response.status(), 302);
+        let client = crate::client::http_client(Duration::from_millis(100)).unwrap();
+        let error = tokio::time::timeout(
+            Duration::from_secs(1),
+            perform_oauth_request(client, request),
+        )
+        .await
+        .expect("the HTTP client must enforce its own deadline")
+        .unwrap_err();
+        assert!(error.is_timeout(), "{error}");
     }
 
     /// A login that stored an id the proxy path rejects would report success

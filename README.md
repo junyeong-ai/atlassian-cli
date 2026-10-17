@@ -3,7 +3,7 @@
 [![CI](https://github.com/junyeong-ai/atlassian-cli/workflows/CI/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/ci.yml)
 [![Security](https://github.com/junyeong-ai/atlassian-cli/workflows/Security/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/security.yml)
 [![Rust](https://img.shields.io/badge/rust-1.98.0%2B%20(2024%20edition)-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.13.1-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
+[![Version](https://img.shields.io/badge/version-0.13.2-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
 
 > **🌐 한국어** | **[English](README.en.md)**
 
@@ -115,7 +115,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scri
 
 ```bash
 # 특정 릴리스 설치
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.13.1 bash
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.13.2 bash
 
 # 이후 업데이트·제거는 바이너리가 직접 한다 (설치 스크립트 재실행 불필요)
 atlassian-cli self update
@@ -165,11 +165,11 @@ atlassian-cli self uninstall --yes [--keep-skill] [--keep-credentials] [--purge-
 | `service_account` | 비인간 service account | `api.atlassian.com` | 자동화·CI 용. 별도 principal |
 | `oauth` | 본인 (대화형 로그인) | `api.atlassian.com` | 사용자 권한 그대로 + refresh token 자동 관리 |
 
-두 토큰 방식은 서로의 토큰을 받지 않습니다. 사이트 호스트는 scope 가 붙은 토큰을 조용히 무시해 401 을 돌려주고, 게이트웨이는 classic 토큰을 거부합니다. 401 이 나면 CLI 가 `hint` 필드로 반대쪽 method 를 알려줍니다.
+두 토큰 방식은 서로의 토큰을 받지 않습니다. 사이트 호스트는 scope 가 붙은 토큰을 조용히 무시해 401 을 돌려주고, 게이트웨이는 classic 토큰을 거부합니다. 401 응답의 `hint`는 토큰 만료·인증 방식 불일치·권한 부족 등 확인할 원인을 안내합니다. 토큰 종류와 scope를 확인한 뒤 설정을 변경하세요.
 
 ### OAuth 2.0 (3LO — 본인 계정으로 로그인) ⭐ 권장
 
-브라우저로 한 번 로그인하면 access/refresh 토큰이 OS keychain (또는 0600 파일) 에 저장되고 만료 5분 전에 자동 refresh 됩니다.
+브라우저로 로그인하면 토큰이 OS keychain (또는 0600 파일)에 저장됩니다. Refresh token이 있으면 만료 5분 전에 갱신하고, 없으면 access token의 실제 만료까지 사용합니다.
 
 ```toml
 # ~/.config/atlassian-cli/config.toml
@@ -181,15 +181,25 @@ client_id = "..."          # developer.atlassian.com 에서 발급
 client_secret = "..."      # 권장: ATLASSIAN_CLIENT_SECRET env var
 redirect_port = 8976       # OAuth app 에 등록한 redirect URI 와 일치 (127.0.0.1:8976/callback)
 # scopes 미지정 시 기본값 = ["read:jira-user", "read:jira-work", "write:jira-work", "offline_access"]
-# Confluence 도 함께 쓰려면 OAuth app 에 해당 scope 를 부여한 뒤 명시:
+# Confluence 검색·페이지·스페이스 조회 권한 예시 (쓰기에는 별도 권한 필요):
 #   scopes = ["read:jira-user", "read:jira-work", "write:jira-work",
-#             "read:confluence-content.all", "read:confluence-space.summary",
-#             "write:confluence-content", "offline_access"]
-# board/sprint/epic (애자일) 명령은 기본 scope 로 부족함 — Jira Software scope 추가 필요:
-#   "read:board-scope:jira-software", "read:sprint:jira-software",
-#   "write:sprint:jira-software", "read:epic:jira-software"
+#             "read:confluence-content.all", "read:page:confluence",
+#             "read:space:confluence", "offline_access"]
 # cloud_id = "..."   # 여러 site 접근 가능할 때 1개로 고정
 ```
+
+
+기본 Jira 권한 외에 실제 명령에 필요한 scope만 추가하세요. `sprint list --project`는 보드 조회 권한도 필요합니다.
+
+| 명령 | 추가 OAuth scope | 공식 API |
+|---|---|---|
+| `board list` | `read:board-scope:jira-software`, `read:project:jira` | [Board](https://developer.atlassian.com/cloud/jira/software/rest/api-group-board/) |
+| `sprint list --board` | `read:sprint:jira-software` | [Board sprints](https://developer.atlassian.com/cloud/jira/software/rest/api-group-board/#api-rest-agile-1-0-board-boardid-sprint-get) |
+| `sprint move` | `write:sprint:jira-software` | [Sprint](https://developer.atlassian.com/cloud/jira/software/rest/api-group-sprint/) |
+| `sprint backlog` | `write:board-scope:jira-software` | [Backlog](https://developer.atlassian.com/cloud/jira/software/rest/api-group-backlog/) |
+| `epic assign/unassign` | `write:epic:jira-software` | [Epic](https://developer.atlassian.com/cloud/jira/software/rest/api-group-epic/) |
+
+Confluence 쓰기에는 [각 API의 scope](https://developer.atlassian.com/cloud/confluence/rest/v2/intro/)를 확인하세요. 페이지 속성 변경은 `read:page:confluence`와 `write:page:confluence`, 댓글 삭제는 `delete:comment:confluence`가 필요합니다. 조회 후 변경하는 명령은 두 단계의 권한이 모두 필요합니다. 앱에 scope를 부여하고 프로파일에 명시한 뒤 `auth login`으로 다시 동의하세요.
 
 > **헤드리스 / AI 에이전트**: 데스크톱 OS 에서 키체인이 GUI 프롬프트로 블로킹될 수 있습니다. `ATLASSIAN_NO_KEYCHAIN=1` 을 설정하면 키체인을 건너뛰고 0600 파일 저장소를 사용합니다. 환경 단위 설정으로 쓰세요(켰다 껐다 X) — 플래그가 켜진 동안 `auth logout`은 파일만 지웁니다. 이전에 키체인으로 로그인한 적이 있으면 플래그 없이 `auth logout`을 한 번 실행해 키체인을 비우세요.
 
@@ -469,7 +479,7 @@ atlassian-cli completions bash > /etc/bash_completion.d/atlassian-cli
 
 **🌐 한국어** | **[English](README.en.md)**
 
-**Version 0.13.1** • Rust 2024 Edition
+**Version 0.13.2** • Rust 2024 Edition
 
 Made with ❤️ for productivity
 

@@ -32,7 +32,7 @@ There is therefore no rollback path, and that is the point: an installation whos
 
 `fetch_verified_binary` covers download through extraction and is driven by wiremock tests; only the final `install` touches the running binary.
 
-The shell installer follows the same verify-before-replace order. The parent shell owns download and staging paths so its exit trap can remove them. Source installations build an explicit native target and obtain the expected version from Cargo package metadata; a failed build must never select an existing artifact.
+The shell installer follows the same verify-before-replace order and refuses a destination that is a directory or points to one. The parent shell owns download and staging paths so its exit trap can remove them. Source installations build an explicit native target and obtain the expected version from Cargo package metadata; a failed build must never select an existing artifact.
 
 ## Which release is latest
 

@@ -2733,3 +2733,38 @@ async fn integ_delete_issue_surfaces_error_with_status() {
         "{msg}"
     );
 }
+
+#[tokio::test]
+async fn search_preserves_scope_and_quoted_sorting_on_the_wire() {
+    use crate::test_utils::mock_client_with_config;
+    use wiremock::matchers::body_partial_json;
+    let server = MockServer::start().await;
+    let client = mock_client_with_config(
+        server.uri(),
+        create_test_config(vec!["DEFAULT".into()], None),
+    );
+    for (input, expected) in [
+        ("\"project\" = OTHER", "\"project\" = OTHER"),
+        ("status=Open&&!project=OTHER", "status=Open&&!project=OTHER"),
+        (
+            "\"project.key\" = OTHER",
+            "project IN (\"DEFAULT\") AND (\"project.key\" = OTHER)",
+        ),
+        (
+            "status = Open ORDER BY\"created\"",
+            "project IN (\"DEFAULT\") AND (status = Open) ORDER BY\"created\"",
+        ),
+    ] {
+        Mock::given(method("POST"))
+            .and(path("/rest/api/3/search/jql"))
+            .and(body_partial_json(json!({"jql":expected})))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"issues":[{"key":"OTHER-1"}]})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let result = search(input, 1, None, false, &client).await.unwrap();
+        assert_eq!(result["items"][0]["key"], "OTHER-1");
+    }
+}

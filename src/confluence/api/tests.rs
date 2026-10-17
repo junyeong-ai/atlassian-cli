@@ -222,8 +222,6 @@ fn test_apply_space_filter_empty_filter() {
 #[test]
 fn test_apply_space_filter_ignores_quoted_keyword() {
     let config = create_test_config(vec!["SPACE1".to_string()]);
-    // The substring `space =` inside a quoted title must NOT suppress
-    // the filter injection — the regex runs against a masked CQL string.
     let result = apply_space_filter("title ~ \"space = anywhere\"", &config);
     assert!(
         result.starts_with("space IN (\"SPACE1\")"),
@@ -234,8 +232,6 @@ fn test_apply_space_filter_ignores_quoted_keyword() {
 #[test]
 fn test_apply_space_filter_skips_word_boundary_non_match() {
     let config = create_test_config(vec!["SPACE1".to_string()]);
-    // `mySpace = X` is not a `space` clause — the word boundary regex
-    // must not treat it as one.
     let result = apply_space_filter("mySpace = X", &config);
     assert_eq!(result, "space IN (\"SPACE1\") AND (mySpace = X)");
 }
@@ -1995,4 +1991,35 @@ async fn integ_pagination_bails_on_missing_results() {
     let client = mock_client(server.uri());
     let err = get_labels("7", &client).await.unwrap_err().to_string();
     assert!(err.contains("no 'results' array"), "got: {err}");
+}
+
+#[tokio::test]
+async fn search_preserves_explicit_space_and_quoted_sorting_on_the_wire() {
+    use crate::test_utils::mock_client_with_config;
+    let server = MockServer::start().await;
+    let client = mock_client_with_config(server.uri(), create_test_config(vec!["DEFAULT".into()]));
+    for (input, expected) in [
+        ("\"space\" = OTHER", "\"space\" = OTHER"),
+        (
+            "space.title ~ \"Engineering\"",
+            "space.title ~ \"Engineering\"",
+        ),
+        (
+            "type = page ORDER BY\"lastmodified\"",
+            "space IN (\"DEFAULT\") AND (type = page) ORDER BY\"lastmodified\"",
+        ),
+    ] {
+        Mock::given(method("GET"))
+            .and(path("/wiki/rest/api/search"))
+            .and(query_param("cql", expected))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"results":[{"content":{"id":"42"}}], "totalSize":1})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let result = search(input, 1, None, None, false, &client).await.unwrap();
+        assert_eq!(result["items"][0]["id"], "42");
+    }
 }

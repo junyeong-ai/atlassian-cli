@@ -34,7 +34,8 @@ pub trait AuthStrategy: Send + Sync + std::fmt::Debug {
     /// The method tag for this strategy.
     fn method(&self) -> AuthMethod;
 
-    /// Authorization header value. May refresh tokens; uses the provided client.
+    /// Authorization header value. May refresh tokens using the API client or
+    /// a dedicated credential client configured when the strategy was created.
     async fn authorization(&self, http: &reqwest::Client) -> Result<String>;
 
     /// Build the request URL for a service-relative path.

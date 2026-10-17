@@ -4,14 +4,12 @@ use crate::confluence::fields::build_search_expand;
 use crate::filter;
 use crate::http_utils::encode_path_segment;
 use crate::markdown::confluence_to_markdown;
-use crate::query_utils::{clause_detector, inject_filter};
+use crate::query_utils::inject_filter;
 use crate::response::{require_field, require_u64};
 use anyhow::Result;
-use regex::Regex;
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::io::{self, Write};
-use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -30,12 +28,6 @@ pub use spaces::{get_space, get_spaces, resolve_space_id};
 /// non-body ceiling, so 50 is the real maximum a single page returns.
 const MAX_SEARCH_LIMIT: u32 = 50;
 
-/// Detects an existing `space` scope so the configured space filter is not
-/// injected on top of it. See `query_utils::clause_detector` for the operator
-/// coverage (including the dotted `space.key`/`space.type` CQL forms) and
-/// word-boundary rationale.
-static SPACE_CLAUSE_RE: LazyLock<Regex> = LazyLock::new(|| clause_detector("space"));
-
 fn apply_space_filter(cql: &str, config: &Config) -> String {
     if config.confluence.spaces_filter.is_empty() {
         return cql.to_string();
@@ -49,7 +41,7 @@ fn apply_space_filter(cql: &str, config: &Config) -> String {
         .collect::<Vec<_>>()
         .join(",");
 
-    inject_filter(cql, &SPACE_CLAUSE_RE, &format!("space IN ({})", spaces))
+    inject_filter(cql, "space", &format!("space IN ({})", spaces))
 }
 
 /// Clamp a user-requested page size to `MAX_SEARCH_LIMIT`. Shared by

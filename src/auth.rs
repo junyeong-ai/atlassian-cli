@@ -309,6 +309,24 @@ impl AuthConfig {
         profile: &str,
         http: &reqwest::Client,
     ) -> Result<Box<dyn AuthStrategy>> {
+        self.into_strategy_with_timeout(
+            domain,
+            profile,
+            http,
+            std::time::Duration::from_millis(
+                crate::config::PerformanceConfig::default().request_timeout_ms,
+            ),
+        )
+        .await
+    }
+
+    pub(crate) async fn into_strategy_with_timeout(
+        self,
+        domain: Option<&str>,
+        profile: &str,
+        http: &reqwest::Client,
+        timeout: std::time::Duration,
+    ) -> Result<Box<dyn AuthStrategy>> {
         match self {
             AuthConfig::Basic { email, token } => {
                 Ok(Box::new(BasicStrategy::new(domain, email, token)?))
@@ -330,7 +348,9 @@ impl AuthConfig {
             AuthConfig::OAuth { .. } => {
                 let params = self.oauth_params(profile)?;
                 let store = TokenStore::new(profile)?;
-                Ok(Box::new(OAuthStrategy::resume(params, store).await?))
+                Ok(Box::new(
+                    OAuthStrategy::resume_with_timeout(params, store, timeout).await?,
+                ))
             }
         }
     }

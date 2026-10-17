@@ -8,6 +8,7 @@ use crate::client::{Service, proxy_url};
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use secrecy::ExposeSecret;
+use std::time::Duration;
 use tokio::sync::Mutex;
 
 /// Configuration for the OAuth flow. Mirrors the static fields of
@@ -56,6 +57,7 @@ pub struct OAuthStrategy {
     /// read it without locking the token mutex.
     cloud_id: String,
     store: TokenStore,
+    oauth_http: reqwest::Client,
     /// Serializes refresh attempts: the first stale caller refreshes; others
     /// wake to the fresh token without issuing duplicate HTTP requests.
     tokens: Mutex<TokenSet>,
@@ -87,6 +89,10 @@ fn resolve_stored_cloud_id(pinned: Option<&str>, stored: Option<&str>) -> Result
     )
 }
 
+fn default_timeout() -> Duration {
+    Duration::from_millis(crate::config::PerformanceConfig::default().request_timeout_ms)
+}
+
 impl OAuthStrategy {
     /// Run the interactive flow and persist the resulting tokens.
     ///
@@ -98,7 +104,20 @@ impl OAuthStrategy {
         api_http: &reqwest::Client,
         open_browser: bool,
     ) -> Result<flow::LoginOutcome> {
-        let outcome = flow::login(&params.flow_inputs(), api_http, open_browser).await?;
+        Self::login_with_timeout(params, store, api_http, open_browser, default_timeout()).await
+    }
+
+    /// Run login with a bounded token exchange and redirects disabled.
+    pub async fn login_with_timeout(
+        params: OAuthParams,
+        store: TokenStore,
+        api_http: &reqwest::Client,
+        open_browser: bool,
+        timeout: Duration,
+    ) -> Result<flow::LoginOutcome> {
+        let oauth_http = crate::client::http_client(timeout)?;
+        let outcome =
+            flow::login(&params.flow_inputs(), api_http, &oauth_http, open_browser).await?;
         let backend = store.save(&outcome.tokens).await?;
         tracing::debug!(
             "Saved OAuth tokens for profile '{}' via {}",
@@ -111,6 +130,15 @@ impl OAuthStrategy {
     /// Load the tokens `store` holds. Errors with a clear `auth login` hint
     /// when no tokens are stored.
     pub async fn resume(params: OAuthParams, store: TokenStore) -> Result<Self> {
+        Self::resume_with_timeout(params, store, default_timeout()).await
+    }
+
+    /// Resume a session with a bounded token refresh and redirects disabled.
+    pub async fn resume_with_timeout(
+        params: OAuthParams,
+        store: TokenStore,
+        timeout: Duration,
+    ) -> Result<Self> {
         let profile = store.profile().to_string();
         let tokens = store
             .load()
@@ -151,6 +179,7 @@ impl OAuthStrategy {
             profile,
             cloud_id,
             store,
+            oauth_http: crate::client::http_client(timeout)?,
             tokens: Mutex::new(tokens),
         })
     }
@@ -172,6 +201,7 @@ impl OAuthStrategy {
             &self.params.flow_inputs(),
             &refresh_token,
             self.cloud_id.clone(),
+            &self.oauth_http,
         )
         .await?;
         // Atlassian rotates refresh tokens; if the response omits one we carry

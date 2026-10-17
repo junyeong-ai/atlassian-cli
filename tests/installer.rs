@@ -55,6 +55,81 @@ fn failed_or_mismatched_candidates_preserve_the_existing_installation() {
 }
 
 #[test]
+fn directory_destinations_are_preserved_and_reported_as_failures() {
+    use std::os::unix::fs::symlink;
+    for kind in ["directory", "symlink", "created-during-validation"] {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("bin/atlassian-cli");
+        std::fs::create_dir(destination.parent().unwrap()).unwrap();
+        let outside = directory.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        match kind {
+            "directory" => std::fs::create_dir(&destination).unwrap(),
+            "symlink" => symlink(&outside, &destination).unwrap(),
+            _ => {}
+        }
+        candidate(directory.path(), env!("CARGO_PKG_VERSION"));
+        if kind == "created-during-validation" {
+            executable(
+                &directory.path().join("candidate"),
+                &format!(
+                    "#!/bin/sh\nmkdir \"$INSTALL_DIR/atlassian-cli\"\necho atlassian-cli {}\n",
+                    env!("CARGO_PKG_VERSION")
+                ),
+            );
+        }
+        let output = run(
+            directory.path(),
+            "install_binary \"$TEST_ROOT/candidate\" \"$VERSION\"",
+        );
+        assert!(!output.status.success(), "{kind}");
+        assert!(destination.is_dir());
+        assert_eq!(
+            std::fs::read_dir(&destination).unwrap().count(),
+            0,
+            "{kind}"
+        );
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+        assert_eq!(
+            std::fs::read_dir(destination.parent().unwrap())
+                .unwrap()
+                .count(),
+            1
+        );
+        if kind == "symlink" {
+            assert!(destination.is_symlink());
+        }
+    }
+}
+
+#[test]
+fn a_file_symlink_is_replaced_without_modifying_its_target() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let directory = tempfile::tempdir().unwrap();
+    let target = directory.path().join("existing");
+    std::fs::write(&target, "existing target").unwrap();
+    std::fs::create_dir(directory.path().join("bin")).unwrap();
+    let destination = directory.path().join("bin/atlassian-cli");
+    symlink(&target, &destination).unwrap();
+    candidate(directory.path(), env!("CARGO_PKG_VERSION"));
+    let output = run(
+        directory.path(),
+        "install_binary \"$TEST_ROOT/candidate\" \"$VERSION\"",
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!destination.is_symlink());
+    assert_eq!(std::fs::read_to_string(target).unwrap(), "existing target");
+    assert_eq!(
+        std::fs::metadata(destination).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+}
+
+#[test]
 fn a_verified_candidate_replaces_the_installation() {
     let directory = tempfile::Builder::new()
         .prefix("installer space ")

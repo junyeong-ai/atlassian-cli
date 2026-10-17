@@ -251,12 +251,16 @@ install_binary() {
         echo "Installation candidate is not a regular file: $binary_path" >&2
         return 1
     fi
+    if [ -d "$INSTALL_DIR/$BINARY_NAME" ]; then
+        echo "Installation destination is a directory: $INSTALL_DIR/$BINARY_NAME" >&2
+        return 1
+    fi
     mkdir -p "$INSTALL_DIR" || return
     # Stage next to the destination and rename: replacing a running binary
     # in place fails with ETXTBSY on Linux, while rename always succeeds.
     STAGED_BINARY=$(mktemp "$INSTALL_DIR/.$BINARY_NAME.XXXXXX") || return
     cp "$binary_path" "$STAGED_BINARY" || return
-    chmod +x "$STAGED_BINARY" || return
+    chmod 755 "$STAGED_BINARY" || return
 
     if [[ "${OSTYPE:-}" == "darwin"* ]]; then
         codesign --force --deep --sign - "$STAGED_BINARY" 2>/dev/null || true
@@ -265,6 +269,10 @@ install_binary() {
     actual_version=$("$STAGED_BINARY" --version) || return
     if [ "$actual_version" != "$expected_version" ]; then
         printf 'Expected %s, got %s\n' "$expected_version" "$actual_version" >&2
+        return 1
+    fi
+    if [ -d "$INSTALL_DIR/$BINARY_NAME" ]; then
+        echo "Installation destination is a directory: $INSTALL_DIR/$BINARY_NAME" >&2
         return 1
     fi
     mv -f "$STAGED_BINARY" "$INSTALL_DIR/$BINARY_NAME" || return

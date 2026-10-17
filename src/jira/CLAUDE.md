@@ -17,7 +17,7 @@ When adding a new write endpoint that takes user text, route through these helpe
 
 ## Search field selection
 
-`fields::resolve_search_fields` is the only place that decides which fields go into `/search/jql`. Precedence: CLI `--fields` > `[jira].search_default_fields` / `JIRA_SEARCH_DEFAULT_FIELDS` env > the baseline list in `fields.rs`, plus `search_custom_fields` appended. When `--format markdown` is set, `description` is added (otherwise omitted for response size).
+`fields::resolve_search_fields` decides the search fields. An explicit `--fields` list is returned unchanged. Otherwise configured `search_default_fields` replace the built-in defaults, and Markdown mode adds `description`. `search_custom_fields` extend only the built-in defaults; they do not extend an explicit or configured replacement list.
 
 ## Response envelope
 

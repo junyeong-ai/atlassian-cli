@@ -1,159 +1,212 @@
-//! Shared helpers for parsing Atlassian query languages (JQL, CQL).
+//! Shared lexical handling for JQL and CQL filter injection.
 //!
-//! JQL and CQL share the same string-literal syntax (single- or double-quoted
-//! with `\` escape) and the same need to detect bare keywords and `ORDER BY`
-//! clauses without false-positives on text inside quoted literals. The filter
-//! injection logic for both languages is identical apart from the keyword and
-//! the wrapping clause, so it lives here once as `inject_filter`.
+//! Tokens retain original byte positions. Quoted field names are identifiers
+//! only at a clause boundary; quoted values never establish a search scope.
 
-use regex::Regex;
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Word,
+    Quoted,
+    Open,
+    Close,
+    Operator,
+    Other,
+}
 
-/// Replace every quoted string literal in a query with a same-length run of
-/// ASCII spaces. Byte offsets and overall length are preserved so the caller
-/// can still slice the original input by indices found in the mask.
-///
-/// Used to defang user queries before running keyword-detection regexes — e.g.
-/// so `summary ~ "project = foo"` does not trip the `\bproject\s*=` detector
-/// and suppress the project filter we want to inject.
-///
-/// Both `'` and `"` open a literal; the closer must match the opener, so an
-/// apostrophe inside a double-quoted value (`"it's fine"`) and a double-quote
-/// inside a single-quoted value (`'say "hi"'`) are both handled correctly.
-/// JQL and CQL both accept either quote form, so masking only one would let
-/// `project = 'X'` clauses slip through unmasked. A `\` escapes the next byte.
-pub(crate) fn mask_string_literals(query: &str) -> String {
-    let bytes = query.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if b == b'"' || b == b'\'' {
-            let opener = b;
-            out.push(b' ');
-            i += 1;
-            while i < bytes.len() {
-                let c = bytes[i];
-                if c == b'\\' && i + 1 < bytes.len() {
-                    out.push(b' ');
-                    out.push(b' ');
-                    i += 2;
-                    continue;
-                }
-                if c == opener {
-                    out.push(b' ');
-                    i += 1;
-                    break;
-                }
-                out.push(b' ');
-                i += 1;
-            }
-        } else {
-            out.push(b);
-            i += 1;
-        }
+struct Token<'a> {
+    kind: Kind,
+    text: &'a str,
+    start: usize,
+}
+
+impl Token<'_> {
+    fn keyword(&self, keyword: &str) -> bool {
+        self.kind == Kind::Word && self.text.eq_ignore_ascii_case(keyword)
     }
-    // Only ASCII bytes are ever substituted (spaces for quoted content). Bytes
-    // outside the masked regions are copied verbatim, so a valid UTF-8 input
-    // yields a valid UTF-8 output.
-    String::from_utf8(out).expect("mask preserves UTF-8")
+
+    fn field(&self, keyword: &str) -> bool {
+        let name = match self.kind {
+            Kind::Word => self.text,
+            Kind::Quoted => &self.text[1..self.text.len() - 1],
+            _ => return false,
+        };
+        name.eq_ignore_ascii_case(keyword)
+            || (keyword == "space"
+                && name.split_once('.').is_some_and(|(root, suffix)| {
+                    root.eq_ignore_ascii_case(keyword)
+                        && !suffix.is_empty()
+                        && suffix.chars().all(|c| c.is_alphanumeric() || c == '_')
+                }))
+    }
 }
 
-/// Build the regex that decides whether a query already scopes by `keyword`
-/// (`project` for JQL, `space` for CQL) — when it does, the configured filter
-/// is not injected on top. The keyword (optionally a dotted sub-field like
-/// `space.key`/`space.type`) must be followed by a field operator: comparison
-/// (`=`, `!=`, `~`, `!~`, `<`, `>`), set membership (`in`, `not in`), or
-/// existence/history (`is`, `was`, `changed` — JQL only; harmless for CQL).
-/// Requiring an operator is what keeps a bare value like `title ~ space.foo`
-/// from counting as a scope, while still catching `project WAS "X"` and
-/// `space.key = Y`. The leading/trailing word boundary stops `projectId`/
-/// `spaceKey` from matching.
-pub(crate) fn clause_detector(keyword: &str) -> Regex {
-    Regex::new(&format!(
-        r"(?i)\b{keyword}\b(?:\.\w+)?\s*(?:[=!<>~]|\b(?:in|not\s+in|is|was|changed)\b)"
-    ))
-    .expect("clause detector pattern is valid")
-}
-
-fn order_by_start(query: &str, mask: &str) -> Option<usize> {
-    let bytes = mask.as_bytes();
-    let original = query.as_bytes();
-    let mut depth = 0usize;
+fn tokens(query: &str) -> Vec<Token<'_>> {
+    let bytes = query.as_bytes();
+    let mut tokens = Vec::new();
     let mut index = 0;
     while index < bytes.len() {
-        match bytes[index] {
-            b'(' => depth += 1,
-            b')' => depth = depth.saturating_sub(1),
+        if bytes[index].is_ascii_whitespace() {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        let first = bytes[index];
+        index += 1;
+        let kind = match first {
+            b'(' => Kind::Open,
+            b')' => Kind::Close,
+            b',' => Kind::Other,
+            b'\'' | b'"' => {
+                let mut closed = false;
+                while index < bytes.len() {
+                    let byte = bytes[index];
+                    index += 1;
+                    if byte == b'\\' && index < bytes.len() {
+                        index += 1;
+                    } else if byte == first {
+                        closed = true;
+                        break;
+                    }
+                }
+                if closed { Kind::Quoted } else { Kind::Other }
+            }
+            b'=' | b'!' | b'<' | b'>' | b'~' | b'&' | b'|' => {
+                if bytes.get(start..start + 2).is_some_and(|pair| {
+                    matches!(pair, b"!=" | b"!~" | b"<=" | b">=" | b"&&" | b"||")
+                }) {
+                    index += 1;
+                }
+                Kind::Operator
+            }
+            _ => {
+                while index < bytes.len()
+                    && !bytes[index].is_ascii_whitespace()
+                    && !matches!(
+                        bytes[index],
+                        b'(' | b')'
+                            | b','
+                            | b'\''
+                            | b'"'
+                            | b'='
+                            | b'!'
+                            | b'<'
+                            | b'>'
+                            | b'~'
+                            | b'&'
+                            | b'|'
+                    )
+                {
+                    index += 1;
+                }
+                Kind::Word
+            }
+        };
+        tokens.push(Token {
+            kind,
+            text: &query[start..index],
+            start,
+        });
+    }
+    tokens
+}
+
+fn order_by_index(tokens: &[Token<'_>]) -> Option<usize> {
+    let mut depth = 0usize;
+    for (index, token) in tokens.iter().enumerate() {
+        match token.kind {
+            Kind::Open => depth += 1,
+            Kind::Close => depth = depth.saturating_sub(1),
             _ => {}
         }
-        let boundary = index == 0
-            || original[index - 1].is_ascii_whitespace()
-            || matches!(original[index - 1], b')' | b'\'' | b'"');
         if depth == 0
-            && boundary
-            && bytes
-                .get(index..index + 5)
-                .is_some_and(|word| word.eq_ignore_ascii_case(b"order"))
+            && token.keyword("order")
+            && tokens.get(index + 1).is_some_and(|next| next.keyword("by"))
         {
-            let mut next = index + 5;
-            let separator = next;
-            while next < original.len() && original[next].is_ascii_whitespace() {
-                next += 1;
-            }
-            if next > separator
-                && bytes
-                    .get(next..next + 2)
-                    .is_some_and(|word| word.eq_ignore_ascii_case(b"by"))
-                && (next + 2 == bytes.len() || original[next + 2].is_ascii_whitespace())
-            {
-                return Some(index);
-            }
+            return Some(index);
         }
-        index += 1;
     }
     None
 }
 
-/// Inject a filter clause into a user query (JQL or CQL), preserving any
-/// trailing `ORDER BY` and skipping injection when the user already scoped by
-/// the same keyword. This is the single source of truth shared by Jira's
-/// project filter and Confluence's space filter — the only differences between
-/// the two languages are `clause_re` (the existing-clause detector) and
-/// `injected_clause` (e.g. `project IN ("A")` or `space IN ("S")`).
-///
-/// - Quoted literals are masked before detection so quoted text never trips
-///   `clause_re` or the `ORDER BY` split.
-/// - When the user's conditions already match `clause_re`, the original query
-///   is returned untouched.
-/// - An empty/whitespace condition body collapses to just the injected clause
-///   (no dangling `AND ()`), with any `ORDER BY` appended after it.
-pub(crate) fn inject_filter(query: &str, clause_re: &Regex, injected_clause: &str) -> String {
-    let mask = mask_string_literals(query);
-    let split = order_by_start(query, &mask).map(|start| {
-        query[..start]
+fn is_field_operator(tokens: &[Token<'_>]) -> bool {
+    let Some(first) = tokens.first() else {
+        return false;
+    };
+    match first.kind {
+        Kind::Operator => matches!(
+            first.text,
+            "=" | "!=" | "~" | "!~" | "<" | ">" | "<=" | ">="
+        ),
+        Kind::Word => {
+            ["in", "is", "was", "changed"]
+                .iter()
+                .any(|word| first.keyword(word))
+                || (first.keyword("not") && tokens.get(1).is_some_and(|next| next.keyword("in")))
+        }
+        _ => false,
+    }
+}
+
+fn has_scope(tokens: &[Token<'_>], keyword: &str) -> bool {
+    let mut field_position = true;
+    let mut value_depth = 0usize;
+    for (index, token) in tokens.iter().enumerate() {
+        if value_depth > 0 {
+            match token.kind {
+                Kind::Open => value_depth += 1,
+                Kind::Close => value_depth -= 1,
+                _ => {}
+            }
+            continue;
+        }
+        if field_position {
+            if token.kind == Kind::Open
+                || token.keyword("not")
+                || (token.kind == Kind::Operator && token.text == "!")
+            {
+                continue;
+            }
+            if token.field(keyword) && is_field_operator(&tokens[index + 1..]) {
+                return true;
+            }
+            field_position = false;
+        } else if token.kind == Kind::Open {
+            value_depth = 1;
+        } else if token.keyword("and")
+            || token.keyword("or")
+            || (token.kind == Kind::Operator && matches!(token.text, "&" | "&&" | "|" | "||"))
+        {
+            field_position = true;
+        }
+    }
+    false
+}
+
+/// Add a default scope unless a condition explicitly names that field.
+/// Preserve the original sorting clause and leave syntax validation to Atlassian.
+pub(crate) fn inject_filter(query: &str, keyword: &str, injected_clause: &str) -> String {
+    let tokens = tokens(query);
+    let order = order_by_index(&tokens);
+    let conditions = &tokens[..order.unwrap_or(tokens.len())];
+    if has_scope(conditions, keyword) {
+        return query.to_string();
+    }
+    let split = order.map(|index| {
+        query[..tokens[index].start]
             .trim_end_matches(|c: char| c.is_ascii_whitespace())
             .len()
     });
-    let (conditions, order_by) = split
-        .map(|start| (&query[..start], Some(&query[start..])))
-        .unwrap_or((query, None));
-
-    if clause_re.is_match(&mask[..conditions.len()]) {
-        return query.to_string();
-    }
-
-    let trimmed = conditions.trim();
-    let base = if trimmed.is_empty() {
+    let body = query[..split.unwrap_or(query.len())].trim();
+    let base = if body.is_empty() {
         injected_clause.to_string()
     } else {
-        format!("{} AND ({})", injected_clause, trimmed)
+        format!("{injected_clause} AND ({body})")
     };
-
-    match order_by {
-        Some(order_clause) if order_clause.starts_with(|c: char| c.is_ascii_whitespace()) => {
-            format!("{base}{order_clause}")
+    match split.map(|index| &query[index..]) {
+        Some(suffix) if suffix.starts_with(|c: char| c.is_ascii_whitespace()) => {
+            format!("{base}{suffix}")
         }
-        Some(order_clause) => format!("{base} {order_clause}"),
+        Some(suffix) => format!("{base} {suffix}"),
         None => base,
     }
 }
@@ -161,259 +214,96 @@ pub(crate) fn inject_filter(query: &str, clause_re: &Regex, injected_clause: &st
 #[cfg(test)]
 mod tests {
     use super::*;
+    const FILTER: &str = "project IN (\"MDW\")";
 
     #[test]
-    fn preserves_length_and_strips_contents() {
-        let input = "a = \"hello\" and b = 1";
-        let masked = mask_string_literals(input);
-        assert_eq!(masked.len(), input.len());
-        assert!(!masked.contains("hello"));
-        assert!(masked.contains(" and b = 1"));
-    }
-
-    #[test]
-    fn handles_escaped_quote() {
-        let input = "summary ~ \"he said \\\"hi\\\"\" and project = X";
-        let masked = mask_string_literals(input);
-        assert_eq!(masked.len(), input.len());
-        assert!(masked.contains("and project = X"));
-    }
-
-    #[test]
-    fn leaves_unquoted_text_intact() {
-        let input = "project = MDW AND status = Open";
-        assert_eq!(mask_string_literals(input), input);
-    }
-
-    #[test]
-    fn preserves_byte_offsets_for_multi_byte_content_inside_quotes() {
-        // The masker replaces multi-byte UTF-8 bytes inside a quoted region
-        // with same-length spaces. Length must remain identical.
-        let input = "summary ~ \"café\" and project = X";
-        let masked = mask_string_literals(input);
-        assert_eq!(masked.len(), input.len());
-        assert!(masked.contains("and project = X"));
-    }
-
-    #[test]
-    fn masks_single_quoted_literals() {
-        // JQL/CQL both accept single-quoted strings. `project = 'foo'` content
-        // must be masked so a keyword inside it can't trip clause detection.
-        let input = "project = 'My Project' AND status = Open";
-        let masked = mask_string_literals(input);
-        assert_eq!(masked.len(), input.len());
-        assert!(!masked.contains("My Project"));
-        assert!(masked.contains("AND status = Open"));
-    }
-
-    #[test]
-    fn apostrophe_inside_double_quotes_does_not_close() {
-        // The closer must match the opener — an apostrophe inside `"..."` is
-        // literal content, not a delimiter.
-        let input = "summary ~ \"it's fine\" AND project = X";
-        let masked = mask_string_literals(input);
-        assert_eq!(masked.len(), input.len());
-        assert!(masked.contains("AND project = X"));
-        assert!(!masked.contains("it's fine"));
-    }
-
-    #[test]
-    fn double_quote_inside_single_quotes_does_not_close() {
-        let input = "summary ~ 'say \"hi\"' AND project = X";
-        let masked = mask_string_literals(input);
-        assert_eq!(masked.len(), input.len());
-        assert!(masked.contains("AND project = X"));
-    }
-
-    #[test]
-    fn unmatched_quote_runs_to_end_of_string() {
-        // We could bail here, but server-side parsing will reject the JQL
-        // first and surface a clear error — local truncation is acceptable.
-        let input = "summary = \"unterminated";
-        let masked = mask_string_literals(input);
-        assert_eq!(masked.len(), input.len());
-        assert!(masked.starts_with("summary = "));
-    }
-
-    #[test]
-    fn empty_input() {
-        assert_eq!(mask_string_literals(""), "");
-    }
-
-    #[test]
-    fn handles_escaped_backslash() {
-        // `\\` inside a quoted segment must consume both bytes as a single
-        // escape pair, not terminate the string at the first backslash.
-        let input = "summary ~ \"a \\\\ b\" and project = X";
-        let masked = mask_string_literals(input);
-        assert_eq!(masked.len(), input.len());
-        assert!(masked.contains("and project = X"));
-    }
-
-    #[test]
-    fn trailing_backslash_at_end_of_quoted_string() {
-        // A backslash as the final byte of a quoted region without a
-        // following character must not advance past end-of-string.
-        let input = "summary ~ \"abc\\";
-        let masked = mask_string_literals(input);
-        assert_eq!(masked.len(), input.len());
-    }
-
-    #[test]
-    fn empty_quoted_string() {
-        let input = "a = \"\" and b = 1";
-        let masked = mask_string_literals(input);
-        assert_eq!(masked.len(), input.len());
-        assert!(masked.contains(" and b = 1"));
-    }
-
-    #[test]
-    fn multiple_quoted_segments_preserve_unquoted_between() {
-        let input = "a = \"x\" AND b = \"y\" AND project = MDW";
-        let masked = mask_string_literals(input);
-        assert_eq!(masked.len(), input.len());
-        assert!(masked.contains("AND project = MDW"));
-    }
-
-    fn project_re() -> Regex {
-        clause_detector("project")
-    }
-
-    #[test]
-    fn clause_detector_matches_all_field_operators() {
-        let re = project_re();
-        for q in [
-            "project = MDW",
-            "project=MDW",
-            "project != X",
+    fn explicit_scope_conditions_preserve_the_query() {
+        for query in [
+            "project = OTHER",
+            "status = Open&&project = OTHER",
+            "status = Open&&!project = OTHER",
+            "status = Open||!(project = OTHER)",
+            "status = Open&project = OTHER",
+            "status = Open|project = OTHER",
+            "status = Open||\"project\" = OTHER",
+            "!project = OTHER",
+            "!(\"project\" = OTHER)",
+            "PrOjEcT=OTHER",
+            "\"project\" = OTHER",
+            "'PROJECT' != OTHER",
+            "NOT(\"project\" IN(OTHER))",
+            "status = Open OR ('project' = OTHER AND status != Done)",
             "project ~ X",
-            "project in (A, B)",
-            "project IN(A)",
-            "project not in (A)",
-            "project is empty",
+            "project !~ X",
+            "project <= X",
+            "project >= X",
+            "project in(A)",
+            "project NOT IN (A)",
             "project IS NOT EMPTY",
-            "project was OLD",
-            "project changed",
+            "project WAS OLD",
+            "project CHANGED",
+            "project = OTHER\nORDER\tBY \"Sort field\" DESC",
         ] {
-            assert!(re.is_match(q), "should detect scope in: {q}");
+            assert_eq!(inject_filter(query, "project", FILTER), query, "{query}");
+        }
+        for query in [
+            "space.key = ENG",
+            "'space' = ENG",
+            "\"space.key\" in (ENG)",
+            "space.type = global",
+            "space.title ~ \"Engineering\"",
+        ] {
+            assert_eq!(
+                inject_filter(query, "space", "space IN (\"DEFAULT\")"),
+                query
+            );
         }
     }
 
     #[test]
-    fn clause_detector_matches_dotted_subfields() {
-        // CQL `space.key`/`space.type` are scopes; the dotted form must count.
-        let re = clause_detector("space");
-        assert!(re.is_match("space.key = ENG"));
-        assert!(re.is_match("space.type = global"));
-        assert!(re.is_match("space = ENG"));
+    fn values_and_function_arguments_never_establish_a_scope() {
+        for query in [
+            "summary ~ \"project = OTHER\"",
+            "summary ~ 'project = OTHER'",
+            "summary ~ \"it's project = OTHER\"",
+            "summary ~ 'say \"project = OTHER\"'",
+            "summary ~ \"escaped \\\" project = OTHER\"",
+            "summary ~ \"project\"",
+            "summary ~ project",
+            "field = function(\"project\", \"AND\")",
+            "field in (project, other)",
+            "projectId = 10500",
+            "myproject = OTHER",
+            "project.foo = OTHER",
+            "\"project.key\" = OTHER",
+            "field = function(ORDER BY created)",
+            "field = preorder BY created",
+            "field = foo.order BY created",
+            "field = ORDERBY created",
+            "field = ORDER BYfield",
+            "field = ORDER \"ignored\" BY created",
+            "summary ~ \"unterminated project = OTHER",
+        ] {
+            assert_eq!(
+                inject_filter(query, "project", FILTER),
+                format!("{FILTER} AND ({query})"),
+                "{query}"
+            );
+        }
+        for query in [
+            "title ~ space.shuttle",
+            "label = space.station",
+            "spaceKey = ENG",
+        ] {
+            assert_eq!(
+                inject_filter(query, "space", "space IN (\"DEFAULT\")"),
+                format!("space IN (\"DEFAULT\") AND ({query})")
+            );
+        }
     }
 
     #[test]
-    fn clause_detector_ignores_lookalike_identifiers() {
-        // A word boundary keeps `projectId`/`spaceKey` from counting as a scope.
-        let re = project_re();
-        assert!(!re.is_match("projectId = 10500"));
-        assert!(!clause_detector("space").is_match("spaceKey = X"));
-        // The bare keyword with no operator is not a scope either.
-        assert!(!re.is_match("summary ~ project"));
-    }
-
-    #[test]
-    fn clause_detector_ignores_dotted_keyword_used_as_a_value() {
-        // `space.foo` as an unquoted RHS value is not a scope — only a dotted
-        // sub-field *followed by an operator* (`space.key =`) counts.
-        let re = clause_detector("space");
-        assert!(!re.is_match("title ~ space.shuttle"));
-        assert!(!re.is_match("label = space.station"));
-        assert!(re.is_match("space.key in (ENG, OPS)"));
-    }
-
-    #[test]
-    fn inject_filter_skips_on_history_and_existence_clauses() {
-        // Regression guard: a `WAS`/`IS EMPTY` scope must suppress injection so
-        // the configured filter can't clobber the user's explicit scoping.
-        let re = project_re();
-        assert_eq!(
-            inject_filter("project WAS \"OLD\"", &re, "project IN (\"MDW\")"),
-            "project WAS \"OLD\""
-        );
-        assert_eq!(
-            inject_filter("project IS EMPTY", &re, "project IN (\"MDW\")"),
-            "project IS EMPTY"
-        );
-    }
-
-    #[test]
-    fn inject_filter_wraps_bare_conditions() {
-        let re = project_re();
-        let out = inject_filter("status = Open", &re, "project IN (\"MDW\")");
-        assert_eq!(out, "project IN (\"MDW\") AND (status = Open)");
-    }
-
-    #[test]
-    fn inject_filter_skips_when_clause_present() {
-        let re = project_re();
-        let out = inject_filter("project = X AND status = Open", &re, "project IN (\"MDW\")");
-        assert_eq!(out, "project = X AND status = Open");
-    }
-
-    #[test]
-    fn inject_filter_skips_on_single_quoted_clause() {
-        // Regression guard for the round-3 single-quote miss: a clause using
-        // single quotes must still be detected and suppress injection.
-        let re = project_re();
-        let out = inject_filter("project = 'My Project'", &re, "project IN (\"MDW\")");
-        assert_eq!(out, "project = 'My Project'");
-    }
-
-    #[test]
-    fn inject_filter_preserves_trailing_order_by() {
-        let re = project_re();
-        let out = inject_filter(
-            "status = Open ORDER BY created DESC",
-            &re,
-            "project IN (\"MDW\")",
-        );
-        assert_eq!(
-            out,
-            "project IN (\"MDW\") AND (status = Open) ORDER BY created DESC"
-        );
-    }
-
-    #[test]
-    fn inject_filter_order_by_only_collapses_conditions() {
-        let re = project_re();
-        let out = inject_filter("ORDER BY created DESC", &re, "project IN (\"MDW\")");
-        assert_eq!(out, "project IN (\"MDW\") ORDER BY created DESC");
-    }
-
-    #[test]
-    fn inject_filter_empty_query_yields_bare_clause() {
-        let re = project_re();
-        assert_eq!(
-            inject_filter("   ", &re, "project IN (\"MDW\")"),
-            "project IN (\"MDW\")"
-        );
-    }
-
-    #[test]
-    fn inject_filter_ignores_quoted_order_by() {
-        let re = project_re();
-        // `order by` inside a quoted literal must not split the query.
-        let out = inject_filter(
-            "summary ~ \"finish order by tomorrow\"",
-            &re,
-            "project IN (\"MDW\")",
-        );
-        assert_eq!(
-            out,
-            "project IN (\"MDW\") AND (summary ~ \"finish order by tomorrow\")"
-        );
-    }
-
-    #[test]
-    fn injection_preserves_unicode_and_sorting_whitespace() {
-        let re = project_re();
+    fn sorting_preserves_unicode_and_token_boundaries() {
         for (query, expected) in [
             (
                 "labels = K ORDER BY created",
@@ -432,8 +322,12 @@ mod tests {
                 "project IN (\"MDW\") AND (status = Open)\r\nOrDeR  bY \"Custom field\", created DESC",
             ),
             (
-                " \tORDER\nBY created",
-                "project IN (\"MDW\") \tORDER\nBY created",
+                "status = Open ORDER BY\"created\"",
+                "project IN (\"MDW\") AND (status = Open) ORDER BY\"created\"",
+            ),
+            (
+                "status = Open ORDER BY'created'",
+                "project IN (\"MDW\") AND (status = Open) ORDER BY'created'",
             ),
             (
                 "(status = Open)ORDER BY created",
@@ -443,35 +337,41 @@ mod tests {
                 "status = \"Open\"ORDER BY created",
                 "project IN (\"MDW\") AND (status = \"Open\") ORDER BY created",
             ),
+            (
+                " \tORDER\nBY created",
+                "project IN (\"MDW\") \tORDER\nBY created",
+            ),
         ] {
-            assert_eq!(
-                inject_filter(query, &re, "project IN (\"MDW\")"),
-                expected,
-                "{query}"
-            );
+            assert_eq!(inject_filter(query, "project", FILTER), expected, "{query}");
         }
     }
 
     #[test]
-    fn sorting_keywords_require_unquoted_top_level_tokens() {
-        let re = project_re();
+    fn quoted_sorting_and_scope_names_remain_values() {
         for query in [
             "summary ~ \"ORDER BY created\"",
-            "summary ~ 'escaped \\\" ORDER BY created'",
-            "field = function(ORDER BY created)",
-            "field = preorder BY created",
-            "field = foo.order BY created",
-            "field = ORDERBY created",
-            "field = ORDER BYfield",
-            "field = ORDER \"ignored\" BY created",
+            "summary ~ 'ORDER BY created'",
+            "field = \"order\" BY created",
         ] {
             assert_eq!(
-                inject_filter(query, &re, "project IN (\"MDW\")"),
-                format!("project IN (\"MDW\") AND ({query})"),
-                "{query}"
+                inject_filter(query, "project", FILTER),
+                format!("{FILTER} AND ({query})")
             );
         }
-        let query = "project = OTHER\nORDER\tBY \"Sort field\" DESC";
-        assert_eq!(inject_filter(query, &re, "project IN (\"MDW\")"), query);
+        assert_eq!(
+            inject_filter("status = Open ORDER BY \"project\"", "project", FILTER),
+            "project IN (\"MDW\") AND (status = Open) ORDER BY \"project\""
+        );
+    }
+
+    #[test]
+    fn empty_and_sort_only_queries_have_no_condition_group() {
+        for query in ["", " ", "\t\r\n"] {
+            assert_eq!(inject_filter(query, "project", FILTER), FILTER);
+        }
+        assert_eq!(
+            inject_filter("ORDER BY created DESC", "project", FILTER),
+            "project IN (\"MDW\") ORDER BY created DESC"
+        );
     }
 }

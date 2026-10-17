@@ -1,6 +1,6 @@
 ---
 name: jira-confluence
-version: 0.13.1
+version: 0.13.2
 description: Use atlassian-cli for Atlassian Cloud Jira and Confluence searches, issue and page edits, comments, links, worklogs, agile operations and attachments; also diagnose authentication and manage the CLI installation when requested.
 allowed-tools: Bash
 ---
@@ -100,6 +100,8 @@ Board/sprint commands use the agile API. Pass `--project` to let the CLI resolve
 
 `epic assign`/`unassign` drive the agile **Epic Link** endpoint, which only takes effect on **company-managed** projects. Team-managed (next-gen) projects model the epic as the issue's `parent`, so there the command returns success but has no effect — pass `--parent EPIC-1` when creating, or set it after with `jira update KEY '{"parent":{"key":"EPIC-1"}}'` (when the project's field config allows it). A sub-task is the same field and cannot be created without it: Jira takes the parent on the create screen, so there is no issue to update into place.
 
+OAuth agile commands require endpoint-specific grants beyond core Jira scopes. Board discovery needs `read:board-scope:jira-software` and `read:project:jira`; sprint reads need `read:sprint:jira-software`; sprint moves need `write:sprint:jira-software`; moving to backlog needs `write:board-scope:jira-software`; epic assign/unassign needs `write:epic:jira-software`. `sprint list --project` also performs board discovery. Use only the grants needed for the requested operations; see the [Software scope reference](https://developer.atlassian.com/cloud/jira/software/scopes-for-oauth-2-3LO-and-forge-apps/).
+
 ### ADF (rich text — only when plain text isn't enough)
 
 Root: `{"version": 1, "type": "doc", "content": [...]}`
@@ -171,7 +173,7 @@ atlassian-cli confluence attachment upload 12345 ./icon.svg --content-type image
 - `--location` defaults to `footer` on `comment get`/`replies` — an id from an inline thread needs `--location inline`, and every entry `comment list` returns already states which it is. A wrong `--location` is a 404, not a fallback.
 - `property set` values are **strict JSON** — quote bare strings as `'"text"'`, not `text`.
 - `attachment upload` upserts by filename; add `--minor` to suppress watcher notifications on re-upload. The `Content-Type` is mapped from the file extension (so `diagram.png` → `image/png` and renders inline instead of becoming an opaque download); pass `--content-type <mime>` to override. Note: Confluence Cloud often blocks **inline SVG** rendering for security, so embed diagrams as PNG when you need them to display.
-- Under OAuth, Confluence v2 writes need granular scopes on the token, not just classic ones. A `401 "scope does not match"` can indicate missing grants. Compare the endpoint’s required scopes with the app permissions and the profile’s requested scopes before reauthorizing; enabling a scope on the app alone does not update an existing token. The write↔scope map: comment → `write:comment:confluence`, property → `write:content:confluence`, attachment → `write:attachment:confluence`, page create/update → `write:page:confluence`, page delete → `delete:page:confluence`, `space`/page-create space lookup → `read:space:confluence`.
+- For OAuth, request the scopes for every endpoint a command calls, including reads before writes. Page-property `set`/`delete` need `read:page:confluence` and `write:page:confluence`; comment `update` needs `read:comment:confluence` and `write:comment:confluence`, while comment `delete` needs `delete:comment:confluence`. Page create also looks up its space; page update reads its current version. Check the [property](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-content-properties/), [comment](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-comment/), and [page](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-page/) endpoint requirements. A `401 "scope does not match"` can indicate missing grants. Enable required scopes on the app, request them in the profile, then reauthorize; changing app permissions alone does not update an existing token.
 - CQL: searching by user requires account IDs or public names — username fields are restricted in Atlassian Cloud.
 
 ## Pagination & output cheatsheet

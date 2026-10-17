@@ -81,6 +81,11 @@ only where their contracts are the same.
 - Jira search uses `/rest/api/3/search/jql`. Agile uses `/rest/agile/1.0`.
   Confluence CQL search uses v1; v2 reads coexist with supported v1 label and
   attachment writes. Check endpoint support before changing versions.
+- Apply the configured request timeout to API calls and OAuth token exchanges.
+  Credential-bearing requests must not follow redirects.
+- Search scope detection distinguishes fields from values, including quoted field
+  names and logical operators; preserve the original sorting suffix. Share this
+  handling through `query_utils` rather than adding endpoint-specific detection.
 - Secrets must stay out of Debug output, logs, help and resolved config output.
   Preserve `SecretString`, redacted Debug implementations and serialization
   exclusions on auth configuration.

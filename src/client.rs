@@ -123,6 +123,15 @@ impl Service {
     }
 }
 
+pub(crate) fn http_client(timeout: Duration) -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .connect_timeout(Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .context("Failed to create HTTP client")
+}
+
 pub struct ApiClient {
     http: reqwest::Client,
     strategy: Arc<dyn AuthStrategy>,
@@ -139,10 +148,15 @@ impl ApiClient {
             .clone()
             .context("Authentication not configured")?;
 
-        let http = Self::http_client(&config)?;
+        let http = http_client(Duration::from_millis(config.performance.request_timeout_ms))?;
 
         let strategy: Arc<dyn AuthStrategy> = auth_config
-            .into_strategy(config.domain.as_deref(), &config.profile, &http)
+            .into_strategy_with_timeout(
+                config.domain.as_deref(),
+                &config.profile,
+                &http,
+                Duration::from_millis(config.performance.request_timeout_ms),
+            )
             .await?
             .into();
 
@@ -155,21 +169,13 @@ impl ApiClient {
 
     #[cfg(test)]
     pub(crate) fn new_with_strategy(strategy: Arc<dyn AuthStrategy>, config: Config) -> Self {
-        let http = Self::http_client(&config).expect("test HTTP client builds");
+        let http = http_client(Duration::from_millis(config.performance.request_timeout_ms))
+            .expect("test HTTP client builds");
         Self {
             http,
             strategy,
             config,
         }
-    }
-
-    fn http_client(config: &Config) -> Result<reqwest::Client> {
-        reqwest::Client::builder()
-            .timeout(Duration::from_millis(config.performance.request_timeout_ms))
-            .connect_timeout(Duration::from_secs(10))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .context("Failed to create HTTP client")
     }
 
     async fn request(

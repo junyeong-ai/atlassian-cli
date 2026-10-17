@@ -949,8 +949,10 @@ impl Config {
 # client_secret = "..."  # Prefer ATLASSIAN_CLIENT_SECRET env var
 # redirect_port = 8976   # MUST match the URI registered at developer.atlassian.com
 # scopes = ["read:jira-user", "read:jira-work", "write:jira-work",
-#           "read:confluence-content.all", "read:confluence-space.summary",
-#           "write:confluence-content", "offline_access"]
+#           "read:confluence-content.all", "read:page:confluence",
+#           "read:space:confluence", "offline_access"]
+# These Confluence grants cover search, page reads and space reads; writes need
+# the scopes of each endpoint, including any read performed before the write.
 # cloud_id = "..."  # Pin to one site if the user has access to many
 
 [default.jira]
@@ -976,22 +978,20 @@ rate_limit_delay_ms = 200
 # email = "me@work.com"
 # token = "..."
 
-# Classic and granular OAuth scopes CANNOT mix in one token (Atlassian rule),
-# so use a separate profile per scope model and select it with --profile.
-# `scopes` is a free list — put whatever your OAuth app grants. Classic
-# `read:jira-work`/`write:jira-work` covers core Jira; Jira Software (agile:
-# board/sprint/epic) and granular setups need their own scope strings, which
-# you copy from your app's Permissions page at developer.atlassian.com.
-# [agile]
-# [agile.auth]
+# Choose scopes for the endpoints you use.
+# Jira Software scope reference:
+# https://developer.atlassian.com/cloud/jira/software/scopes-for-oauth-2-3LO-and-forge-apps/
+# Example: core Jira operations plus epic assignment/removal.
+# [epics]
+# [epics.auth]
 # method = "oauth"
 # client_id = "..."
-# scopes = [  # granular example — must be a COMPLETE set; a missing scope 401s that command
-#   "read:issue:jira", "write:issue:jira", "read:jql:jira",
-#   "read:board-scope:jira-software", "read:sprint:jira-software",
-#   "write:sprint:jira-software", "read:epic:jira-software", "offline_access",
+# scopes = [
+#   "read:jira-user", "read:jira-work", "write:jira-work",
+#   "write:epic:jira-software", "offline_access",
 # ]
-# Then: atlassian-cli --profile agile auth login   (each profile stores its own token)
+# Then: atlassian-cli --profile epics auth login
+
 "#;
 
         fs::write(&path, template)?;
