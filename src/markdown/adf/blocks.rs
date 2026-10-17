@@ -3,7 +3,7 @@ use serde_json::Value;
 
 const MAX_DEPTH: usize = 50;
 
-pub fn convert_block_node(node: &Value, depth: usize) -> Option<String> {
+pub fn convert_block_node(node: &Value, depth: usize, list_depth: usize) -> Option<String> {
     if depth > MAX_DEPTH {
         return Some("[Content truncated: max depth exceeded]".into());
     }
@@ -13,27 +13,27 @@ pub fn convert_block_node(node: &Value, depth: usize) -> Option<String> {
     match node_type {
         "paragraph" => convert_paragraph(node),
         "heading" => convert_heading(node),
-        "bulletList" => convert_bullet_list(node, depth),
-        "orderedList" => convert_ordered_list(node, depth),
-        "listItem" => convert_list_item(node, depth),
+        "bulletList" => convert_bullet_list(node, depth, list_depth),
+        "orderedList" => convert_ordered_list(node, depth, list_depth),
+        "listItem" => convert_list_item(node, depth, list_depth),
         "codeBlock" => convert_code_block(node),
-        "blockquote" => convert_blockquote(node),
+        "blockquote" => convert_blockquote(node, depth),
         "rule" => Some("---".into()),
-        "panel" => convert_panel(node),
-        "table" => convert_table(node),
+        "panel" => convert_panel(node, depth),
+        "table" => convert_table(node, depth),
         "mediaSingle" | "mediaGroup" => convert_media(node),
-        "expand" | "nestedExpand" => convert_expand(node),
-        "taskList" => convert_task_list(node),
-        "taskItem" => convert_task_item(node),
-        "decisionList" => convert_decision_list(node),
-        "decisionItem" => convert_decision_item(node),
-        "layoutSection" => convert_layout_section(node),
-        "layoutColumn" => convert_layout_column(node),
+        "expand" | "nestedExpand" => convert_expand(node, depth),
+        "taskList" => convert_task_list(node, depth),
+        "taskItem" => convert_task_item(node, depth),
+        "decisionList" => convert_decision_list(node, depth),
+        "decisionItem" => convert_decision_item(node, depth),
+        "layoutSection" => convert_layout_section(node, depth),
+        "layoutColumn" => convert_layout_column(node, depth),
         "embedCard" => convert_embed_card(node),
-        "bodiedExtension" | "multiBodiedExtension" => convert_extension(node),
-        "extensionFrame" => convert_extension_frame(node),
+        "bodiedExtension" | "multiBodiedExtension" => convert_extension(node, depth),
+        "extensionFrame" => convert_extension_frame(node, depth),
         unknown => {
-            let content = convert_children(node);
+            let content = convert_children(node, depth);
             if content.is_empty() {
                 None
             } else {
@@ -43,12 +43,12 @@ pub fn convert_block_node(node: &Value, depth: usize) -> Option<String> {
     }
 }
 
-fn convert_children(node: &Value) -> String {
+fn convert_children(node: &Value, depth: usize) -> String {
     node.get("content")
         .and_then(|c| c.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|n| convert_block_node(n, 0))
+                .filter_map(|n| convert_block_node(n, depth + 1, 0))
                 .collect::<Vec<_>>()
                 .join("\n\n")
         })
@@ -82,13 +82,13 @@ fn convert_heading(node: &Value) -> Option<String> {
     }
 }
 
-fn convert_bullet_list(node: &Value, depth: usize) -> Option<String> {
+fn convert_bullet_list(node: &Value, depth: usize, list_depth: usize) -> Option<String> {
     let items = node.get("content")?.as_array()?;
     let lines: Vec<String> = items
         .iter()
         .filter_map(|item| {
-            let content = convert_list_item(item, depth)?;
-            Some(format!("{}- {}", "  ".repeat(depth), content))
+            let content = convert_block_node(item, depth + 1, list_depth)?;
+            Some(format!("{}- {}", "  ".repeat(list_depth), content))
         })
         .collect();
 
@@ -99,14 +99,14 @@ fn convert_bullet_list(node: &Value, depth: usize) -> Option<String> {
     }
 }
 
-fn convert_ordered_list(node: &Value, depth: usize) -> Option<String> {
+fn convert_ordered_list(node: &Value, depth: usize, list_depth: usize) -> Option<String> {
     let items = node.get("content")?.as_array()?;
     let lines: Vec<String> = items
         .iter()
         .enumerate()
         .filter_map(|(i, item)| {
-            let content = convert_list_item(item, depth)?;
-            Some(format!("{}{}. {}", "  ".repeat(depth), i + 1, content))
+            let content = convert_block_node(item, depth + 1, list_depth)?;
+            Some(format!("{}{}. {}", "  ".repeat(list_depth), i + 1, content))
         })
         .collect();
 
@@ -117,33 +117,18 @@ fn convert_ordered_list(node: &Value, depth: usize) -> Option<String> {
     }
 }
 
-fn convert_list_item(node: &Value, depth: usize) -> Option<String> {
+fn convert_list_item(node: &Value, depth: usize, list_depth: usize) -> Option<String> {
     let content = node.get("content")?.as_array()?;
     let mut parts: Vec<String> = Vec::new();
 
     for child in content {
         let child_type = child.get("type").and_then(|t| t.as_str()).unwrap_or("");
-        match child_type {
-            "paragraph" => {
-                if let Some(text) = convert_paragraph(child) {
-                    parts.push(text);
-                }
+        if matches!(child_type, "bulletList" | "orderedList") {
+            if let Some(list) = convert_block_node(child, depth + 1, list_depth + 1) {
+                parts.push(format!("\n{}", list));
             }
-            "bulletList" => {
-                if let Some(list) = convert_bullet_list(child, depth + 1) {
-                    parts.push(format!("\n{}", list));
-                }
-            }
-            "orderedList" => {
-                if let Some(list) = convert_ordered_list(child, depth + 1) {
-                    parts.push(format!("\n{}", list));
-                }
-            }
-            _ => {
-                if let Some(text) = convert_block_node(child, depth + 1) {
-                    parts.push(text);
-                }
-            }
+        } else if let Some(text) = convert_block_node(child, depth + 1, 0) {
+            parts.push(text);
         }
     }
 
@@ -176,11 +161,11 @@ fn convert_code_block(node: &Value) -> Option<String> {
     Some(format!("```{}\n{}\n```", language, code))
 }
 
-fn convert_blockquote(node: &Value) -> Option<String> {
+fn convert_blockquote(node: &Value, depth: usize) -> Option<String> {
     let content = node.get("content")?.as_array()?;
     let lines: Vec<String> = content
         .iter()
-        .filter_map(|child| convert_block_node(child, 0))
+        .filter_map(|child| convert_block_node(child, depth + 1, 0))
         .flat_map(|text| text.lines().map(|l| format!("> {}", l)).collect::<Vec<_>>())
         .collect();
 
@@ -191,7 +176,7 @@ fn convert_blockquote(node: &Value) -> Option<String> {
     }
 }
 
-fn convert_panel(node: &Value) -> Option<String> {
+fn convert_panel(node: &Value, depth: usize) -> Option<String> {
     let panel_type = node
         .get("attrs")
         .and_then(|a| a.get("panelType"))
@@ -202,7 +187,7 @@ fn convert_panel(node: &Value) -> Option<String> {
     let content = node.get("content")?.as_array()?;
     let text: Vec<String> = content
         .iter()
-        .filter_map(|child| convert_block_node(child, 0))
+        .filter_map(|child| convert_block_node(child, depth + 1, 0))
         .collect();
 
     if text.is_empty() {
@@ -212,7 +197,7 @@ fn convert_panel(node: &Value) -> Option<String> {
     }
 }
 
-fn convert_table(node: &Value) -> Option<String> {
+fn convert_table(node: &Value, depth: usize) -> Option<String> {
     let rows = node.get("content")?.as_array()?;
     if rows.is_empty() {
         return None;
@@ -233,7 +218,7 @@ fn convert_table(node: &Value) -> Option<String> {
                 .and_then(|c| c.as_u64())
                 .unwrap_or(1) as usize;
 
-            let content = convert_cell_content(cell);
+            let content = convert_cell_content(cell, depth + 2);
 
             for i in 0..colspan {
                 if i == 0 {
@@ -260,14 +245,14 @@ fn convert_table(node: &Value) -> Option<String> {
     Some(result.join("\n"))
 }
 
-fn convert_cell_content(cell: &Value) -> String {
+fn convert_cell_content(cell: &Value, depth: usize) -> String {
     let content = cell
         .get("content")
         .and_then(|c| c.as_array())
         .map(|content| {
             content
                 .iter()
-                .filter_map(|n| convert_block_node(n, 0))
+                .filter_map(|n| convert_block_node(n, depth + 1, 0))
                 .collect::<Vec<_>>()
                 .join(" ")
         })
@@ -293,7 +278,7 @@ fn convert_media(node: &Value) -> Option<String> {
     Some("[Media]".into())
 }
 
-fn convert_expand(node: &Value) -> Option<String> {
+fn convert_expand(node: &Value, depth: usize) -> Option<String> {
     let title = node
         .get("attrs")
         .and_then(|a| a.get("title"))
@@ -303,7 +288,7 @@ fn convert_expand(node: &Value) -> Option<String> {
     let content = node.get("content")?.as_array()?;
     let text: Vec<String> = content
         .iter()
-        .filter_map(|child| convert_block_node(child, 0))
+        .filter_map(|child| convert_block_node(child, depth + 1, 0))
         .collect();
 
     if text.is_empty() {
@@ -313,9 +298,12 @@ fn convert_expand(node: &Value) -> Option<String> {
     }
 }
 
-fn convert_task_list(node: &Value) -> Option<String> {
+fn convert_task_list(node: &Value, depth: usize) -> Option<String> {
     let items = node.get("content")?.as_array()?;
-    let lines: Vec<String> = items.iter().filter_map(convert_task_item).collect();
+    let lines: Vec<String> = items
+        .iter()
+        .filter_map(|item| convert_block_node(item, depth + 1, 0))
+        .collect();
 
     if lines.is_empty() {
         None
@@ -324,7 +312,7 @@ fn convert_task_list(node: &Value) -> Option<String> {
     }
 }
 
-fn convert_task_item(node: &Value) -> Option<String> {
+fn convert_task_item(node: &Value, depth: usize) -> Option<String> {
     let attrs = node.get("attrs");
     let state = attrs
         .and_then(|a| a.get("state"))
@@ -338,7 +326,7 @@ fn convert_task_item(node: &Value) -> Option<String> {
         .and_then(|c| c.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|n| convert_block_node(n, 0))
+                .filter_map(|n| convert_block_node(n, depth + 1, 0))
                 .collect::<Vec<_>>()
                 .join(" ")
         })
@@ -347,9 +335,12 @@ fn convert_task_item(node: &Value) -> Option<String> {
     Some(format!("- {} {}", checkbox, content))
 }
 
-fn convert_decision_list(node: &Value) -> Option<String> {
+fn convert_decision_list(node: &Value, depth: usize) -> Option<String> {
     let items = node.get("content")?.as_array()?;
-    let lines: Vec<String> = items.iter().filter_map(convert_decision_item).collect();
+    let lines: Vec<String> = items
+        .iter()
+        .filter_map(|item| convert_block_node(item, depth + 1, 0))
+        .collect();
 
     if lines.is_empty() {
         None
@@ -358,7 +349,7 @@ fn convert_decision_list(node: &Value) -> Option<String> {
     }
 }
 
-fn convert_decision_item(node: &Value) -> Option<String> {
+fn convert_decision_item(node: &Value, depth: usize) -> Option<String> {
     let attrs = node.get("attrs");
     let state = attrs
         .and_then(|a| a.get("state"))
@@ -372,7 +363,7 @@ fn convert_decision_item(node: &Value) -> Option<String> {
         .and_then(|c| c.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|n| convert_block_node(n, 0))
+                .filter_map(|n| convert_block_node(n, depth + 1, 0))
                 .collect::<Vec<_>>()
                 .join(" ")
         })
@@ -381,9 +372,12 @@ fn convert_decision_item(node: &Value) -> Option<String> {
     Some(format!("- {} {}", icon, content))
 }
 
-fn convert_layout_section(node: &Value) -> Option<String> {
+fn convert_layout_section(node: &Value, depth: usize) -> Option<String> {
     let content = node.get("content")?.as_array()?;
-    let columns: Vec<String> = content.iter().filter_map(convert_layout_column).collect();
+    let columns: Vec<String> = content
+        .iter()
+        .filter_map(|column| convert_block_node(column, depth + 1, 0))
+        .collect();
 
     if columns.is_empty() {
         None
@@ -392,11 +386,11 @@ fn convert_layout_section(node: &Value) -> Option<String> {
     }
 }
 
-fn convert_layout_column(node: &Value) -> Option<String> {
+fn convert_layout_column(node: &Value, depth: usize) -> Option<String> {
     let content = node.get("content")?.as_array()?;
     let text: Vec<String> = content
         .iter()
-        .filter_map(|n| convert_block_node(n, 0))
+        .filter_map(|n| convert_block_node(n, depth + 1, 0))
         .collect();
 
     if text.is_empty() {
@@ -417,14 +411,14 @@ fn convert_embed_card(node: &Value) -> Option<String> {
     }
 }
 
-fn convert_extension(node: &Value) -> Option<String> {
+fn convert_extension(node: &Value, depth: usize) -> Option<String> {
     let attrs = node.get("attrs");
     let extension_type = attrs
         .and_then(|a| a.get("extensionType"))
         .and_then(|t| t.as_str())
         .unwrap_or("extension");
 
-    let content = convert_children(node);
+    let content = convert_children(node, depth);
     if content.is_empty() {
         Some(format!("[Extension: {}]", extension_type))
     } else {
@@ -432,8 +426,8 @@ fn convert_extension(node: &Value) -> Option<String> {
     }
 }
 
-fn convert_extension_frame(node: &Value) -> Option<String> {
-    convert_children(node).into()
+fn convert_extension_frame(node: &Value, depth: usize) -> Option<String> {
+    convert_children(node, depth).into()
 }
 
 #[cfg(test)]
@@ -447,7 +441,7 @@ mod tests {
             "type": "paragraph",
             "content": [{"type": "text", "text": "Hello world"}]
         });
-        assert_eq!(convert_block_node(&node, 0), Some("Hello world".into()));
+        assert_eq!(convert_block_node(&node, 0, 0), Some("Hello world".into()));
     }
 
     #[test]
@@ -457,7 +451,7 @@ mod tests {
             "attrs": {"level": 2},
             "content": [{"type": "text", "text": "Title"}]
         });
-        assert_eq!(convert_block_node(&node, 0), Some("## Title".into()));
+        assert_eq!(convert_block_node(&node, 0, 0), Some("## Title".into()));
     }
 
     #[test]
@@ -469,7 +463,7 @@ mod tests {
                 {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Item 2"}]}]}
             ]
         });
-        let result = convert_block_node(&node, 0).unwrap();
+        let result = convert_block_node(&node, 0, 0).unwrap();
         assert!(result.contains("- Item 1"));
         assert!(result.contains("- Item 2"));
     }
@@ -483,7 +477,7 @@ mod tests {
                 {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Second"}]}]}
             ]
         });
-        let result = convert_block_node(&node, 0).unwrap();
+        let result = convert_block_node(&node, 0, 0).unwrap();
         assert!(result.contains("1. First"));
         assert!(result.contains("2. Second"));
     }
@@ -495,7 +489,7 @@ mod tests {
             "attrs": {"language": "rust"},
             "content": [{"type": "text", "text": "fn main() {}"}]
         });
-        let result = convert_block_node(&node, 0).unwrap();
+        let result = convert_block_node(&node, 0, 0).unwrap();
         assert!(result.contains("```rust"));
         assert!(result.contains("fn main() {}"));
     }
@@ -506,14 +500,14 @@ mod tests {
             "type": "blockquote",
             "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Quote"}]}]
         });
-        let result = convert_block_node(&node, 0).unwrap();
+        let result = convert_block_node(&node, 0, 0).unwrap();
         assert!(result.contains("> Quote"));
     }
 
     #[test]
     fn test_rule() {
         let node = json!({"type": "rule"});
-        assert_eq!(convert_block_node(&node, 0), Some("---".into()));
+        assert_eq!(convert_block_node(&node, 0, 0), Some("---".into()));
     }
 
     #[test]
@@ -523,7 +517,7 @@ mod tests {
             "attrs": {"panelType": "info"},
             "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Note"}]}]
         });
-        let result = convert_block_node(&node, 0).unwrap();
+        let result = convert_block_node(&node, 0, 0).unwrap();
         assert!(result.contains("> **INFO**"));
         assert!(result.contains("Note"));
     }
@@ -543,7 +537,7 @@ mod tests {
                 ]}
             ]
         });
-        let result = convert_block_node(&node, 0).unwrap();
+        let result = convert_block_node(&node, 0, 0).unwrap();
         assert!(result.contains("| A | B |"));
         assert!(result.contains("| --- | --- |"));
         assert!(result.contains("| 1 | 2 |"));
@@ -558,7 +552,7 @@ mod tests {
                 {"type": "taskItem", "attrs": {"state": "DONE"}, "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Done"}]}]}
             ]
         });
-        let result = convert_block_node(&node, 0).unwrap();
+        let result = convert_block_node(&node, 0, 0).unwrap();
         assert!(result.contains("- [ ] Todo"));
         assert!(result.contains("- [x] Done"));
     }
@@ -570,7 +564,7 @@ mod tests {
             "attrs": {"title": "Click to expand"},
             "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Hidden content"}]}]
         });
-        let result = convert_block_node(&node, 0).unwrap();
+        let result = convert_block_node(&node, 0, 0).unwrap();
         assert!(result.contains("**Click to expand**"));
         assert!(result.contains("Hidden content"));
     }
@@ -581,7 +575,7 @@ mod tests {
             "type": "embedCard",
             "attrs": {"url": "https://example.com"}
         });
-        let result = convert_block_node(&node, 0).unwrap();
+        let result = convert_block_node(&node, 0, 0).unwrap();
         assert_eq!(result, "[https://example.com](https://example.com)");
     }
 }

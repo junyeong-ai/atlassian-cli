@@ -3,7 +3,7 @@
 [![CI](https://github.com/junyeong-ai/atlassian-cli/workflows/CI/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/ci.yml)
 [![Security](https://github.com/junyeong-ai/atlassian-cli/workflows/Security/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/security.yml)
 [![Rust](https://img.shields.io/badge/rust-1.98.0%2B%20(2024%20edition)-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.13.7-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
+[![Version](https://img.shields.io/badge/version-0.13.8-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
 
 > **🌐 한국어** | **[English](README.en.md)**
 
@@ -16,6 +16,7 @@ Atlassian Cloud CLI — Jira + Confluence. 단일 Rust 바이너리. OAuth 2.0 (
 ```bash
 # 1. 설치
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | bash
+export PATH="${INSTALL_DIR:-$HOME/.local/bin}:$PATH"
 
 # 2. 설정 초기화
 atlassian-cli config init --global
@@ -115,7 +116,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scri
 
 ```bash
 # 특정 릴리스 설치
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.13.7 bash
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.13.8 bash
 
 # 이후 업데이트·제거는 바이너리가 직접 한다 (설치 스크립트 재실행 불필요)
 atlassian-cli self update
@@ -128,14 +129,12 @@ atlassian-cli self uninstall --yes
 ```bash
 git clone https://github.com/junyeong-ai/atlassian-cli
 cd atlassian-cli
-cargo build --release --locked   # toolchain pinned by rust-toolchain.toml (1.99.1)
-mkdir -p "$HOME/.local/bin"
-cp target/release/atlassian-cli "$HOME/.local/bin/"
+cargo install --path . --locked --root "$HOME/.local" --target "$(rustc --print host-tuple)"
 export PATH="$HOME/.local/bin:$PATH"
 atlassian-cli --version
 ```
 
-새 터미널에서도 실행하려면 위 `export PATH`를 사용하는 셸의 시작 파일에 추가하세요. 스킬은 `atlassian-cli self skill install`로 별도 설치합니다.
+소스 설치는 `rust-toolchain.toml`의 도구체인으로 현재 호스트용 바이너리를 빌드해 `$HOME/.local/bin`에 설치합니다. 다른 방식으로 설치한 바이너리를 교체하려면 `cargo install`에 `--force`를 추가하세요. 새 터미널에서도 실행하려면 위 `export PATH`를 사용하는 셸의 시작 파일에 추가하세요. 스킬은 `atlassian-cli self skill install`로 별도 설치합니다.
 
 **지원 플랫폼**: Linux (x86_64, aarch64), macOS (Intel, Apple Silicon), Windows (x86_64). `install.sh` 자동 설치는 Linux/macOS용이며, Windows는 Release의 `.zip`에서 `atlassian-cli.exe`를 풀어 사용자 PATH에 등록된 폴더에 둡니다. 모든 플랫폼이 `.tar.gz` 를 발행하므로 `self update` 는 어디서나 동작합니다.
 
@@ -490,7 +489,7 @@ atlassian-cli completions bash > /etc/bash_completion.d/atlassian-cli
 
 **🌐 한국어** | **[English](README.en.md)**
 
-**Version 0.13.7** • Rust 2024 Edition
+**Version 0.13.8** • Rust 2024 Edition
 
 Made with ❤️ for productivity
 

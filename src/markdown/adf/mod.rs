@@ -5,6 +5,8 @@ mod marks;
 use crate::markdown::common::normalize_whitespace;
 use serde_json::Value;
 
+/// Convert ADF to Markdown, replacing excessively nested blocks with a visible
+/// truncation marker while continuing with subsequent sibling blocks.
 pub fn adf_to_markdown(adf: &Value) -> String {
     let Some(content) = adf.get("content").and_then(|c| c.as_array()) else {
         return String::new();
@@ -12,7 +14,7 @@ pub fn adf_to_markdown(adf: &Value) -> String {
 
     let blocks: Vec<String> = content
         .iter()
-        .filter_map(|node| blocks::convert_block_node(node, 0))
+        .filter_map(|node| blocks::convert_block_node(node, 0, 0))
         .collect();
 
     normalize_whitespace(&blocks.join("\n\n"))
@@ -136,5 +138,118 @@ mod tests {
         assert!(result.contains("| Header |"));
         assert!(result.contains("| --- |"));
         assert!(result.contains("| Cell |"));
+    }
+
+    fn block(kind: &str, content: Vec<Value>) -> Value {
+        Value::Object(serde_json::Map::from_iter([
+            ("type".into(), Value::String(kind.into())),
+            ("content".into(), Value::Array(content)),
+        ]))
+    }
+
+    fn paragraph(text: &str) -> Value {
+        json!({"type": "paragraph", "content": [{"type": "text", "text": text}]})
+    }
+
+    #[test]
+    fn test_deep_blocks_truncate_without_losing_following_content() {
+        for kind in [
+            "bulletList",
+            "orderedList",
+            "listItem",
+            "unknownContainer",
+            "blockquote",
+            "panel",
+            "table",
+            "expand",
+            "nestedExpand",
+            "taskList",
+            "taskItem",
+            "decisionList",
+            "decisionItem",
+            "layoutSection",
+            "layoutColumn",
+            "bodiedExtension",
+            "multiBodiedExtension",
+            "extensionFrame",
+        ] {
+            let mut nested = paragraph("deep-only-leaf");
+            for _ in 0..64 {
+                let child = match kind {
+                    "bulletList" | "orderedList" => block("listItem", vec![nested]),
+                    "taskList" => block("taskItem", vec![nested]),
+                    "decisionList" => block("decisionItem", vec![nested]),
+                    "layoutSection" => block("layoutColumn", vec![nested]),
+                    "table" => block("tableRow", vec![block("tableCell", vec![nested])]),
+                    _ => nested,
+                };
+                nested = block(kind, vec![child]);
+            }
+            let mut document = block("doc", vec![nested, paragraph("following-sibling")]);
+            document["version"] = 1.into();
+
+            let result = adf_to_markdown(&document);
+            assert!(
+                result.contains("[Content truncated: max depth exceeded]"),
+                "{kind}: missing truncation marker"
+            );
+            assert!(
+                !result.contains("deep-only-leaf"),
+                "{kind}: depth was not bounded"
+            );
+            assert!(
+                result.ends_with("following-sibling"),
+                "{kind}: lost following content"
+            );
+        }
+    }
+
+    #[test]
+    fn test_mixed_blocks_preserve_list_indentation() {
+        let quote = block(
+            "blockquote",
+            vec![
+                paragraph("Quote"),
+                block(
+                    "bulletList",
+                    vec![block(
+                        "listItem",
+                        vec![
+                            paragraph("Outer"),
+                            block(
+                                "orderedList",
+                                vec![block("listItem", vec![paragraph("Inner")])],
+                            ),
+                        ],
+                    )],
+                ),
+            ],
+        );
+        let table = block(
+            "table",
+            vec![
+                block(
+                    "tableRow",
+                    vec![block("tableHeader", vec![paragraph("Column")])],
+                ),
+                block(
+                    "tableRow",
+                    vec![block(
+                        "tableCell",
+                        vec![block(
+                            "bulletList",
+                            vec![block("listItem", vec![paragraph("Cell item")])],
+                        )],
+                    )],
+                ),
+            ],
+        );
+        let mut document = block("doc", vec![quote, table, paragraph("After")]);
+        document["version"] = 1.into();
+
+        assert_eq!(
+            adf_to_markdown(&document),
+            "> Quote\n> - Outer \n>   1. Inner\n\n| Column |\n| --- |\n| - Cell item |\n\nAfter"
+        );
     }
 }
