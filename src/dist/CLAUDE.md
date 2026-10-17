@@ -42,7 +42,7 @@ There is therefore no rollback path, and that is the point: an installation whos
 
 `read_from_tar_gz` returns one named member's bytes. No path from the archive reaches the filesystem, so archive-directed writes are not a thing that can happen.
 
-Linux release builds use Ubuntu 24.04 hosts for both architectures; general CI follows the latest runner images.
+Linux release builds use Ubuntu 24.04 hosts for both architectures; general CI follows the latest runner images. Packaging runs each native release binary and requires its reported version to match the tag before uploading artifacts.
 
 Every target publishes a `.tar.gz`, Windows included, so there is one extraction path. `target.rs`'s table must match the `Release` workflow's build matrix or a download 404s; a test reads `release.yml` and holds them together.
 

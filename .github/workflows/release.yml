@@ -74,6 +74,13 @@ jobs:
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             bin="${BIN_NAME}.exe"
           fi
+          actual_version=$("target/${target}/release/${bin}" --version)
+          expected_version="${BIN_NAME} ${tag#v}"
+          if [[ "$actual_version" != "$expected_version" ]]; then
+            printf 'Expected %s, got %s\n' "$expected_version" "$actual_version" >&2
+            exit 1
+          fi
+          printf '%s\n' "$actual_version"
           cp "target/${target}/release/${bin}" "staging/${bin}"
           # Every target publishes a .tar.gz so `self update` reads one archive
           # format everywhere; the Windows .zip is published alongside it for
