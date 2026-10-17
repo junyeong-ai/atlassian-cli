@@ -75,6 +75,45 @@ pub(crate) fn clause_detector(keyword: &str) -> Regex {
     .expect("clause detector pattern is valid")
 }
 
+fn order_by_start(query: &str, mask: &str) -> Option<usize> {
+    let bytes = mask.as_bytes();
+    let original = query.as_bytes();
+    let mut depth = 0usize;
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'(' => depth += 1,
+            b')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        let boundary = index == 0
+            || original[index - 1].is_ascii_whitespace()
+            || matches!(original[index - 1], b')' | b'\'' | b'"');
+        if depth == 0
+            && boundary
+            && bytes
+                .get(index..index + 5)
+                .is_some_and(|word| word.eq_ignore_ascii_case(b"order"))
+        {
+            let mut next = index + 5;
+            let separator = next;
+            while next < original.len() && original[next].is_ascii_whitespace() {
+                next += 1;
+            }
+            if next > separator
+                && bytes
+                    .get(next..next + 2)
+                    .is_some_and(|word| word.eq_ignore_ascii_case(b"by"))
+                && (next + 2 == bytes.len() || original[next + 2].is_ascii_whitespace())
+            {
+                return Some(index);
+            }
+        }
+        index += 1;
+    }
+    None
+}
+
 /// Inject a filter clause into a user query (JQL or CQL), preserving any
 /// trailing `ORDER BY` and skipping injection when the user already scoped by
 /// the same keyword. This is the single source of truth shared by Jira's
@@ -90,20 +129,16 @@ pub(crate) fn clause_detector(keyword: &str) -> Regex {
 ///   (no dangling `AND ()`), with any `ORDER BY` appended after it.
 pub(crate) fn inject_filter(query: &str, clause_re: &Regex, injected_clause: &str) -> String {
     let mask = mask_string_literals(query);
-    let mask_lower = mask.to_lowercase();
+    let split = order_by_start(query, &mask).map(|start| {
+        query[..start]
+            .trim_end_matches(|c: char| c.is_ascii_whitespace())
+            .len()
+    });
+    let (conditions, order_by) = split
+        .map(|start| (&query[..start], Some(&query[start..])))
+        .unwrap_or((query, None));
 
-    let (conditions, order_by) = if let Some(pos) = mask_lower.find(" order by ") {
-        (query[..pos].to_string(), Some(query[pos..].to_string()))
-    } else if mask_lower.starts_with("order by ") {
-        (String::new(), Some(format!(" {}", query)))
-    } else {
-        (query.to_string(), None)
-    };
-
-    // Detect an existing clause against the masked conditions so quoted text
-    // like `summary ~ "project = foo"` does not count.
-    let condition_mask = mask_string_literals(&conditions);
-    if clause_re.is_match(&condition_mask) {
+    if clause_re.is_match(&mask[..conditions.len()]) {
         return query.to_string();
     }
 
@@ -115,7 +150,10 @@ pub(crate) fn inject_filter(query: &str, clause_re: &Regex, injected_clause: &st
     };
 
     match order_by {
-        Some(order_clause) => format!("{}{}", base, order_clause),
+        Some(order_clause) if order_clause.starts_with(|c: char| c.is_ascii_whitespace()) => {
+            format!("{base}{order_clause}")
+        }
+        Some(order_clause) => format!("{base} {order_clause}"),
         None => base,
     }
 }
@@ -371,5 +409,69 @@ mod tests {
             out,
             "project IN (\"MDW\") AND (summary ~ \"finish order by tomorrow\")"
         );
+    }
+
+    #[test]
+    fn injection_preserves_unicode_and_sorting_whitespace() {
+        let re = project_re();
+        for (query, expected) in [
+            (
+                "labels = K ORDER BY created",
+                "project IN (\"MDW\") AND (labels = K) ORDER BY created",
+            ),
+            (
+                "labels = İ ORDER BY created",
+                "project IN (\"MDW\") AND (labels = İ) ORDER BY created",
+            ),
+            (
+                "status = Open\nORDER\tBY created DESC",
+                "project IN (\"MDW\") AND (status = Open)\nORDER\tBY created DESC",
+            ),
+            (
+                "status = Open\r\nOrDeR  bY \"Custom field\", created DESC",
+                "project IN (\"MDW\") AND (status = Open)\r\nOrDeR  bY \"Custom field\", created DESC",
+            ),
+            (
+                " \tORDER\nBY created",
+                "project IN (\"MDW\") \tORDER\nBY created",
+            ),
+            (
+                "(status = Open)ORDER BY created",
+                "project IN (\"MDW\") AND ((status = Open)) ORDER BY created",
+            ),
+            (
+                "status = \"Open\"ORDER BY created",
+                "project IN (\"MDW\") AND (status = \"Open\") ORDER BY created",
+            ),
+        ] {
+            assert_eq!(
+                inject_filter(query, &re, "project IN (\"MDW\")"),
+                expected,
+                "{query}"
+            );
+        }
+    }
+
+    #[test]
+    fn sorting_keywords_require_unquoted_top_level_tokens() {
+        let re = project_re();
+        for query in [
+            "summary ~ \"ORDER BY created\"",
+            "summary ~ 'escaped \\\" ORDER BY created'",
+            "field = function(ORDER BY created)",
+            "field = preorder BY created",
+            "field = foo.order BY created",
+            "field = ORDERBY created",
+            "field = ORDER BYfield",
+            "field = ORDER \"ignored\" BY created",
+        ] {
+            assert_eq!(
+                inject_filter(query, &re, "project IN (\"MDW\")"),
+                format!("project IN (\"MDW\") AND ({query})"),
+                "{query}"
+            );
+        }
+        let query = "project = OTHER\nORDER\tBY \"Sort field\" DESC";
+        assert_eq!(inject_filter(query, &re, "project IN (\"MDW\")"), query);
     }
 }

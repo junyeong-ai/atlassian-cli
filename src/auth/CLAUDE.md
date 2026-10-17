@@ -193,6 +193,8 @@ spells the separator the same way so both builders read identically.
   zbus's private tokio runtime, and `Runtime::block_on` panics on a thread that
   is already driving futures. `stored_profiles` therefore reads each entry's
   specifiers inside the closure and returns the profile names, not the entries.
+- Sessions without a refresh token remain usable until actual access-token expiry;
+  only refreshable sessions use the early-refresh buffer.
 - `strategy.rs` holds the `OAuthStrategy`. `tokens: Mutex<TokenSet>` so
   callers sharing the strategy serialize on refresh — at most one token-endpoint
   round trip when the cache is stale. Refresh tokens **rotate** on every

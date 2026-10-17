@@ -32,6 +32,8 @@ There is therefore no rollback path, and that is the point: an installation whos
 
 `fetch_verified_binary` covers download through extraction and is driven by wiremock tests; only the final `install` touches the running binary.
 
+The shell installer follows the same verify-before-replace order. The parent shell owns download and staging paths so its exit trap can remove them. Source installations build an explicit native target and obtain the expected version from Cargo package metadata; a failed build must never select an existing artifact.
+
 ## Which release is latest
 
 `resolve_latest` asks the GitHub API first and falls back to the `/releases/latest` web redirect. They disagree in one direction: the web view trails the API by minutes after a publish, which is exactly when someone runs an update — read in that window it names the previous release and the update calls the running binary current. So the answer carries its `Provenance` and callers report it.

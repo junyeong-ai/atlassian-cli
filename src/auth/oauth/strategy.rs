@@ -201,7 +201,12 @@ impl AuthStrategy for OAuthStrategy {
 
     async fn authorization(&self, _http: &reqwest::Client) -> Result<String> {
         let mut guard = self.tokens.lock().await;
-        if guard.is_expired_with_buffer(TOKEN_REFRESH_BUFFER_SECS as i64) {
+        let refresh_buffer = if guard.refresh_token.is_some() {
+            TOKEN_REFRESH_BUFFER_SECS as i64
+        } else {
+            0
+        };
+        if guard.is_expired_with_buffer(refresh_buffer) {
             self.refresh_locked(&mut guard).await?;
         }
         Ok(format!("Bearer {}", guard.access_token.expose_secret()))
@@ -280,5 +285,69 @@ mod tests {
             "leaked: {rendered}"
         );
         assert!(rendered.contains("<redacted>"));
+    }
+
+    #[tokio::test]
+    async fn unrefreshable_sessions_remain_usable_until_expiry() {
+        use secrecy::SecretString;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let directory = tempfile::tempdir().unwrap();
+        let store = || {
+            TokenStore::at(
+                "unrefreshable",
+                directory.path().join("credentials.json"),
+                KeychainAccess::Forbidden,
+            )
+        };
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let mut tokens = TokenSet {
+            access_token: SecretString::new("test-access".into()),
+            refresh_token: None,
+            expires_at_unix: now + 600,
+            scopes: vec!["read:jira-work".into()],
+            cloud_id: Some("test-site".into()),
+        };
+        store().save(&tokens).await.unwrap();
+        let params = OAuthParams {
+            client_id: "test-client".into(),
+            client_secret: "test-secret".into(),
+            redirect_port: 8976,
+            scopes: tokens.scopes.clone(),
+            cloud_id: None,
+        };
+        let strategy = OAuthStrategy::resume(params.clone(), store())
+            .await
+            .unwrap();
+        let http = reqwest::Client::new();
+        assert_eq!(
+            strategy.authorization(&http).await.unwrap(),
+            "Bearer test-access"
+        );
+        strategy.tokens.lock().await.expires_at_unix = now + 120;
+        assert_eq!(
+            strategy.authorization(&http).await.unwrap(),
+            "Bearer test-access"
+        );
+        assert!(strategy.force_refresh().await.is_err());
+        strategy.tokens.lock().await.expires_at_unix = 0;
+        assert!(strategy.authorization(&http).await.is_err());
+
+        tokens.expires_at_unix = now + 120;
+        store().save(&tokens).await.unwrap();
+        assert!(
+            OAuthStrategy::resume(params.clone(), store())
+                .await
+                .unwrap()
+                .authorization(&http)
+                .await
+                .is_ok()
+        );
+        tokens.expires_at_unix = 0;
+        store().save(&tokens).await.unwrap();
+        assert!(OAuthStrategy::resume(params, store()).await.is_err());
     }
 }

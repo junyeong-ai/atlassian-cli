@@ -22,6 +22,8 @@ if [ -f "$SCRIPT_DIR/../Cargo.toml" ] && grep -q '^name = "atlassian-cli"' "$SCR
 fi
 
 BINARY_TMP_DIR=""
+BINARY_PATH=""
+BINARY_VERSION=""
 STAGED_BINARY=""
 
 cleanup() {
@@ -124,7 +126,6 @@ download_binary() {
     local archive="${BINARY_NAME}-v${version}-${target}.tar.gz"
     local url="https://github.com/$REPO/releases/download/v${version}/${archive}"
     local checksum_url="${url}.sha256"
-    local binary_path
 
     [ -n "$BINARY_TMP_DIR" ] && rm -rf "$BINARY_TMP_DIR"
     BINARY_TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/atlassian-cli-install.XXXXXX")
@@ -169,14 +170,13 @@ download_binary() {
 
     echo "Extracting..." >&2
     (cd "$BINARY_TMP_DIR" && tar -xzf "$archive") >&2 || return 1
-    binary_path="$BINARY_TMP_DIR/$BINARY_NAME"
+    BINARY_PATH="$BINARY_TMP_DIR/$BINARY_NAME"
+    BINARY_VERSION="$version"
 
-    if [ ! -x "$binary_path" ]; then
+    if [ ! -x "$BINARY_PATH" ]; then
         echo "Archive did not contain executable $BINARY_NAME" >&2
         return 1
     fi
-
-    echo "$binary_path"
 }
 
 cargo_build_release() {
@@ -187,7 +187,7 @@ cargo_build_release() {
 
     # rust-toolchain.toml in the checkout pins the toolchain; a rustup-managed
     # cargo resolves it automatically, so no version is hardcoded here.
-    cargo build --release --locked
+    cargo build --release --locked --target "$1" --target-dir "$PROJECT_ROOT/target"
 }
 
 build_from_source() {
@@ -197,8 +197,13 @@ build_from_source() {
     fi
 
     echo "Building from source..." >&2
-    (cd "$PROJECT_ROOT" && cargo_build_release) >&2
-    echo "$PROJECT_ROOT/target/release/$BINARY_NAME"
+    local package_id
+    local target
+    package_id=$(cd "$PROJECT_ROOT" && cargo pkgid --offline --locked) || return
+    target=$(cd "$PROJECT_ROOT" && rustc --print host-tuple) || return
+    (cd "$PROJECT_ROOT" && cargo_build_release "$target") >&2 || return
+    BINARY_PATH="$PROJECT_ROOT/target/$target/release/$BINARY_NAME"
+    BINARY_VERSION="${package_id##*[@#]}"
 }
 
 # Defense-in-depth on top of the mandatory sha256 check: the checksum file
@@ -238,27 +243,39 @@ verify_attestation() {
 
 install_binary() {
     local binary_path="$1"
+    local version="$2"
+    local actual_version
+    local expected_version="$BINARY_NAME $version"
 
-    mkdir -p "$INSTALL_DIR"
+    if [ ! -f "$binary_path" ] || [ -L "$binary_path" ]; then
+        echo "Installation candidate is not a regular file: $binary_path" >&2
+        return 1
+    fi
+    mkdir -p "$INSTALL_DIR" || return
     # Stage next to the destination and rename: replacing a running binary
     # in place fails with ETXTBSY on Linux, while rename always succeeds.
-    STAGED_BINARY="$INSTALL_DIR/.$BINARY_NAME.tmp.$$"
-    cp "$binary_path" "$STAGED_BINARY"
-    chmod +x "$STAGED_BINARY"
+    STAGED_BINARY=$(mktemp "$INSTALL_DIR/.$BINARY_NAME.XXXXXX") || return
+    cp "$binary_path" "$STAGED_BINARY" || return
+    chmod +x "$STAGED_BINARY" || return
 
     if [[ "${OSTYPE:-}" == "darwin"* ]]; then
         codesign --force --deep --sign - "$STAGED_BINARY" 2>/dev/null || true
     fi
 
-    mv -f "$STAGED_BINARY" "$INSTALL_DIR/$BINARY_NAME"
+    actual_version=$("$STAGED_BINARY" --version) || return
+    if [ "$actual_version" != "$expected_version" ]; then
+        printf 'Expected %s, got %s\n' "$expected_version" "$actual_version" >&2
+        return 1
+    fi
+    mv -f "$STAGED_BINARY" "$INSTALL_DIR/$BINARY_NAME" || return
     STAGED_BINARY=""
+    printf '%s\n' "$actual_version" >&2
     echo "Installed to $INSTALL_DIR/$BINARY_NAME" >&2
 }
 
 main() {
     echo "Installing Atlassian CLI..." >&2
 
-    local binary_path=""
     local target
     local version="$VERSION"
     local explicit_version=false
@@ -316,18 +333,18 @@ main() {
     fi
 
     case "$method" in
-        2) binary_path=$(build_from_source) ;;
+        2) build_from_source ;;
         1|"")
             if [ -z "$version" ]; then
                 echo "Could not resolve a release version. Set ATLASSIAN_CLI_VERSION=x.y.z to install a specific release." >&2
                 exit 1
             fi
-            binary_path=$(download_binary "$version" "$target")
+            download_binary "$version" "$target"
             ;;
         *) echo "Invalid choice" >&2; exit 1 ;;
     esac
 
-    install_binary "$binary_path"
+    install_binary "$BINARY_PATH" "$BINARY_VERSION"
 
     echo "" >&2
     display_install_dir=$(display_path "$INSTALL_DIR")
@@ -340,13 +357,6 @@ main() {
         echo "$INSTALL_DIR is not in PATH" >&2
         echo "Add this to your shell profile:" >&2
         echo "  export PATH=\"$display_install_dir:\$PATH\"" >&2
-    fi
-
-    if [ -x "$INSTALL_DIR/$BINARY_NAME" ]; then
-        "$INSTALL_DIR/$BINARY_NAME" --version >&2
-    else
-        echo "Installed binary is not executable: $INSTALL_DIR/$BINARY_NAME" >&2
-        exit 1
     fi
 
     # The skill is compiled into the binary, so the binary deploys it — there
