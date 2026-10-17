@@ -1,6 +1,6 @@
 ---
 name: jira-confluence
-version: 0.13.2
+version: 0.13.3
 description: Use atlassian-cli for Atlassian Cloud Jira and Confluence searches, issue and page edits, comments, links, worklogs, agile operations and attachments; also diagnose authentication and manage the CLI installation when requested.
 allowed-tools: Bash
 ---

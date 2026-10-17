@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use std::path::PathBuf;
 
@@ -542,10 +542,16 @@ async fn clear_stored_tokens(
     // report even though they were cleared.
     let stored = stored_profiles_of(installation, keychain).await;
 
-    if let Some(file) = installation.credentials_file()
-        && atlassian_cli::auth::remove_credentials_file(&file)?
-    {
-        record(removed, "credentials", display_path(&file));
+    if let Some(file) = installation.credentials_file() {
+        let path = file.clone();
+        let cleared = tokio::task::spawn_blocking(move || {
+            atlassian_cli::auth::remove_credentials_file(&path)
+        })
+        .await
+        .context("Credentials file removal failed to complete")??;
+        if cleared {
+            record(removed, "credentials", display_path(&file));
+        }
     }
 
     if let Some(refusal) = clear_stored_tokens_refusal(&stored.keyring) {

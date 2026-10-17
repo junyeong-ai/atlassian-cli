@@ -91,7 +91,8 @@ only where their contracts are the same.
   exclusions on auth configuration.
 - OAuth uses PKCE S256, CSRF state validation and a literal loopback IP. Token
   persistence uses the OS keychain or an atomic restricted-permission file.
-  Blocking keychain operations run outside Tokio reactor threads.
+  Serialize file mutations with the persistent sidecar lock. Blocking keychain
+  operations and file-lock waits run outside Tokio reactor threads.
 
 ## Releases and documentation
 

@@ -254,7 +254,7 @@ impl From<OnDisk> for TokenSet {
 
 /// Per-profile token store. Construction does NOT touch the backend —
 /// I/O happens on `save` / `load` / `delete`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TokenStore {
     profile: String,
     file_path: PathBuf,
@@ -310,7 +310,7 @@ impl TokenStore {
             .await
         {
             Keychain::Done(()) => {
-                if let Err(e) = self.file_delete() {
+                if let Err(e) = self.file_operation(|store| store.file_delete()).await {
                     // What the file holds is exactly what could not be read, so
                     // this says the clear failed and no more. The keychain is
                     // read first, so anything left there is shadowed anyway.
@@ -324,7 +324,8 @@ impl TokenStore {
             }
             outcome => {
                 tracing::debug!("Keyring save unavailable ({outcome}), using the file store");
-                self.file_save(&json)?;
+                self.file_operation(move |store| store.file_save(&json))
+                    .await?;
                 if let Keychain::Unreachable(reason) =
                     self.keyring_op(|e| e.delete_credential()).await
                 {
@@ -399,7 +400,7 @@ impl TokenStore {
         // exactly the machines where the first half is the broken one. The file
         // still refuses a path it will not rewrite — it just no longer takes
         // the keychain with it.
-        let file = self.file_delete();
+        let file = self.file_operation(|store| store.file_delete()).await;
         let keyring = match self.keyring_op(|e| e.delete_credential()).await {
             Keychain::Done(()) | Keychain::Empty | Keychain::Forbidden | Keychain::Absent => Ok(()),
             Keychain::Unreachable(reason) => Err(anyhow::anyhow!(
@@ -428,6 +429,16 @@ impl TokenStore {
         .await
     }
 
+    async fn file_operation<F>(&self, operation: F) -> Result<()>
+    where
+        F: FnOnce(Self) -> Result<()> + Send + 'static,
+    {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || operation(store))
+            .await
+            .context("Credentials file operation failed to complete")?
+    }
+
     fn file_save(&self, json_for_profile: &str) -> Result<()> {
         let parent = self
             .file_path
@@ -440,6 +451,8 @@ impl TokenStore {
             let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
         }
 
+        let _lock = lock_credentials_file(&self.file_path)?
+            .context("Credentials directory disappeared before saving")?;
         owned_credentials_file(&self.file_path)?;
         // Not `unwrap_or_default`: a file that will not parse still holds the
         // other profiles, and writing over it would take them.
@@ -497,11 +510,17 @@ impl TokenStore {
         // mounted reads as an empty map, so a profile that is in fact stored
         // there is "not found", nothing is written or unlinked, and the call
         // reports a cleared session. The target comes back with the token.
+        if !owned_credentials_file(&self.file_path)? {
+            return Ok(());
+        }
+        let Some(_lock) = lock_credentials_file(&self.file_path)? else {
+            return Ok(());
+        };
         owned_credentials_file(&self.file_path)?;
         let mut all = self.file_read_all()?;
         if all.remove(&self.profile).is_some() {
             if all.is_empty() {
-                remove_credentials_file(&self.file_path)?;
+                remove_credentials_file_unlocked(&self.file_path)?;
             } else {
                 let parent = self
                     .file_path
@@ -566,8 +585,51 @@ pub fn remove_credentials_file(path: &std::path::Path) -> Result<bool> {
     if !owned_credentials_file(path)? {
         return Ok(false);
     }
+    let Some(_lock) = lock_credentials_file(path)? else {
+        return Ok(false);
+    };
+    remove_credentials_file_unlocked(path)
+}
+
+fn remove_credentials_file_unlocked(path: &std::path::Path) -> Result<bool> {
+    if !owned_credentials_file(path)? {
+        return Ok(false);
+    }
     fs::remove_file(path).with_context(|| format!("Failed to remove credentials file {path:?}"))?;
     Ok(true)
+}
+
+fn lock_credentials_file(path: &std::path::Path) -> Result<Option<fs::File>> {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".lock");
+    let lock_path = PathBuf::from(name);
+    match fs::symlink_metadata(&lock_path) {
+        Ok(meta) if !meta.file_type().is_file() => {
+            anyhow::bail!("Credentials lock {lock_path:?} is not a regular file");
+        }
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(e).context("Failed to inspect credentials lock");
+        }
+        _ => {}
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = match options.open(&lock_path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).context("Failed to open credentials lock"),
+    };
+    anyhow::ensure!(
+        file.metadata()?.is_file(),
+        "Credentials lock {lock_path:?} is not a regular file"
+    );
+    file.lock().context("Failed to lock credentials file")?;
+    Ok(Some(file))
 }
 
 fn read_all_from(file_path: &std::path::Path) -> Result<HashMap<String, OnDisk>> {
@@ -903,6 +965,40 @@ mod tests {
                 "{unset}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn deleting_an_absent_store_does_not_create_files() {
+        let dir = tempfile::tempdir().unwrap();
+        for path in [
+            dir.path().join("credentials.json"),
+            dir.path().join("absent").join("credentials.json"),
+        ] {
+            TokenStore::at("absent", path.clone(), KeychainAccess::Forbidden)
+                .delete()
+                .await
+                .unwrap();
+            assert!(!remove_credentials_file(&path).unwrap());
+        }
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_redirected_lock_is_refused_without_changing_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        let target = dir.path().join("elsewhere");
+        fs::write(&path, "{}").unwrap();
+        fs::write(&target, "untouched").unwrap();
+        std::os::unix::fs::symlink(&target, dir.path().join("credentials.json.lock")).unwrap();
+        let store = TokenStore::at("default", path.clone(), KeychainAccess::Forbidden);
+        let json = serde_json::to_string(&OnDisk::from(&fixture_tokens())).unwrap();
+        assert!(store.file_save(&json).is_err());
+        assert!(store.file_delete().is_err());
+        assert!(remove_credentials_file(&path).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{}");
+        assert_eq!(fs::read_to_string(&target).unwrap(), "untouched");
     }
 
     #[test]

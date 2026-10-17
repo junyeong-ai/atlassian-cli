@@ -108,7 +108,12 @@ spells the separator the same way so both builders read identically.
   Linux uses pure-Rust zbus, no system `libdbus`); falls back to
   `~/.config/atlassian-cli/credentials.json` (0600, atomic via tempfile).
   `load` returns `LoadedTokens { tokens, backend }` so callers report
-  provenance without a second store query. Per-profile keyed.
+  provenance without a second store query. Per-profile keyed. File mutations
+  hold an exclusive standard-library lock on `credentials.json.lock` across
+  reading, modifying and replacing or removing the JSON file. The sidecar stays
+  in place: deleting it could let another process lock a different file while
+  an earlier lock is still held. It contains no credentials. Lock waits and
+  mutations run through `spawn_blocking`; reads use the atomically published JSON.
   Which backends a store has is a `KeychainAccess` field on it, not a reading
   of the environment: `TokenStore::new` takes the machine's answer from
   `KeychainAccess::from_env`, `TokenStore::at` names both backends, and every

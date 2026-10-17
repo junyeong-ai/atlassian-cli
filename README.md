@@ -3,7 +3,7 @@
 [![CI](https://github.com/junyeong-ai/atlassian-cli/workflows/CI/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/ci.yml)
 [![Security](https://github.com/junyeong-ai/atlassian-cli/workflows/Security/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/security.yml)
 [![Rust](https://img.shields.io/badge/rust-1.98.0%2B%20(2024%20edition)-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.13.2-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
+[![Version](https://img.shields.io/badge/version-0.13.3-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
 
 > **🌐 한국어** | **[English](README.en.md)**
 
@@ -115,7 +115,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scri
 
 ```bash
 # 특정 릴리스 설치
-curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.13.2 bash
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.13.3 bash
 
 # 이후 업데이트·제거는 바이너리가 직접 한다 (설치 스크립트 재실행 불필요)
 atlassian-cli self update
@@ -149,7 +149,7 @@ atlassian-cli self uninstall --yes [--keep-skill] [--keep-credentials] [--purge-
 
 - skill 은 바이너리에 컴파일되어 들어가므로, 바이너리가 들고 다니는 사본은 언제나 자기 것입니다. 디스크에 배포된 사본은 별개이고, `self status` 가 그걸 **바이트 비교**로 판정해 직접 수정했거나 다운그레이드가 남긴 이전 버전을 `stale` 로 잡습니다.
 - `self update` 는 내려받은 바이너리를 **교체 전에** 실행해 버전을 확인합니다. 이 기계에서 돌지 않는 바이너리는 아무것도 건드리지 않고 실패합니다.
-- `self uninstall` 은 OS 키체인에 남은 OAuth 토큰까지 지웁니다 (`--keep-credentials` 로 보존). 키체인이 있는데 읽을 수 없으면(잠김, 또는 `ATLASSIAN_NO_KEYCHAIN` 로 열람 금지) **거부**합니다 — 토큰을 남긴 채 바이너리만 사라지는 게 최악이기 때문입니다. 키체인이 응답하지 않는 환경에서는 두 번에 나눠 끝납니다 — 첫 실행이 `credentials.json` 을 지우고 지운 것을 밝히며 거부하고, `--keep-credentials` 로 두 번째 실행이 완료합니다. `auth logout` 도 **응답하지 않는** 키체인에 대해서는 같은 이유로 0이 아닌 코드로 끝납니다 — 모든 릴리스 타깃이 키체인을 포함하므로 "닿지 못함"을 "없음"으로 읽을 수 없습니다. `ATLASSIAN_NO_KEYCHAIN` 이 켜져 있을 때는 0으로 끝나고 키체인을 건드리지 않았다고 알립니다 — 물어본 적이 없기 때문이며, 거기 있는 것을 지우려면 플래그를 한 번 끄고 실행하면 됩니다. `--purge-config` 는 이 도구가 쓴 설정 파일을 지우고 디렉터리는 비었을 때만 지우므로, `--keep-credentials` 와 함께 써도 `credentials.json` 은 남습니다. 프로젝트 로컬 설정(`.atlassian.toml`)은 건드리지 않습니다.
+- `self uninstall` 은 OS 키체인에 남은 OAuth 토큰까지 지웁니다 (`--keep-credentials` 로 보존). 키체인이 있는데 읽을 수 없으면(잠김, 또는 `ATLASSIAN_NO_KEYCHAIN` 로 열람 금지) **거부**합니다 — 토큰을 남긴 채 바이너리만 사라지는 게 최악이기 때문입니다. 키체인이 응답하지 않는 환경에서는 두 번에 나눠 끝납니다 — 첫 실행이 `credentials.json` 을 지우고 지운 것을 밝히며 거부하고, `--keep-credentials` 로 두 번째 실행이 완료합니다. `auth logout` 도 **응답하지 않는** 키체인에 대해서는 같은 이유로 0이 아닌 코드로 끝납니다 — 모든 릴리스 타깃이 키체인을 포함하므로 "닿지 못함"을 "없음"으로 읽을 수 없습니다. `ATLASSIAN_NO_KEYCHAIN` 이 켜져 있을 때는 0으로 끝나고 키체인을 건드리지 않았다고 알립니다 — 물어본 적이 없기 때문이며, 거기 있는 것을 지우려면 플래그를 한 번 끄고 실행하면 됩니다. `--purge-config` 는 이 도구가 쓴 설정 파일을 지우고 디렉터리는 비었을 때만 지우므로, `--keep-credentials` 와 함께 써도 `credentials.json` 은 남습니다. 비밀정보가 없는 `credentials.json.lock`이 남아 있으면 디렉터리도 보존됩니다. 프로젝트 로컬 설정(`.atlassian.toml`)은 건드리지 않습니다.
 **Requirement**: 소스 빌드 최소 지원 버전은 Rust 1.98.0이며, 기본 도구체인은 Rust 1.99.1입니다.
 
 ---
@@ -479,7 +479,7 @@ atlassian-cli completions bash > /etc/bash_completion.d/atlassian-cli
 
 **🌐 한국어** | **[English](README.en.md)**
 
-**Version 0.13.2** • Rust 2024 Edition
+**Version 0.13.3** • Rust 2024 Edition
 
 Made with ❤️ for productivity
 

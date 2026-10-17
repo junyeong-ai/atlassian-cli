@@ -79,4 +79,8 @@ Paths reach a report through `display_path`. `json!` serializes a `Path` by unwr
 
 `--purge-config` removes the config file this tool writes and then the directory only if that leaves it empty. Not emptied, and not a plain directory — a `~/.config/atlassian-cli` the user redirected answers `NotADirectory` — are both definite answers about a directory that stays, and are reported as kept. Any other failure to remove it is a failure, because reading one as "kept" is how a directory nobody could remove goes out as a clean uninstall.
 
+The credential store retains its empty `credentials.json.lock` sidecar to keep
+concurrent writers on one lock. A config directory that still holds this file
+is reported as kept by `--purge-config`.
+
 The binary goes last and through `self_replace::self_delete_at`: Windows refuses to unlink a running executable, so a plain `remove_file` would fail there after everything else had already gone. A failure at that point names what was already removed, because "Permission denied" alone reads as "nothing happened".
