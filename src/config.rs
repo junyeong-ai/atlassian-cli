@@ -1039,8 +1039,9 @@ impl Config {
 # client_id = "..."
 # scopes = [
 #   "read:jira-user", "read:jira-work", "write:jira-work",
-#   "read:board-scope:jira-software", "read:project:jira",
-#   "read:sprint:jira-software", "write:sprint:jira-software", "offline_access",
+#   "read:board-scope:jira-software", "write:board-scope:jira-software",
+#   "read:project:jira", "read:sprint:jira-software", "write:sprint:jira-software",
+#   "offline_access",
 # ]
 # Then: atlassian-cli --profile agile auth login
 

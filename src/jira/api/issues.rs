@@ -311,9 +311,8 @@ pub async fn create_issue(
     if !description.is_null() {
         fields["description"] = adf::process_description_input(description)?;
     }
-    // Every sub-task type requires it, and a team-managed project models an
-    // epic's children the same way, so the field is what makes either of those
-    // creatable at all.
+    // Every sub-task type requires it, so the field is what makes a sub-task
+    // creatable at all; it is also how an issue goes under its epic.
     //
     // Which types require it is not decided here. The create screen's own
     // metadata is the answer, and guessing from the type's name would be wrong

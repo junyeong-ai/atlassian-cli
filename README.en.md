@@ -191,7 +191,7 @@ Sessions with a refresh token refresh five minutes before expiry. Beyond the def
 | `sprint move` | `write:sprint:jira-software` | [Sprint](https://developer.atlassian.com/cloud/jira/software/rest/api-group-sprint/) |
 | `sprint backlog` | `write:board-scope:jira-software` | [Backlog](https://developer.atlassian.com/cloud/jira/software/rest/api-group-backlog/) |
 | `confluence search` | `search:confluence`, `read:confluence-content.all` | [Search](https://developer.atlassian.com/cloud/confluence/rest/v1/api-group-search/) |
-| `confluence get`, `confluence label list`, `confluence property list` | `read:page:confluence` | [Page](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-page/) |
+| `confluence get`, `confluence label list`, `confluence property list` | `read:page:confluence` | [Page](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-page/), [Label](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-label/), [Content properties](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-content-properties/) |
 | `confluence comment` reads | `read:comment:confluence` | [Comment](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-comment/) |
 | `confluence attachment list` | `read:attachment:confluence` | [Attachment](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-attachment/) |
 | `confluence space` | `read:space:confluence` | [Space](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-space/) |

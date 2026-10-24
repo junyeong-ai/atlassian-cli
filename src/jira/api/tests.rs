@@ -898,7 +898,7 @@ async fn integ_create_issue_converts_the_description_and_requires_its_envelope()
 /// A sub-task's parent is what makes it a sub-task, and Jira takes it on
 /// the create screen rather than afterwards — there is no issue to update
 /// into place, because without the field the create is refused. The same
-/// field puts an issue under an epic in a team-managed project.
+/// field puts an issue under its epic.
 #[tokio::test]
 async fn integ_create_issue_sends_the_parent_it_was_given() {
     let server = MockServer::start().await;

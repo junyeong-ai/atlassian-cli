@@ -236,7 +236,7 @@ atlassian-cli auth refresh               # force token refresh (debugging)
 atlassian-cli auth logout                # clears the stored session, whatever method the profile is on
 ```
 
-`auth login` waits up to five minutes for a person to finish signing in through a browser, so ask the user to run `atlassian-cli auth login` in their own terminal rather than running it yourself. Without a browser on that machine they add `--no-browser` and open the printed URL in a browser that can reach the callback port; over SSH that means forwarding it first with `ssh -L 8976:127.0.0.1:8976 <host>`.
+`auth login` waits up to five minutes for a person to finish signing in through a browser, so ask the user to run `atlassian-cli auth login` in their own terminal rather than running it yourself. Without a browser on that machine they add `--no-browser` and open the printed URL in a browser that can reach the callback port; over SSH that means forwarding it first with `ssh -L 8976:127.0.0.1:8976 <host>`, with the profile's `redirect_port` in place of 8976 when one is set.
 
 Switch profiles with `--profile <name>`; never invent profile names — list them via `atlassian-cli config list`. With an explicit `--config <file>`, `config list` includes that file and `config path/edit/init` target it. `--global` on path, edit or init selects the global file instead. `config show` emits the resolved profile as TOML with masked secrets; replace redactions before using it for authentication.
 
