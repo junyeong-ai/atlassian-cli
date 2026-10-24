@@ -1,6 +1,9 @@
 mod cleanup;
 mod elements;
+mod from_markdown;
 mod macros;
+
+pub use from_markdown::markdown_to_confluence;
 
 use crate::markdown::common::normalize_whitespace;
 use htmd::HtmlToMarkdown;

@@ -1,6 +1,9 @@
 mod blocks;
+mod from_markdown;
 mod inline;
 mod marks;
+
+pub use from_markdown::markdown_to_adf;
 
 use crate::markdown::common::normalize_whitespace;
 use serde_json::Value;

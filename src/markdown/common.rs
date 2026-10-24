@@ -1,3 +1,15 @@
+use pulldown_cmark::{Options, Parser};
+
+/// The Markdown that writes accept: CommonMark with GitHub's tables and
+/// strikethrough. Both converters parse through here so the two products agree
+/// on what a document means.
+pub fn parse_markdown(markdown: &str) -> Parser<'_> {
+    Parser::new_ext(
+        markdown,
+        Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH,
+    )
+}
+
 pub fn normalize_whitespace(text: &str) -> String {
     let mut lines: Vec<&str> = Vec::new();
     let mut prev_empty = false;
