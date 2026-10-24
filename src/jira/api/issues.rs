@@ -6,7 +6,7 @@ use crate::jira::adf;
 use crate::jira::fields;
 use crate::markdown::adf_to_markdown;
 use crate::response::{require_array, require_field};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use std::io::{self, Write};
 use std::time::Duration;
@@ -386,7 +386,8 @@ pub async fn unassign_issues_from_epic(issues: &[String], client: &ApiClient) ->
 }
 
 /// Set or clear the parent of each issue in turn. Jira has no transactional
-/// bulk edit, so a failure names how many issues were already edited.
+/// bulk edit, so a failure names the issue it stopped at and how many were
+/// already edited.
 async fn edit_parents(
     issues: &[String],
     parent: Option<&str>,
@@ -400,15 +401,11 @@ async fn edit_parents(
     for (edited, issue) in issues.iter().enumerate() {
         edit_parent(issue, &body, parent.is_none(), operation, client)
             .await
-            .map_err(|err| {
-                if edited == 0 {
-                    err
-                } else {
-                    err.context(format!(
-                        "Failed to {operation} at {issue} after {edited}/{} issues were edited",
-                        issues.len()
-                    ))
-                }
+            .with_context(|| {
+                format!(
+                    "Failed to {operation} at {issue} after {edited}/{} issues were edited",
+                    issues.len()
+                )
             })?;
     }
     Ok(json!({}))
@@ -416,7 +413,9 @@ async fn edit_parents(
 
 /// Edit one issue's parent. A cleared parent is read back, because Jira
 /// answers 204 to the documented `update.parent.set.none` while leaving the
-/// parent in place; clearing is confirmed rather than assumed.
+/// parent in place; clearing is confirmed rather than assumed. The read-back
+/// fails under its own operation, so a caller can tell an edit Jira refused
+/// from one it accepted but could not show.
 async fn edit_parent(
     issue: &str,
     body: &Value,
@@ -438,10 +437,18 @@ async fn edit_parent(
         .get(Service::Jira, &path)
         .await?
         .query(&[("fields", "parent")]);
-    let data: Value = client.execute(operation, request).await?.json().await?;
+    let read_back = "read back the issue parent";
+    let data: Value = client
+        .execute(read_back, request)
+        .await
+        .with_context(|| {
+            format!("Jira accepted clearing the parent of {issue}, but reading it back failed")
+        })?
+        .json()
+        .await?;
     // Jira omits `fields` when every requested field is empty, so the issue's
     // own key is what shows this is an issue rather than a drifted body.
-    require_field(&data, "/key", operation)?;
+    require_field(&data, "/key", read_back)?;
     if let Some(parent) = data.pointer("/fields/parent/key").and_then(Value::as_str) {
         anyhow::bail!(
             "Jira accepted clearing the parent of {issue}, but it is still under {parent}"

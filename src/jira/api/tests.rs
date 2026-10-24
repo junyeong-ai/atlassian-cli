@@ -2249,6 +2249,40 @@ async fn integ_epic_membership_edits_each_issue_parent() {
     assert!(message.contains("still under E-1"), "{message}");
 }
 
+/// A clear Jira accepted but the read-back could not show fails under the
+/// read-back's own operation and status, not as a refused edit, and the issue
+/// is named even when it is the first.
+#[tokio::test]
+async fn integ_epic_unassign_reports_an_unconfirmed_clear_apart_from_a_refused_edit() {
+    let server = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/A-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/A-1"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = mock_client(server.uri());
+
+    let err = unassign_issues_from_epic(&["A-1".to_string()], &client)
+        .await
+        .unwrap_err();
+    let api = err.downcast_ref::<crate::client::ApiError>().unwrap();
+    assert_eq!(api.operation, "read back the issue parent");
+    assert_eq!(api.status, 401);
+    let message = format!("{err:#}");
+    assert!(message.contains("at A-1 after 0/1"), "{message}");
+    assert!(
+        message.contains("accepted clearing the parent of A-1"),
+        "{message}"
+    );
+}
+
 #[tokio::test]
 async fn integ_move_to_sprint_rejects_empty_issues() {
     let server = MockServer::start().await;
