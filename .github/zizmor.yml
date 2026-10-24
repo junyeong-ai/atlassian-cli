@@ -1,0 +1,4 @@
+rules:
+  # Dependency updates are adopted as soon as they are released.
+  dependabot-cooldown:
+    disable: true

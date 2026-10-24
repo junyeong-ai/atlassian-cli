@@ -18,7 +18,6 @@ env:
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
   RUSTUP_MAX_RETRIES: 10
-  RUST_TOOLCHAIN: 1.99.1
   BIN_NAME: atlassian-cli
 
 jobs:
@@ -27,8 +26,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
-      id-token: write
-      attestations: write
+      id-token: write # Sigstore signing identity for the provenance attestation
+      attestations: write # store the provenance attestation on the repository
     strategy:
       fail-fast: false
       matrix:
@@ -43,45 +42,42 @@ jobs:
             os: macos-latest
           - target: x86_64-pc-windows-msvc
             os: windows-latest
+    env:
+      TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable @ 2026-10-17
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          targets: ${{ matrix.target }}
+      - name: Install toolchain
+        shell: bash
+        run: rustup toolchain install --target "$TARGET"
 
-      # No build cache here, deliberately. `save-if: false` under a
-      # release-only key meant nothing ever populated it, so every restore
-      # missed — and restoring anything into the job that produces the
-      # published binaries is the cache-poisoning path zizmor flags. A release
-      # builds from source, from scratch.
+      # No build cache: restoring one into the job that produces the published
+      # binaries is a cache-poisoning path, so a release builds from scratch.
       - name: Build release binary
         shell: bash
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        run: cargo build --release --locked --target "$TARGET"
 
       - name: Package artifact
         shell: bash
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"           # e.g. v0.2.0
-          target="${{ matrix.target }}"
-          stem="${BIN_NAME}-${tag}-${target}" # e.g. atlassian-cli-v0.2.0-x86_64-unknown-linux-gnu
+          stem="${BIN_NAME}-${tag}-${TARGET}" # e.g. atlassian-cli-v0.2.0-x86_64-unknown-linux-gnu
           mkdir -p dist staging
           bin="${BIN_NAME}"
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             bin="${BIN_NAME}.exe"
           fi
-          actual_version=$("target/${target}/release/${bin}" --version)
+          actual_version=$("target/${TARGET}/release/${bin}" --version)
           expected_version="${BIN_NAME} ${tag#v}"
           if [[ "$actual_version" != "$expected_version" ]]; then
             printf 'Expected %s, got %s\n' "$expected_version" "$actual_version" >&2
             exit 1
           fi
           printf '%s\n' "$actual_version"
-          cp "target/${target}/release/${bin}" "staging/${bin}"
+          cp "target/${TARGET}/release/${bin}" "staging/${bin}"
           # Every target publishes a .tar.gz so `self update` reads one archive
           # format everywhere; the Windows .zip is published alongside it for
           # downloading by hand.
@@ -123,7 +119,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # create the release and upload its assets
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -149,10 +145,14 @@ jobs:
         run: ls -lh artifacts/
 
       - name: Publish release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        with:
-          files: artifacts/*
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-          draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          shopt -s failglob
+          prerelease=()
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            prerelease=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" artifacts/* \
+            --verify-tag --generate-notes "${prerelease[@]}"
