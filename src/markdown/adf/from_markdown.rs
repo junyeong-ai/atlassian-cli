@@ -1,3 +1,4 @@
+use super::MAX_DEPTH;
 use crate::markdown::common::parse_markdown;
 use anyhow::{Result, bail};
 use pulldown_cmark::{CodeBlockKind, CowStr, Event, LinkType, Tag, TagEnd};
@@ -92,6 +93,8 @@ impl Mark {
 struct Image {
     source: String,
     alt: String,
+    /// Images opened inside this one's alt text, whose ends are not its own.
+    nested: usize,
 }
 
 impl Builder {
@@ -156,8 +159,10 @@ impl Builder {
                 image.alt.push_str(&text)
             }
             Event::SoftBreak | Event::HardBreak => image.alt.push(' '),
+            Event::Start(Tag::Image { .. }) => image.nested += 1,
+            Event::End(TagEnd::Image) if image.nested > 0 => image.nested -= 1,
             Event::End(TagEnd::Image) => {
-                let Image { source, alt } = self.image.take().expect("an image is open");
+                let Image { source, alt, .. } = self.image.take().expect("an image is open");
                 let mut marks = self.mark_values();
                 if !self.marks.iter().any(|m| matches!(m, Mark::Link(_))) {
                     marks.push(link_mark(&source));
@@ -183,6 +188,7 @@ impl Builder {
                 self.image = Some(Image {
                     source: dest_url.into_string(),
                     alt: String::new(),
+                    nested: 0,
                 });
                 return Ok(());
             }
@@ -216,6 +222,11 @@ impl Builder {
             other => unreachable!("parse_markdown enables no extension that opens {other:?}"),
         };
         self.close_implicit()?;
+        if self.frames.len() >= MAX_DEPTH {
+            bail!(
+                "Markdown nests blocks more than {MAX_DEPTH} levels deep, which ADF output does not support"
+            );
+        }
         self.frames.push(Frame {
             block,
             content: Vec::new(),
@@ -532,7 +543,8 @@ mod tests {
     fn tables_images_and_raw_html_become_their_adf_counterparts() {
         let adf = markdown_to_adf(
             "| Key | Owner |\n|:---|---|\n| A-1 | |\n\n\
-             ![chart](https://img.example/c.png) [![badge](https://img.example/b.svg)](https://ci.example)\n\n\
+             ![chart](https://img.example/c.png) [![badge](https://img.example/b.svg)](https://ci.example) \
+             ![a ![b](c) d](e)\n\n\
              <div>raw</div>\n\nkeep <b>tags</b>\n",
         )
         .unwrap();
@@ -562,6 +574,8 @@ mod tests {
                     marked("chart", json!([link_mark("https://img.example/c.png")])),
                     text(" "),
                     marked("badge", json!([link_mark("https://ci.example")])),
+                    text(" "),
+                    marked("a b d", json!([link_mark("e")])),
                 ])),
                 paragraph(json!([text("<div>raw</div>")])),
                 paragraph(json!([text("keep <b>tags</b>")])),
@@ -601,5 +615,8 @@ mod tests {
             let err = markdown_to_adf(markdown).unwrap_err().to_string();
             assert!(err.contains(expected), "{markdown:?}: {err}");
         }
+        let nested = format!("{}deep", "- ".repeat(MAX_DEPTH));
+        let err = markdown_to_adf(&nested).unwrap_err().to_string();
+        assert!(err.contains("levels deep"), "{err}");
     }
 }

@@ -9,10 +9,10 @@ use atlassian_cli::markdown::markdown_to_confluence;
 /// A body argument as storage format, the representation every write sends.
 async fn storage_body(argument: String, format: ConfluenceFormat) -> Result<String> {
     let body = read_body(argument).await?;
-    Ok(match format {
-        ConfluenceFormat::Storage => body,
+    match format {
+        ConfluenceFormat::Storage => Ok(body),
         ConfluenceFormat::Markdown => markdown_to_confluence(&body),
-    })
+    }
 }
 
 pub(crate) async fn run(

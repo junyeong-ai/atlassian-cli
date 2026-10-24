@@ -11,8 +11,10 @@ Block recursion depth is independent of list indentation. Every recursive block 
 
 `common::parse_markdown` fixes the dialect writes accept (CommonMark, GFM tables and strikethrough) for both products.
 
-- `adf::markdown_to_adf` builds the ADF tree from parser events. ADF's content rules are enforced where a child is appended: a list item or quote takes only paragraphs, lists and code blocks, and anything else is an error naming the construct. Do not reshape such content into something ADF accepts; the caller decides.
-- `confluence::markdown_to_confluence` renders HTML with pulldown-cmark and substitutes the code macro, the documented strikethrough span and `ac:image`. Raw HTML passes through as CommonMark specifies.
+- `adf::markdown_to_adf` builds the ADF tree from parser events. ADF's content rules are enforced where a child is appended: a list item or quote takes only paragraphs, lists and code blocks, and anything else is an error naming the construct. Do not reshape such content into something ADF accepts; the caller decides. Nesting is bounded by the same `MAX_DEPTH` the reader truncates at.
+- `confluence::markdown_to_confluence` renders HTML with pulldown-cmark and substitutes the code macro, the documented strikethrough span and `ac:image`. Its output must stay well-formed XML: characters XML 1.0 excludes are refused before parsing, and raw HTML is emitted as text because HTML need not be XML.
+
+Raw HTML is literal text in both renderers. Markdown tag names cannot carry the `ac:` namespace, so storage-format macros are written with `--format storage` rather than embedded.
 
 Task-list markers and other extensions stay disabled until their ADF and storage shapes are verified against the products.
 

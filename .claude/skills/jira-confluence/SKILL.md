@@ -118,7 +118,7 @@ OAuth agile commands require endpoint-specific grants beyond core Jira scopes. B
 
 ### Rich text
 
-Markdown becomes ADF headings, lists, quotes, code blocks, tables, rules, links and the strong, emphasis, strike and code marks. ADF lets a list item or quote hold only paragraphs, lists and code blocks, so Markdown nesting a heading, quote, table or rule inside one is refused with its location; move it out. Images become their alt text linked to the image, and raw HTML stays literal text.
+Markdown becomes ADF headings, lists, quotes, code blocks, tables, rules, links and the strong, emphasis, strike and code marks. ADF lets a list item or quote hold only paragraphs, lists and code blocks, so Markdown nesting a heading, quote, table or rule inside one is refused with its location; move it out. Images become their alt text linked to the image. Raw HTML stays literal text in both products.
 
 Under the default `--format adf`, a string is used as ADF when it parses to an object with `type: "doc"`, `version: 1` and an array `content`. Other strings, including JSON-shaped text like `{"status":"done"}`, are posted as literal text. The CLI checks only this root structure; Jira validates the nested nodes and can reject a document that passes the local check.
 
@@ -175,7 +175,7 @@ atlassian-cli confluence attachment upload 12345 ./icon.svg --content-type image
 ```
 
 - To edit a page, read it, change the body, and write it back with `--base-version` set to the `version.number` you read. Without it the update overwrites whatever is current, including a save made while you worked; with it Confluence answers `409` when the page changed, and the fix is to re-read, reapply the edit and retry.
-- Markdown converts to storage format with code blocks as the `code` macro. An image whose source has a scheme (`https://…`) embeds that URL; any other source names an attachment of the page, so upload the file first. Raw HTML passes through, but CommonMark tag names cannot carry `ac:`, so write Confluence macros with `--format storage`.
+- Markdown converts to storage format with code blocks as the `code` macro. An image whose source has a scheme (`https://…`) embeds that URL; any other source names the page attachment by its last path segment, the name `attachment upload` gives the file, so upload it first. Write Confluence macros and HTML with `--format storage`; in Markdown they stay literal text.
 - `comment list` returns one flat, depth-first array covering both comment families and every level of every thread. Each entry carries `location` (`footer`/`inline`), `depth`, and `parentCommentId` (`null` at a root), so rebuild the tree from those rather than assuming the array is top-level only.
 - `comment get`/`replies`/`update`/`delete` take the **comment id**; `comment list`/`add` take the **page id**.
 - Inline entries carry `resolutionStatus` (`open`/`reopened`/`resolved`/`dangling`) and `properties.inlineOriginalSelection`, the text they anchor to. Filter on `resolutionStatus` for "unresolved comments"; footer entries have neither field.

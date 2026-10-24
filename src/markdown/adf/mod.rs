@@ -5,6 +5,10 @@ mod marks;
 
 pub use from_markdown::markdown_to_adf;
 
+/// How deeply blocks may nest, in both directions: the reader truncates past
+/// it, and the writer refuses to produce what the reader would truncate.
+const MAX_DEPTH: usize = 50;
+
 use crate::markdown::common::normalize_whitespace;
 use serde_json::Value;
 

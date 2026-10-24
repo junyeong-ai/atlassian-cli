@@ -1,19 +1,32 @@
 use crate::markdown::common::parse_markdown;
+use anyhow::{Result, bail};
 use percent_encoding::percent_decode_str;
-use pulldown_cmark::{CodeBlockKind, Event, Tag, TagEnd, html};
+use pulldown_cmark::{CodeBlockKind, CowStr, Event, Tag, TagEnd, html};
 
 /// Convert Markdown to Confluence storage format.
 ///
 /// Storage format is XHTML, so the standard HTML rendering carries over with
 /// three substitutions: a code block becomes the `code` macro, strikethrough the
 /// span storage format documents for it, and an image `ac:image` — a URL when
-/// the source has a scheme, otherwise an attachment of the page by that name.
-/// Raw HTML passes through as CommonMark specifies; its tag names cannot carry
-/// a namespace, so storage-format macros (`ac:*`) need `--format storage`.
-pub fn markdown_to_confluence(markdown: &str) -> String {
+/// the source has a scheme, otherwise the page attachment named by its last path
+/// segment, the name `attachment upload` gives a file. Raw HTML stays literal
+/// text, as it does in ADF: HTML need not be well-formed XML, and Markdown tag
+/// names cannot carry the `ac:` namespace, so macros need `--format storage`.
+/// Characters XML cannot carry are refused, which keeps the output well-formed.
+pub fn markdown_to_confluence(markdown: &str) -> Result<String> {
+    if let Some((offset, character)) = markdown.char_indices().find(|&(_, c)| !is_xml_char(c)) {
+        let line = markdown[..offset].matches('\n').count() + 1;
+        bail!(
+            "Markdown contains U+{:04X} on line {line}, which storage format cannot carry; \
+             remove it",
+            u32::from(character)
+        );
+    }
+
     let mut events = Vec::new();
     let mut code: Option<(Option<String>, String)> = None;
-    let mut image: Option<(String, String)> = None;
+    let mut html_block: Option<String> = None;
+    let mut image: Option<Image> = None;
 
     for event in parse_markdown(markdown) {
         if let Some((language, body)) = code.as_mut() {
@@ -27,14 +40,36 @@ pub fn markdown_to_confluence(markdown: &str) -> String {
             }
             continue;
         }
-        if let Some((source, alt)) = image.as_mut() {
+        if let Some(block) = html_block.as_mut() {
+            match event {
+                Event::Html(text) => block.push_str(&text),
+                Event::End(TagEnd::HtmlBlock) => {
+                    events.push(Event::Start(Tag::Paragraph));
+                    for (index, line) in block.lines().filter(|l| !l.is_empty()).enumerate() {
+                        if index > 0 {
+                            events.push(Event::HardBreak);
+                        }
+                        events.push(Event::Text(CowStr::from(line.to_string())));
+                    }
+                    events.push(Event::End(TagEnd::Paragraph));
+                    html_block = None;
+                }
+                _ => {}
+            }
+            continue;
+        }
+        if let Some(open) = image.as_mut() {
             match event {
                 Event::Text(text) | Event::Code(text) | Event::InlineHtml(text) => {
-                    alt.push_str(&text)
+                    open.alt.push_str(&text)
                 }
-                Event::SoftBreak | Event::HardBreak => alt.push(' '),
+                Event::SoftBreak | Event::HardBreak => open.alt.push(' '),
+                Event::Start(Tag::Image { .. }) => open.nested += 1,
+                Event::End(TagEnd::Image) if open.nested > 0 => open.nested -= 1,
                 Event::End(TagEnd::Image) => {
-                    events.push(Event::InlineHtml(image_macro(source, alt).into()));
+                    events.push(Event::InlineHtml(
+                        image_macro(&open.source, &open.alt).into(),
+                    ));
                     image = None;
                 }
                 _ => {}
@@ -51,20 +86,38 @@ pub fn markdown_to_confluence(markdown: &str) -> String {
                 };
                 code = Some((language, String::new()));
             }
+            Event::Start(Tag::HtmlBlock) => html_block = Some(String::new()),
             Event::Start(Tag::Image { dest_url, .. }) => {
-                image = Some((dest_url.into_string(), String::new()));
+                image = Some(Image {
+                    source: dest_url.into_string(),
+                    alt: String::new(),
+                    nested: 0,
+                });
             }
             Event::Start(Tag::Strikethrough) => events.push(Event::InlineHtml(
                 r#"<span style="text-decoration: line-through;">"#.into(),
             )),
             Event::End(TagEnd::Strikethrough) => events.push(Event::InlineHtml("</span>".into())),
+            Event::Html(text) | Event::InlineHtml(text) => events.push(Event::Text(text)),
             other => events.push(other),
         }
     }
 
     let mut storage = String::new();
     html::push_html(&mut storage, events.into_iter());
-    storage
+    Ok(storage)
+}
+
+struct Image {
+    source: String,
+    alt: String,
+    /// Images opened inside this one's alt text, whose ends are not its own.
+    nested: usize,
+}
+
+/// The characters XML 1.0 admits; storage format is parsed as XML.
+fn is_xml_char(c: char) -> bool {
+    matches!(c, '\t' | '\n' | '\r' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..)
 }
 
 fn code_macro(language: Option<&str>, body: &str) -> String {
@@ -90,8 +143,9 @@ fn image_macro(source: &str, alt: &str) -> String {
     let resource = if has_scheme(source) {
         format!(r#"<ri:url ri:value="{}" />"#, escape(source))
     } else {
-        let filename = percent_decode_str(source).decode_utf8_lossy();
-        format!(r#"<ri:attachment ri:filename="{}" />"#, escape(&filename))
+        let path = percent_decode_str(source).decode_utf8_lossy();
+        let filename = path.rsplit('/').next().unwrap_or_default();
+        format!(r#"<ri:attachment ri:filename="{}" />"#, escape(filename))
     };
     format!(
         r#"<ac:image ac:alt="{}">{resource}</ac:image>"#,
@@ -120,10 +174,14 @@ fn escape(text: &str) -> String {
 mod tests {
     use super::*;
 
+    fn storage(markdown: &str) -> String {
+        markdown_to_confluence(markdown).unwrap()
+    }
+
     #[test]
     fn code_blocks_become_the_code_macro() {
         assert_eq!(
-            markdown_to_confluence("```rust\nlet end = \"]]>\";\n```\n\n    plain\n"),
+            storage("```rust\nlet end = \"]]>\";\n```\n\n    plain\n"),
             "<ac:structured-macro ac:name=\"code\">\
              <ac:parameter ac:name=\"language\">rust</ac:parameter>\
              <ac:plain-text-body><![CDATA[let end = \"]]]]><![CDATA[>\";]]></ac:plain-text-body>\
@@ -134,31 +192,43 @@ mod tests {
     }
 
     #[test]
-    fn images_reference_a_url_or_an_attachment_by_scheme() {
+    fn images_reference_a_url_or_the_attachment_upload_names() {
         assert_eq!(
-            markdown_to_confluence(
-                "![a \"chart\"](https://img.example/c.png?x=1&y=2) ![](<Screen Shot.png>) ![](my%20diagram.png)"
+            storage(
+                "![a \"chart\"](https://img.example/c.png?x=1&y=2) ![](<Screen Shot.png>) \
+                 ![](images/my%20diagram.png) ![a ![b](c) d](e.png)"
             ),
             "<p><ac:image ac:alt=\"a &quot;chart&quot;\">\
              <ri:url ri:value=\"https://img.example/c.png?x=1&amp;y=2\" /></ac:image> \
              <ac:image ac:alt=\"\"><ri:attachment ri:filename=\"Screen Shot.png\" /></ac:image> \
-             <ac:image ac:alt=\"\"><ri:attachment ri:filename=\"my diagram.png\" /></ac:image></p>\n"
+             <ac:image ac:alt=\"\"><ri:attachment ri:filename=\"my diagram.png\" /></ac:image> \
+             <ac:image ac:alt=\"a b d\"><ri:attachment ri:filename=\"e.png\" /></ac:image></p>\n"
         );
     }
 
     #[test]
-    fn markup_renders_as_storage_xhtml() {
+    fn markup_renders_as_storage_xhtml_and_raw_html_stays_text() {
         assert_eq!(
-            markdown_to_confluence(
-                "## Plan\n\n~~old~~ **new** & <u>raw</u> <ac:emoticon />\n\n\
-                 3. step\n\n| A | B |\n|---|---|\n| 1 | 2 |\n"
+            storage(
+                "## Plan\n\n~~old~~ **new** & <br> <ac:emoticon />\n\n\
+                 3. step\n\n| A | B |\n|---|---|\n| 1 | <br> |\n\n<div>\nkept\n</div>\n"
             ),
             "<h2>Plan</h2>\n\
              <p><span style=\"text-decoration: line-through;\">old</span> <strong>new</strong> &amp; \
-             <u>raw</u> &lt;ac:emoticon /&gt;</p>\n\
+             &lt;br&gt; &lt;ac:emoticon /&gt;</p>\n\
              <ol start=\"3\">\n<li>step</li>\n</ol>\n\
              <table><thead><tr><th>A</th><th>B</th></tr></thead><tbody>\n\
-             <tr><td>1</td><td>2</td></tr>\n</tbody></table>\n"
+             <tr><td>1</td><td>&lt;br&gt;</td></tr>\n</tbody></table>\n\
+             <p>&lt;div&gt;<br />\nkept<br />\n&lt;/div&gt;</p>\n"
         );
+    }
+
+    #[test]
+    fn characters_xml_cannot_carry_are_refused_with_their_line() {
+        let err = markdown_to_confluence("ok\n```\nx\u{1b}[31my\n```")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("U+001B on line 3"), "{err}");
+        assert!(markdown_to_confluence("tab\tand\r\nnewline").is_ok());
     }
 }

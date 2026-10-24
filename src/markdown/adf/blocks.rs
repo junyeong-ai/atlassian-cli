@@ -1,7 +1,6 @@
+use super::MAX_DEPTH;
 use super::inline::convert_inline_nodes;
 use serde_json::Value;
-
-const MAX_DEPTH: usize = 50;
 
 pub fn convert_block_node(node: &Value, depth: usize, list_depth: usize) -> Option<String> {
     if depth > MAX_DEPTH {
