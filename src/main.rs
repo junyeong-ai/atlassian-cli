@@ -112,7 +112,8 @@ async fn run(cli: Cli) -> Result<()> {
 /// Exit codes, stable for scripted callers: 1 generic, 2 CLI usage (clap),
 /// 3 auth (401/403), 4 not found (404), 5 rate limited (429),
 /// 6 server error (5xx). API failures carry `status`/`operation` (and
-/// `hint` when remediation is known) alongside `message`.
+/// `hint` when remediation is known) alongside `message`; a 429 adds
+/// `retryAfterSeconds` and `rateLimitReason` when the server sent them.
 async fn handle_self(cmd: SelfCommand) -> Result<serde_json::Value> {
     use atlassian_cli::dist;
 
@@ -687,6 +688,13 @@ fn render_error(err: &anyhow::Error) -> (i32, String) {
         if let Some(hint) = api.hint {
             error["hint"] = hint.into();
         }
+        if let Some(wait) = api.retry_after {
+            error["retryAfterSeconds"] =
+                (wait.as_secs() + u64::from(wait.subsec_nanos() > 0)).into();
+        }
+        if let Some(reason) = &api.rate_limit_reason {
+            error["rateLimitReason"] = reason.clone().into();
+        }
         code = match api.status.as_u16() {
             401 | 403 => 3,
             404 => 4,
@@ -1105,6 +1113,25 @@ mod tests {
             include_str!("../docs/cli.md"),
             "regenerate docs/cli.md with cargo run --locked --example cli_reference > docs/cli.md"
         );
+    }
+
+    /// A rate-limited failure tells the caller how long to wait and which
+    /// limit it reached, in fields it can read without parsing the message.
+    #[test]
+    fn a_rate_limit_error_carries_its_wait_and_reason() {
+        let error = anyhow::Error::from(atlassian_cli::ApiError {
+            operation: "add comment".into(),
+            status: reqwest::StatusCode::TOO_MANY_REQUESTS,
+            body: String::new(),
+            hint: None,
+            retry_after: Some(std::time::Duration::from_millis(1500)),
+            rate_limit_reason: Some("jira-burst-based".into()),
+        });
+        let (code, payload) = render_error(&error);
+        let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(code, 5);
+        assert_eq!(payload["error"]["retryAfterSeconds"], 2);
+        assert_eq!(payload["error"]["rateLimitReason"], "jira-burst-based");
     }
 
     /// Scripts written against `--format html` keep working; the value it

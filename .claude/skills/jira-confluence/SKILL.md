@@ -207,7 +207,9 @@ Runtime failures print a single-line JSON object to **stderr**; stdout stays res
 {"error":{"message":"Failed to get issue (404 Not Found): ...","operation":"get issue","status":404}}
 ```
 
-Parse `status`/`operation` instead of regexing the message; `hint` (present only when a known remediation exists, e.g. a 401 from an API token sent to the host that refuses its shape) is the remediation to relay to the user. Exit codes: `0` ok, `1` generic, `2` usage, `3` auth (401/403), `4` not found, `5` rate limited (429 — at most three retries; waits over 60 seconds and multipart uploads return without replay), `6` server error (5xx).
+Parse `status`/`operation` instead of regexing the message; `hint` (present only when a known remediation exists, e.g. a 401 from an API token sent to the host that refuses its shape) is the remediation to relay to the user. Exit codes: `0` ok, `1` generic, `2` usage, `3` auth (401/403), `4` not found, `5` rate limited (429), `6` server error (5xx).
+
+Reads and idempotent writes retry a 429 up to three times. Any other write returns it at once, because it may already have been applied: check whether it took effect (list the comments, search for the issue) before sending it again. A 429 error carries `retryAfterSeconds` and `rateLimitReason`. Wait at least `retryAfterSeconds` before repeating anything; a wait of minutes means an hourly quota is spent, so stop and report it instead of retrying.
 
 ## Authentication
 

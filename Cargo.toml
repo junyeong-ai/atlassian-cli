@@ -36,6 +36,7 @@ htmd = "0.5.6"
 pulldown-cmark = { version = "0.13.5", default-features = false, features = ["html"] }
 regex = "1.13.1"
 percent-encoding = "2.3.2"
+fastrand = "2.5.0"
 httpdate = "1.0.3"
 shlex = "2.0.1"
 

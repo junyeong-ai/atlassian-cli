@@ -86,10 +86,13 @@ only where their contracts are the same.
   contribute their path and query, never their authority.
 - Percent-encode identifiers with `http_utils::encode_path_segment`; use the
   request query builder for parameter values. Validate cloud IDs before routing.
-- Retry only replayable 429 responses, at most three times, refreshing
-  authorization before each retry. Respect both forms of `Retry-After`; surface
-  waits over 60 seconds to the caller instead of retrying early. Multipart
-  request bodies are not replayed. Never automatically retry ambiguous writes.
+- Retry a 429 automatically only for idempotent requests: an idempotent method,
+  or a POST declared idempotent through `ApiClient::execute_idempotent`. Atlassian does not
+  promise a rate-limited request went unprocessed, so other writes return the
+  429 with `retryAfterSeconds` and `rateLimitReason`. Retry at most three times
+  with jitter, refreshing authorization before each retry. Respect both forms of
+  `Retry-After`; surface waits over 60 seconds to the caller instead of retrying
+  early. Multipart bodies are not replayed, and no other failure is retried.
 - Pagination validates the raw collection and end signal before filtering each
   result. Use the existing Jira page contracts and Confluence cursor walker.
 - Jira search uses `/rest/api/3/search/jql`. Agile uses `/rest/agile/1.0`.

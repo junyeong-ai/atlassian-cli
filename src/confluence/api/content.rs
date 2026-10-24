@@ -28,7 +28,7 @@ pub async fn add_label(page_id: &str, label: &str, client: &ApiClient) -> Result
         .await?
         .header("Content-Type", "application/json")
         .json(&request_body);
-    client.execute("add label", request).await?;
+    client.execute_idempotent("add label", request).await?;
 
     Ok(json!({}))
 }

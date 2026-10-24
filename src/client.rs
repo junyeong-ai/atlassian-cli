@@ -17,6 +17,16 @@ const RATE_LIMIT_DELAY_CAP: Duration = Duration::from_secs(60);
 /// parseable `Retry-After` (doubles per attempt: 500ms, 1s, 2s).
 const RATE_LIMIT_BACKOFF_BASE: Duration = Duration::from_millis(500);
 
+/// Up to this fraction of each wait is added at random, so clients limited
+/// together do not retry together.
+const RATE_LIMIT_JITTER: f64 = 0.3;
+
+const NOT_REPLAYED_HINT: &str = "not retried automatically because repeating this request \
+    could apply it twice; check whether it took effect before sending it again";
+
+const WAIT_OVER_CAP_HINT: &str = "Retry-After exceeds the 60-second automatic wait limit; wait \
+    for the server's requested interval before trying again";
+
 /// A non-2xx response from the Atlassian API.
 ///
 /// Every API call surfaces failures through this type (via
@@ -32,6 +42,10 @@ pub struct ApiError {
     /// server response (e.g. a scoped token used with basic auth). Surfaced
     /// as a discrete field in the CLI's structured error output.
     pub hint: Option<&'static str>,
+    /// The wait a 429's `Retry-After` asked for.
+    pub retry_after: Option<Duration>,
+    /// A 429's `RateLimit-Reason`, naming the limit that was reached.
+    pub rate_limit_reason: Option<String>,
 }
 
 impl std::fmt::Display for ApiError {
@@ -46,30 +60,34 @@ impl std::fmt::Display for ApiError {
 
 impl std::error::Error for ApiError {}
 
+/// The wait `Retry-After` asks for, in either of its forms.
+fn retry_after(headers: &reqwest::header::HeaderMap, now: SystemTime) -> Option<Duration> {
+    let value = headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim();
+    if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
+        Some(
+            value
+                .parse::<u64>()
+                .map(Duration::from_secs)
+                .unwrap_or(Duration::MAX),
+        )
+    } else {
+        httpdate::parse_http_date(value)
+            .ok()
+            .map(|deadline| deadline.duration_since(now).unwrap_or_default())
+    }
+}
+
 /// `None` means the server requires a longer wait than automatic retries allow.
 fn rate_limit_delay(
     headers: &reqwest::header::HeaderMap,
     attempt: u32,
     now: SystemTime,
 ) -> Option<Duration> {
-    let delay = headers
-        .get(reqwest::header::RETRY_AFTER)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| {
-            let value = s.trim();
-            if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
-                Some(
-                    value
-                        .parse::<u64>()
-                        .map(Duration::from_secs)
-                        .unwrap_or(Duration::MAX),
-                )
-            } else {
-                httpdate::parse_http_date(value)
-                    .ok()
-                    .map(|deadline| deadline.duration_since(now).unwrap_or_default())
-            }
-        })
+    let delay = retry_after(headers, now)
         .unwrap_or_else(|| RATE_LIMIT_BACKOFF_BASE * 2u32.saturating_pow(attempt));
     (delay <= RATE_LIMIT_DELAY_CAP).then_some(delay)
 }
@@ -221,45 +239,74 @@ impl ApiClient {
         self.request(reqwest::Method::DELETE, service, path).await
     }
 
-    /// Send a prepared request, retrying rate-limited attempts and converting
-    /// any non-2xx response into a typed [`ApiError`] named after `operation`.
+    /// Send a prepared request and convert any non-2xx response into a typed
+    /// [`ApiError`] named after `operation`.
     ///
-    /// Only 429 is retried: it is the one status that guarantees the server
-    /// did not process the request, so a retry is safe even for
-    /// non-idempotent writes (retrying 5xx could duplicate a write that the
-    /// server committed before failing). The wait honors `Retry-After` and
-    /// falls back to exponential backoff; because the wait can cross a
-    /// token's refresh threshold, each retry re-derives the `Authorization`
-    /// header instead of replaying the one built before the wait. Requests
-    /// with a streaming body (multipart uploads) cannot be cloned and are
-    /// sent exactly once.
+    /// A 429 is retried only when the method makes the request idempotent, as
+    /// Atlassian's rate-limiting guidance requires: it does not promise that a
+    /// rate-limited request went unprocessed, so repeating a POST could apply
+    /// it twice. Idempotent POSTs go through
+    /// [`execute_idempotent`](Self::execute_idempotent).
+    /// Other failures, 5xx included, are never retried. Each wait honors
+    /// `Retry-After` with jitter added, and each retry re-derives the
+    /// `Authorization` header because the wait can cross a token's refresh
+    /// threshold. Streaming bodies (multipart uploads) cannot be cloned and are
+    /// sent once.
     pub async fn execute(
         &self,
         operation: &str,
         request: reqwest::RequestBuilder,
     ) -> Result<reqwest::Response> {
-        let mut request = request.build()?;
+        let request = request.build()?;
+        let idempotent = request.method().is_idempotent();
+        self.send(operation, request, idempotent).await
+    }
+
+    /// [`execute`](Self::execute) for a POST that is safe to repeat after a
+    /// 429: a read such as a JQL search, or a write that sets a state rather
+    /// than adding to one, such as moving issues to a sprint.
+    pub async fn execute_idempotent(
+        &self,
+        operation: &str,
+        request: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response> {
+        self.send(operation, request.build()?, true).await
+    }
+
+    async fn send(
+        &self,
+        operation: &str,
+        mut request: reqwest::Request,
+        idempotent: bool,
+    ) -> Result<reqwest::Response> {
         let mut attempt: u32 = 0;
         loop {
-            let retry = request.try_clone();
+            let retry = if idempotent {
+                request.try_clone()
+            } else {
+                None
+            };
+            let replayable = retry.is_some();
             let response = self.http.execute(request).await?;
             let status = response.status();
             if status.is_success() {
                 return Ok(response);
             }
+            let rate_limited = status == StatusCode::TOO_MANY_REQUESTS;
             let delay = rate_limit_delay(response.headers(), attempt, SystemTime::now());
-            if status == StatusCode::TOO_MANY_REQUESTS
+            if rate_limited
                 && attempt < MAX_RATE_LIMIT_RETRIES
                 && let Some(delay) = delay
                 && let Some(mut next) = retry
             {
+                let wait = delay.mul_f64(1.0 + RATE_LIMIT_JITTER * fastrand::f64());
                 tracing::warn!(
                     operation,
                     attempt = attempt + 1,
-                    delay_ms = delay.as_millis() as u64,
+                    delay_ms = wait.as_millis() as u64,
                     "rate limited (429), retrying"
                 );
-                tokio::time::sleep(delay).await;
+                tokio::time::sleep(wait).await;
                 let authorization = self.strategy.authorization(&self.http).await?;
                 next.headers_mut().insert(
                     reqwest::header::AUTHORIZATION,
@@ -269,16 +316,31 @@ impl ApiClient {
                 attempt += 1;
                 continue;
             }
+            let (retry_after, rate_limit_reason) = if rate_limited {
+                let headers = response.headers();
+                (
+                    retry_after(headers, SystemTime::now()),
+                    headers
+                        .get("RateLimit-Reason")
+                        .and_then(|value| value.to_str().ok())
+                        .map(str::to_string),
+                )
+            } else {
+                (None, None)
+            };
+            let hint = match (rate_limited, replayable, delay) {
+                (true, false, _) => Some(NOT_REPLAYED_HINT),
+                (true, true, None) => Some(WAIT_OVER_CAP_HINT),
+                _ => self.error_hint(status),
+            };
             let body = response.text().await.unwrap_or_default();
             return Err(ApiError {
                 operation: operation.to_string(),
                 status,
                 body,
-                hint: if status == StatusCode::TOO_MANY_REQUESTS && delay.is_none() {
-                    Some("Retry-After exceeds the 60-second automatic wait limit; wait for the server's requested interval before trying again")
-                } else {
-                    self.error_hint(status)
-                },
+                hint,
+                retry_after,
+                rate_limit_reason,
             }
             .into());
         }
@@ -464,19 +526,78 @@ mod tests {
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let server = MockServer::start().await;
-        Mock::given(method("POST"))
+        Mock::given(method("GET"))
             .and(path("/probe"))
             .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "3600"))
             .expect(1)
             .mount(&server)
             .await;
         let client = mock_client(server.uri());
+        let request = client.get(Service::Jira, "/probe").await.unwrap();
+        let error = client.execute("probe", request).await.unwrap_err();
+        let api = error.downcast_ref::<ApiError>().unwrap();
+        assert_eq!(api.status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(api.retry_after, Some(Duration::from_secs(3600)));
+        assert_eq!(api.hint, Some(WAIT_OVER_CAP_HINT));
+    }
+
+    /// A POST may already have been applied when Atlassian answers 429, so it
+    /// is returned at once with what the caller needs to decide: how long the
+    /// server asked it to wait and which limit it reached.
+    #[tokio::test]
+    async fn execute_returns_a_rate_limited_write_without_repeating_it() {
+        use crate::test_utils::mock_client;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/probe"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("Retry-After", "2")
+                    .insert_header("RateLimit-Reason", "jira-per-issue-on-write"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = mock_client(server.uri());
         let request = client.post(Service::Jira, "/probe").await.unwrap();
         let error = client.execute("probe", request).await.unwrap_err();
+        let api = error.downcast_ref::<ApiError>().unwrap();
+        assert_eq!(api.status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(api.retry_after, Some(Duration::from_secs(2)));
         assert_eq!(
-            error.downcast_ref::<ApiError>().unwrap().status,
-            StatusCode::TOO_MANY_REQUESTS
+            api.rate_limit_reason.as_deref(),
+            Some("jira-per-issue-on-write")
         );
+        assert_eq!(api.hint, Some(NOT_REPLAYED_HINT));
+    }
+
+    #[tokio::test]
+    async fn execute_idempotent_retries_a_rate_limited_post() {
+        use crate::test_utils::mock_client;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/search"))
+            .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "0"))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/search"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = mock_client(server.uri());
+        let request = client.post(Service::Jira, "/search").await.unwrap();
+        let response = client.execute_idempotent("search", request).await.unwrap();
+        assert_eq!(response.status(), 200);
     }
 
     #[tokio::test]

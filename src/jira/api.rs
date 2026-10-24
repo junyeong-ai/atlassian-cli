@@ -61,7 +61,7 @@ pub async fn add_watcher(issue_key: &str, client: &ApiClient) -> Result<Value> {
         .post(Service::Jira, &path)
         .await?
         .header("Content-Type", "application/json");
-    client.execute("add watcher", request).await?;
+    client.execute_idempotent("add watcher", request).await?;
 
     Ok(json!({}))
 }

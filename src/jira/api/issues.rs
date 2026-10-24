@@ -90,7 +90,7 @@ pub async fn search(
         .await?
         .header("Content-Type", "application/json")
         .json(&body);
-    let response = client.execute("search", request).await?;
+    let response = client.execute_idempotent("search", request).await?;
 
     let data: Value = response.json().await?;
 
@@ -150,7 +150,7 @@ pub async fn search_all(
             .await?
             .header("Content-Type", "application/json")
             .json(&body);
-        let response = client.execute("search", request).await?;
+        let response = client.execute_idempotent("search", request).await?;
 
         let data: Value = response.json().await?;
 

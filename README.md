@@ -449,7 +449,7 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 {"error":{"message":"Failed to get issue (404 Not Found): ...","operation":"get issue","status":404}}
 ```
 
-API 실패에는 `status`/`operation`이 포함되고, 알려진 해결책이 있으면 `hint` 필드가 붙습니다 (예: `basic` 인증에 scoped 토큰 사용). 복제 가능한 요청의 429 (rate limit)는 최대 3회 재시도합니다. `Retry-After`의 초 단위·HTTP 날짜 형식을 지원하며, 대기 시간이 60초를 넘으면 조기 재시도 없이 종료 코드 `5`로 반환합니다. Multipart 업로드는 자동 재시도하지 않습니다.
+API 실패에는 `status`/`operation`이 포함되고, 알려진 해결책이 있으면 `hint` 필드가 붙습니다 (예: `basic` 인증에 scoped 토큰 사용). 429 (rate limit)는 읽기와 멱등 요청만 최대 3회 재시도합니다. 그 밖의 쓰기는 이미 적용됐을 수 있어 바로 종료 코드 `5`로 반환하며, 오류에 `retryAfterSeconds`와 `rateLimitReason`이 붙습니다. `Retry-After`의 초 단위·HTTP 날짜 형식을 지원하고, 대기 시간이 60초를 넘으면 재시도하지 않고 반환합니다.
 
 | 종료 코드 | 의미 |
 |---|---|

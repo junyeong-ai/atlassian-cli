@@ -97,15 +97,18 @@ async fn post_issue_batches(
             .await?
             .header("Content-Type", "application/json")
             .json(&body);
-        client.execute(operation, request).await.map_err(|err| {
-            if processed == 0 {
-                err
-            } else {
-                err.context(format!(
-                    "Failed to {operation} after {processed}/{total} issues already processed"
-                ))
-            }
-        })?;
+        client
+            .execute_idempotent(operation, request)
+            .await
+            .map_err(|err| {
+                if processed == 0 {
+                    err
+                } else {
+                    err.context(format!(
+                        "Failed to {operation} after {processed}/{total} issues already processed"
+                    ))
+                }
+            })?;
 
         processed += chunk.len();
     }

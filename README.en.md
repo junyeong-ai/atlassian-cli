@@ -505,9 +505,10 @@ on the rest — so read the exit code rather than the presence of output:
 
 API failures include `status` and `operation`; a `hint` field appears when a
 known remediation exists (e.g. an API token sent to the host that refuses its
-shape). Replayable requests retry 429 responses up to three times. `Retry-After`
-supports seconds and HTTP dates; waits over 60 seconds return exit code `5`
-without retrying early. Multipart uploads are not automatically retried.
+shape). Reads and idempotent requests retry 429 responses up to three times;
+any other write may already have been applied, so it returns exit code `5` at
+once with `retryAfterSeconds` and `rateLimitReason`. `Retry-After` supports
+seconds and HTTP dates; waits over 60 seconds return without retrying.
 
 | Exit code | Meaning |
 |---|---|
