@@ -1,6 +1,6 @@
 ---
 name: jira-confluence
-version: 0.13.9
+version: 0.14.0
 description: Searches, reads and edits Atlassian Cloud Jira issues and Confluence pages through atlassian-cli, in Markdown both ways, including comments, links, worklogs, sprints, epics, attachments and user lookup. Use when the user mentions Jira, Confluence, an issue key, JQL or CQL, or a wiki page, or asks to diagnose atlassian-cli authentication or manage its installation.
 allowed-tools: Bash
 ---
