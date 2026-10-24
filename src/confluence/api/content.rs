@@ -201,8 +201,9 @@ pub async fn get_attachments(page_id: &str, client: &ApiClient) -> Result<Value>
 /// for agent retries. The `X-Atlassian-Token: nocheck` header is required by
 /// Confluence to bypass its XSRF check on multipart uploads.
 ///
-/// Under OAuth this needs the `write:attachment:confluence` scope (basic-auth
-/// tokens carry the user's own permissions and are unaffected).
+/// Under OAuth this needs `write:confluence-file`, or the granular
+/// `write:attachment:confluence` with `read:content-details:confluence`
+/// (basic-auth tokens carry the user's own permissions and are unaffected).
 pub async fn upload_attachment(
     page_id: &str,
     file_path: &str,

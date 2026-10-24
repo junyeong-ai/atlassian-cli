@@ -188,10 +188,14 @@ refresh token이 있는 세션은 만료 5분 전에 갱신됩니다. 기본 Jir
 | `sprint list` | `read:sprint:jira-software` | [Board sprints](https://developer.atlassian.com/cloud/jira/software/rest/api-group-board/#api-rest-agile-1-0-board-boardid-sprint-get) |
 | `sprint move` | `write:sprint:jira-software` | [Sprint](https://developer.atlassian.com/cloud/jira/software/rest/api-group-sprint/) |
 | `sprint backlog` | `write:board-scope:jira-software` | [Backlog](https://developer.atlassian.com/cloud/jira/software/rest/api-group-backlog/) |
-| Confluence 검색과 페이지 읽기 | `read:confluence-content.all`, `read:page:confluence`, `read:space:confluence` | [Confluence v2](https://developer.atlassian.com/cloud/confluence/rest/v2/intro/) |
-| `confluence children` | `read:hierarchical-content:confluence` | [Page](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-page/) |
+| `confluence search` | `search:confluence`, `read:confluence-content.all` | [Search](https://developer.atlassian.com/cloud/confluence/rest/v1/api-group-search/) |
+| `confluence get`, `confluence label list`, `confluence property list` | `read:page:confluence` | [Page](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-page/) |
+| `confluence comment` 읽기 | `read:comment:confluence` | [Comment](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-comment/) |
+| `confluence attachment list` | `read:attachment:confluence` | [Attachment](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-attachment/) |
+| `confluence space` | `read:space:confluence` | [Space](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-space/) |
+| `confluence children` | `read:hierarchical-content:confluence` | [Children](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-children/) |
 
-Confluence 쓰기에는 쓰기 전에 하는 읽기까지 포함해, 호출하는 모든 엔드포인트의 scope가 필요합니다. 속성 변경에는 `read:page:confluence`와 `write:page:confluence`가, 댓글 삭제에는 `delete:comment:confluence`가 필요합니다. 앱에 scope를 허용하고 프로파일에 추가한 뒤에는 `auth login`을 다시 실행합니다. 기존 토큰에는 새 scope가 붙지 않습니다.
+Confluence 쓰기에는 쓰기 전에 하는 읽기까지 포함해, 호출하는 모든 엔드포인트의 scope가 필요합니다. 속성 변경에는 `read:page:confluence`와 `write:page:confluence`가, 댓글 삭제에는 `delete:comment:confluence`가 필요합니다. v1 API를 쓰는 라벨 추가·삭제에는 `write:confluence-content`가, 첨부 업로드에는 `write:confluence-file`이 필요합니다. 앱에 scope를 허용하고 프로파일에 추가한 뒤에는 `auth login`을 다시 실행합니다. 기존 토큰에는 새 scope가 붙지 않습니다.
 
 > **헤드리스와 AI 에이전트:** 데스크톱 OS에서는 키체인이 GUI 프롬프트에서 멈출 수 있습니다. 실행 환경에 `ATLASSIAN_NO_KEYCHAIN=1`을 설정하면 0600 파일 저장소를 쓰며, 이 값은 계속 유지해야 합니다. 설정되어 있는 동안 `auth logout`은 파일 저장소만 지웁니다.
 

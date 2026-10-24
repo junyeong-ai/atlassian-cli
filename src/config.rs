@@ -998,10 +998,11 @@ impl Config {
 # client_secret = "..."  # Prefer ATLASSIAN_CLIENT_SECRET env var
 # redirect_port = 8976   # MUST match the URI registered at developer.atlassian.com
 # scopes = ["read:jira-user", "read:jira-work", "write:jira-work",
-#           "read:confluence-content.all", "read:page:confluence",
-#           "read:space:confluence", "offline_access"]
-# These Confluence grants cover search, page reads and space reads; writes need
-# the scopes of each endpoint, including any read performed before the write.
+#           "search:confluence", "read:confluence-content.all",
+#           "read:page:confluence", "read:space:confluence", "offline_access"]
+# These Confluence grants cover search with page bodies, page reads and space
+# reads; writes need the scopes of each endpoint, including any read performed
+# before the write.
 # cloud_id = "..."  # Pin to one site if the user has access to many
 
 [default.jira]
@@ -1031,16 +1032,17 @@ impl Config {
 # Choose scopes for the endpoints you use.
 # Jira Software scope reference:
 # https://developer.atlassian.com/cloud/jira/software/scopes-for-oauth-2-3LO-and-forge-apps/
-# Example: core Jira operations plus epic assignment/removal.
-# [epics]
-# [epics.auth]
+# Example: core Jira operations plus boards and sprints.
+# [agile]
+# [agile.auth]
 # method = "oauth"
 # client_id = "..."
 # scopes = [
 #   "read:jira-user", "read:jira-work", "write:jira-work",
-#   "write:epic:jira-software", "offline_access",
+#   "read:board-scope:jira-software", "read:project:jira",
+#   "read:sprint:jira-software", "write:sprint:jira-software", "offline_access",
 # ]
-# Then: atlassian-cli --profile epics auth login
+# Then: atlassian-cli --profile agile auth login
 
 "#;
 

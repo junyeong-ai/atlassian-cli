@@ -188,10 +188,14 @@ Sessions with a refresh token refresh five minutes before expiry. Request only t
 | `sprint list` | `read:sprint:jira-software` | [Board sprints](https://developer.atlassian.com/cloud/jira/software/rest/api-group-board/#api-rest-agile-1-0-board-boardid-sprint-get) |
 | `sprint move` | `write:sprint:jira-software` | [Sprint](https://developer.atlassian.com/cloud/jira/software/rest/api-group-sprint/) |
 | `sprint backlog` | `write:board-scope:jira-software` | [Backlog](https://developer.atlassian.com/cloud/jira/software/rest/api-group-backlog/) |
-| Confluence search and page reads | `read:confluence-content.all`, `read:page:confluence`, `read:space:confluence` | [Confluence v2](https://developer.atlassian.com/cloud/confluence/rest/v2/intro/) |
-| `confluence children` | `read:hierarchical-content:confluence` | [Page](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-page/) |
+| `confluence search` | `search:confluence`, `read:confluence-content.all` | [Search](https://developer.atlassian.com/cloud/confluence/rest/v1/api-group-search/) |
+| `confluence get`, `confluence label list`, `confluence property list` | `read:page:confluence` | [Page](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-page/) |
+| `confluence comment` reads | `read:comment:confluence` | [Comment](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-comment/) |
+| `confluence attachment list` | `read:attachment:confluence` | [Attachment](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-attachment/) |
+| `confluence space` | `read:space:confluence` | [Space](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-space/) |
+| `confluence children` | `read:hierarchical-content:confluence` | [Children](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-children/) |
 
-Confluence writes need the scopes of every endpoint they call, including a read before the write: property changes need `read:page:confluence` and `write:page:confluence`, and comment deletion needs `delete:comment:confluence`. After enabling a scope on the app and adding it to the profile, run `auth login` again; an existing token does not gain it.
+Confluence writes need the scopes of every endpoint they call, including a read before the write: property changes need `read:page:confluence` and `write:page:confluence`, and comment deletion needs `delete:comment:confluence`. Label writes and uploads go through the v1 API and need `write:confluence-content` and `write:confluence-file`. After enabling a scope on the app and adding it to the profile, run `auth login` again; an existing token does not gain it.
 
 > **Headless and AI agents:** on a desktop OS the keychain can block on a GUI prompt. Set `ATLASSIAN_NO_KEYCHAIN=1` for the environment to use the 0600 file store instead, and keep it set; while it is set, `auth logout` clears only the file store.
 
