@@ -1,14 +1,12 @@
 use super::{AGILE_PAGE, list_envelope, paginate};
 use crate::client::{ApiClient, Service};
-use crate::http_utils::encode_path_segment;
 use anyhow::Result;
 use serde_json::{Value, json};
 
 /// Maximum issues per POST for Atlassian's Agile bulk endpoints
-/// (`sprint/{id}/issue`, `backlog/issue`, `epic/{key}/issue`,
-/// `epic/none/issue`). Hard-coded by Atlassian — exceeding it returns 400
-/// and the whole batch is rejected. Do not raise without confirming the
-/// upstream contract has changed.
+/// (`sprint/{id}/issue`, `backlog/issue`). Hard-coded by Atlassian — exceeding
+/// it returns 400 and the whole batch is rejected. Do not raise without
+/// confirming the upstream contract has changed.
 const AGILE_BULK_LIMIT: usize = 50;
 
 /// A project's boards, as the API sent them.
@@ -130,28 +128,6 @@ pub async fn move_issues_to_backlog(issues: &[String], client: &ApiClient) -> Re
         "/rest/agile/1.0/backlog/issue",
         issues,
         "move issues to backlog",
-        client,
-    )
-    .await
-}
-
-pub async fn assign_issues_to_epic(
-    epic_key: &str,
-    issues: &[String],
-    client: &ApiClient,
-) -> Result<Value> {
-    let path = format!(
-        "/rest/agile/1.0/epic/{}/issue",
-        encode_path_segment(epic_key)
-    );
-    post_issue_batches(&path, issues, "assign issues to epic", client).await
-}
-
-pub async fn unassign_issues_from_epic(issues: &[String], client: &ApiClient) -> Result<Value> {
-    post_issue_batches(
-        "/rest/agile/1.0/epic/none/issue",
-        issues,
-        "unassign issues from epic",
         client,
     )
     .await

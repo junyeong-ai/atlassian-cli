@@ -11,8 +11,8 @@ use tokio::time::sleep;
 
 mod issues;
 pub use issues::{
-    create_issue, delete_issue, get_issue, get_transitions, search, search_all, transition_issue,
-    update_issue,
+    assign_issues_to_epic, create_issue, delete_issue, get_issue, get_transitions, search,
+    search_all, transition_issue, unassign_issues_from_epic, update_issue,
 };
 mod comments;
 pub use comments::{add_comment, delete_comment, get_comments, update_comment};
@@ -22,8 +22,7 @@ mod worklogs;
 pub use worklogs::{add_worklog, get_worklogs, remove_worklog, update_worklog};
 mod agile;
 pub use agile::{
-    assign_issues_to_epic, get_boards, get_sprints, move_issues_to_backlog, move_issues_to_sprint,
-    resolve_board_id, unassign_issues_from_epic,
+    get_boards, get_sprints, move_issues_to_backlog, move_issues_to_sprint, resolve_board_id,
 };
 
 const MAX_RESULTS_PER_PAGE: u32 = 100;

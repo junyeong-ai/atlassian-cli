@@ -258,7 +258,6 @@ Add only the scopes needed for the commands you use, beyond the core Jira grants
 | `sprint list --board` | `read:sprint:jira-software` | [Board sprints](https://developer.atlassian.com/cloud/jira/software/rest/api-group-board/#api-rest-agile-1-0-board-boardid-sprint-get) |
 | `sprint move` | `write:sprint:jira-software` | [Sprint](https://developer.atlassian.com/cloud/jira/software/rest/api-group-sprint/) |
 | `sprint backlog` | `write:board-scope:jira-software` | [Backlog](https://developer.atlassian.com/cloud/jira/software/rest/api-group-backlog/) |
-| `epic assign/unassign` | `write:epic:jira-software` | [Epic](https://developer.atlassian.com/cloud/jira/software/rest/api-group-epic/) |
 
 For Confluence writes, check the [scope requirements of each endpoint](https://developer.atlassian.com/cloud/confluence/rest/v2/intro/). Page-property changes need `read:page:confluence` and `write:page:confluence`; comment deletion needs `delete:comment:confluence`. Commands that read before writing need both steps' grants. Enable scopes on the app, request them in the profile, then run `auth login` to authorize again.
 

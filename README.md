@@ -202,7 +202,6 @@ redirect_port = 8976       # OAuth app 에 등록한 redirect URI 와 일치 (12
 | `sprint list --board` | `read:sprint:jira-software` | [Board sprints](https://developer.atlassian.com/cloud/jira/software/rest/api-group-board/#api-rest-agile-1-0-board-boardid-sprint-get) |
 | `sprint move` | `write:sprint:jira-software` | [Sprint](https://developer.atlassian.com/cloud/jira/software/rest/api-group-sprint/) |
 | `sprint backlog` | `write:board-scope:jira-software` | [Backlog](https://developer.atlassian.com/cloud/jira/software/rest/api-group-backlog/) |
-| `epic assign/unassign` | `write:epic:jira-software` | [Epic](https://developer.atlassian.com/cloud/jira/software/rest/api-group-epic/) |
 
 Confluence 쓰기에는 [각 API의 scope](https://developer.atlassian.com/cloud/confluence/rest/v2/intro/)를 확인하세요. 페이지 속성 변경은 `read:page:confluence`와 `write:page:confluence`, 댓글 삭제는 `delete:comment:confluence`가 필요합니다. 조회 후 변경하는 명령은 두 단계의 권한이 모두 필요합니다. 앱에 scope를 부여하고 프로파일에 명시한 뒤 `auth login`으로 다시 동의하세요.
 

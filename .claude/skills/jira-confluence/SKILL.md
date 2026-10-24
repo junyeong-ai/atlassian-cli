@@ -112,9 +112,9 @@ atlassian-cli jira epic unassign PROJ-1             # detach from its epic
 
 Board/sprint commands use the agile API. Pass `--project` to let the CLI resolve the board; if the project has several boards it lists them and asks for `--board`.
 
-`epic assign`/`unassign` call the agile epic endpoints, which Atlassian documents as not working for epics in **team-managed** (next-gen) projects. The `parent` field works for every project type: pass `--parent EPIC-1` when creating, or set it after with `jira update KEY '{"parent":{"key":"EPIC-1"}}'`. A sub-task is the same field and cannot be created without it: Jira takes the parent on the create screen, so there is no issue to update into place.
+An issue's epic is its `parent`, in company-managed and team-managed projects alike. `epic assign` sets it and `epic unassign` clears it, one issue at a time; a failure names the issue it stopped at and how many were already edited. Pass `--parent EPIC-1` to set it while creating. A sub-task's parent is the same field, required at creation and never cleared.
 
-OAuth agile commands require endpoint-specific grants beyond core Jira scopes. Board discovery needs `read:board-scope:jira-software` and `read:project:jira`; sprint reads need `read:sprint:jira-software`; sprint moves need `write:sprint:jira-software`; moving to backlog needs `write:board-scope:jira-software`; epic assign/unassign needs `write:epic:jira-software`. `sprint list --project` also performs board discovery. Use only the grants needed for the requested operations; see the [Software scope reference](https://developer.atlassian.com/cloud/jira/software/scopes-for-oauth-2-3LO-and-forge-apps/).
+OAuth agile commands require endpoint-specific grants beyond core Jira scopes. Board discovery needs `read:board-scope:jira-software` and `read:project:jira`; sprint reads need `read:sprint:jira-software`; sprint moves need `write:sprint:jira-software`; moving to backlog needs `write:board-scope:jira-software`. Epic membership is an issue edit and needs only `write:jira-work`. `sprint list --project` also performs board discovery. Use only the grants needed for the requested operations; see the [Software scope reference](https://developer.atlassian.com/cloud/jira/software/scopes-for-oauth-2-3LO-and-forge-apps/).
 
 ### Rich text
 

@@ -2130,52 +2130,123 @@ async fn integ_move_issues_to_sprint_body() {
 }
 
 #[tokio::test]
-async fn integ_assign_issues_to_epic_encodes_path_segment() {
-    let server = MockServer::start().await;
-    // Use an epic key that REQUIRES encoding so the test fails if the
-    // encoder is removed. Space → %20, slash → %2F, bracket → %5B/%5D.
-    Mock::given(method("POST"))
-        .and(path("/rest/agile/1.0/epic/EPIC%2042%2Falpha%5Bv1%5D/issue"))
-        .and(body_json(json!({ "issues": ["A-1", "A-2"] })))
-        .respond_with(ResponseTemplate::new(204))
-        .expect(1)
-        .mount(&server)
-        .await;
+async fn integ_post_issue_batches_split_at_the_bulk_limit() {
+    for (count, batches) in [(50, vec![50]), (51, vec![50, 1])] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/rest/agile/1.0/sprint/55/issue"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
 
-    let client = mock_client(server.uri());
-    let result = assign_issues_to_epic(
-        "EPIC 42/alpha[v1]",
-        &["A-1".to_string(), "A-2".to_string()],
-        &client,
-    )
-    .await;
-    assert!(result.is_ok(), "{:?}", result.err());
+        let issues: Vec<String> = (0..count).map(|i| format!("MDW-{i}")).collect();
+        move_issues_to_sprint(55, &issues, &mock_client(server.uri()))
+            .await
+            .unwrap();
+
+        let sizes: Vec<usize> = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|request| {
+                let body: Value = serde_json::from_slice(&request.body).unwrap();
+                body["issues"].as_array().unwrap().len()
+            })
+            .collect();
+        assert_eq!(sizes, batches, "{count} issues");
+    }
 }
 
+/// The bulk endpoints are not transactional, so a failure after a batch
+/// landed says how many issues already moved; a first-batch failure has
+/// nothing to report beyond the error itself.
 #[tokio::test]
-async fn integ_assign_issues_to_epic_chunks_above_50() {
+async fn integ_post_issue_batches_report_progress_only_after_a_batch_landed() {
     let server = MockServer::start().await;
-    // 120 issues should produce 3 batched POSTs (50 + 50 + 20).
     Mock::given(method("POST"))
-        .and(path("/rest/agile/1.0/epic/EPIC-1/issue"))
+        .and(path("/rest/agile/1.0/sprint/55/issue"))
         .respond_with(ResponseTemplate::new(204))
-        .expect(3)
+        .up_to_n_times(1)
         .mount(&server)
         .await;
-
+    Mock::given(method("POST"))
+        .and(path("/rest/agile/1.0/sprint/55/issue"))
+        .respond_with(ResponseTemplate::new(400).set_body_string("sprint closed"))
+        .mount(&server)
+        .await;
     let client = mock_client(server.uri());
-    let issues: Vec<String> = (0..120).map(|i| format!("MDW-{}", i)).collect();
-    let result = assign_issues_to_epic("EPIC-1", &issues, &client).await;
-    assert!(result.is_ok(), "{:?}", result.err());
 
-    let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 3);
-    // First batch carries 50 issues.
-    let first_body: Value = serde_json::from_slice(&requests[0].body).unwrap();
-    assert_eq!(first_body["issues"].as_array().unwrap().len(), 50);
-    // Last batch carries the 20-issue remainder.
-    let last_body: Value = serde_json::from_slice(&requests[2].body).unwrap();
-    assert_eq!(last_body["issues"].as_array().unwrap().len(), 20);
+    let issues: Vec<String> = (0..120).map(|i| format!("MDW-{i}")).collect();
+    let err = move_issues_to_sprint(55, &issues, &client)
+        .await
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("50/120"), "{err:#}");
+
+    let err = move_issues_to_sprint(55, &["A-1".to_string()], &client)
+        .await
+        .unwrap_err();
+    assert!(!format!("{err:#}").contains("already processed"), "{err:#}");
+    assert!(format!("{err:#}").contains("sprint closed"), "{err:#}");
+}
+
+/// Epic membership is the issue's `parent`, edited one issue at a time,
+/// which is the one form Jira honours in team-managed and company-managed
+/// projects alike. A cleared parent is read back, and one Jira kept despite
+/// answering 204 is a failure that names how far the edit got.
+#[tokio::test]
+async fn integ_epic_membership_edits_each_issue_parent() {
+    let server = MockServer::start().await;
+    for issue in ["A-1", "A-2"] {
+        Mock::given(method("PUT"))
+            .and(path(format!("/rest/api/3/issue/{issue}")))
+            .and(body_json(
+                json!({ "fields": { "parent": { "key": "E-1" } } }),
+            ))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    for (issue, read_back) in [
+        ("A-3", json!({ "id": "3", "key": "A-3" })),
+        (
+            "A-4",
+            json!({ "id": "4", "key": "A-4", "fields": { "parent": { "key": "E-1" } } }),
+        ),
+    ] {
+        Mock::given(method("PUT"))
+            .and(path(format!("/rest/api/3/issue/{issue}")))
+            .and(body_json(json!({ "fields": { "parent": null } })))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/rest/api/3/issue/{issue}")))
+            .and(query_param("fields", "parent"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(read_back))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    let client = mock_client(server.uri());
+
+    let assigned = ["A-1".to_string(), "A-2".to_string()];
+    assert_eq!(
+        assign_issues_to_epic("E-1", &assigned, &client)
+            .await
+            .unwrap(),
+        json!({})
+    );
+
+    let unassigned = ["A-3".to_string(), "A-4".to_string()];
+    let err = unassign_issues_from_epic(&unassigned, &client)
+        .await
+        .unwrap_err();
+    let message = format!("{err:#}");
+    assert!(message.contains("at A-4 after 1/2"), "{message}");
+    assert!(message.contains("still under E-1"), "{message}");
 }
 
 #[tokio::test]
@@ -2184,21 +2255,6 @@ async fn integ_move_to_sprint_rejects_empty_issues() {
     let client = mock_client(server.uri());
     let err = move_issues_to_sprint(55, &[], &client).await.unwrap_err();
     assert!(err.to_string().contains("no issues provided"));
-}
-
-#[tokio::test]
-async fn integ_unassign_uses_epic_none_path() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/rest/agile/1.0/epic/none/issue"))
-        .respond_with(ResponseTemplate::new(204))
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let client = mock_client(server.uri());
-    let result = unassign_issues_from_epic(&["A-1".to_string()], &client).await;
-    assert!(result.is_ok(), "{:?}", result.err());
 }
 
 #[tokio::test]
@@ -2480,123 +2536,6 @@ async fn integ_paginate_zero_items_terminates_cleanly() {
     let client = mock_client(server.uri());
     let result = get_labels(&client).await.unwrap();
     assert_eq!(result["items"].as_array().unwrap().len(), 0);
-}
-
-#[tokio::test]
-async fn integ_post_issue_batches_exactly_50_sends_one_post() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/rest/agile/1.0/epic/E-1/issue"))
-        .respond_with(ResponseTemplate::new(204))
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let client = mock_client(server.uri());
-    let issues: Vec<String> = (0..50).map(|i| format!("MDW-{}", i)).collect();
-    assign_issues_to_epic("E-1", &issues, &client)
-        .await
-        .unwrap();
-}
-
-#[tokio::test]
-async fn integ_post_issue_batches_reports_partial_failure() {
-    let server = MockServer::start().await;
-    let path_str = "/rest/agile/1.0/epic/E-1/issue";
-
-    // First request succeeds (1 POST). All subsequent requests fail.
-    Mock::given(method("POST"))
-        .and(path(path_str))
-        .respond_with(ResponseTemplate::new(204))
-        .up_to_n_times(1)
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path(path_str))
-        .respond_with(ResponseTemplate::new(500).set_body_string("server boom"))
-        .mount(&server)
-        .await;
-
-    let client = mock_client(server.uri());
-    let issues: Vec<String> = (0..120).map(|i| format!("MDW-{}", i)).collect();
-    let err = assign_issues_to_epic("E-1", &issues, &client)
-        .await
-        .unwrap_err();
-    let msg = err.to_string();
-    assert!(
-        msg.contains("50/120"),
-        "expected partial-progress count, got: {msg}"
-    );
-
-    // The first chunk must have carried a well-formed 50-issue body —
-    // guards against the error path passing on a malformed request.
-    let requests = server.received_requests().await.unwrap();
-    let first: Value = serde_json::from_slice(&requests[0].body).unwrap();
-    assert_eq!(first["issues"].as_array().unwrap().len(), 50);
-}
-
-#[tokio::test]
-async fn integ_post_issue_batches_single_issue_one_post() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/rest/agile/1.0/epic/E-1/issue"))
-        .and(body_json(json!({ "issues": ["only-1"] })))
-        .respond_with(ResponseTemplate::new(204))
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let client = mock_client(server.uri());
-    assign_issues_to_epic("E-1", &["only-1".to_string()], &client)
-        .await
-        .unwrap();
-}
-
-#[tokio::test]
-async fn integ_post_issue_batches_51_issues_split_50_plus_1() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/rest/agile/1.0/epic/E-1/issue"))
-        .respond_with(ResponseTemplate::new(204))
-        .expect(2)
-        .mount(&server)
-        .await;
-
-    let client = mock_client(server.uri());
-    let issues: Vec<String> = (0..51).map(|i| format!("MDW-{}", i)).collect();
-    assign_issues_to_epic("E-1", &issues, &client)
-        .await
-        .unwrap();
-
-    let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 2);
-    let first: Value = serde_json::from_slice(&requests[0].body).unwrap();
-    let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
-    assert_eq!(first["issues"].as_array().unwrap().len(), 50);
-    assert_eq!(second["issues"].as_array().unwrap().len(), 1);
-}
-
-#[tokio::test]
-async fn integ_post_issue_batches_first_chunk_failure_omits_partial_count() {
-    let server = MockServer::start().await;
-    // First (and only) request fails — no chunks succeeded, so the error
-    // message must use the simpler form without "after X/Y".
-    Mock::given(method("POST"))
-        .and(path("/rest/agile/1.0/epic/E-1/issue"))
-        .respond_with(ResponseTemplate::new(400).set_body_string("bad request"))
-        .mount(&server)
-        .await;
-
-    let client = mock_client(server.uri());
-    let err = assign_issues_to_epic("E-1", &["A-1".to_string()], &client)
-        .await
-        .unwrap_err();
-    let msg = err.to_string();
-    assert!(
-        !msg.contains("already processed"),
-        "first-chunk failure must use plain error form, got: {msg}"
-    );
-    assert!(msg.contains("bad request"));
 }
 
 #[tokio::test]

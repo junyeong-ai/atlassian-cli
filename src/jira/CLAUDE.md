@@ -21,6 +21,10 @@ When adding a new write endpoint that takes user text, route through these helpe
 
 Under `--format markdown` the command layer converts a body, or a string `description` among JSON fields, with `markdown::markdown_to_adf` first, so these helpers receive an ADF object and validate its root.
 
+## Epic membership
+
+`assign_issues_to_epic` and `unassign_issues_from_epic` edit each issue's `fields.parent`, the epic link in company-managed and team-managed projects alike; the agile epic endpoints do not work for team-managed epics. Clearing sends `"parent": null` and reads the issue back: on a live site the documented `update.parent.set.none` answered 204 and left the parent in place. A parent-less read omits `fields` entirely, so the read-back checks the issue `key`, not `fields`.
+
 ## Search field selection
 
 `fields::resolve_search_fields` decides the search fields. An explicit `--fields` list is returned unchanged. Otherwise configured `search_default_fields` replace the built-in defaults, and Markdown mode adds `description`. `search_custom_fields` extend only the built-in defaults; they do not extend an explicit or configured replacement list.

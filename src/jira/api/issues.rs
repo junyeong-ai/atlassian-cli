@@ -369,6 +369,87 @@ pub async fn update_issue(
     Ok(json!({}))
 }
 
+/// Put each issue under `epic_key` by setting its `parent`, the field Jira
+/// uses for the epic in company-managed and team-managed projects alike.
+pub async fn assign_issues_to_epic(
+    epic_key: &str,
+    issues: &[String],
+    client: &ApiClient,
+) -> Result<Value> {
+    edit_parents(issues, Some(epic_key), "assign issues to epic", client).await
+}
+
+/// Take each issue out of its epic by clearing its `parent`. A sub-task
+/// cannot lose its parent, and Jira refuses the edit.
+pub async fn unassign_issues_from_epic(issues: &[String], client: &ApiClient) -> Result<Value> {
+    edit_parents(issues, None, "unassign issues from epic", client).await
+}
+
+/// Set or clear the parent of each issue in turn. Jira has no transactional
+/// bulk edit, so a failure names how many issues were already edited.
+async fn edit_parents(
+    issues: &[String],
+    parent: Option<&str>,
+    operation: &str,
+    client: &ApiClient,
+) -> Result<Value> {
+    if issues.is_empty() {
+        anyhow::bail!("Failed to {operation}: no issues provided");
+    }
+    let body = json!({ "fields": { "parent": parent.map(|key| json!({ "key": key })) } });
+    for (edited, issue) in issues.iter().enumerate() {
+        edit_parent(issue, &body, parent.is_none(), operation, client)
+            .await
+            .map_err(|err| {
+                if edited == 0 {
+                    err
+                } else {
+                    err.context(format!(
+                        "Failed to {operation} at {issue} after {edited}/{} issues were edited",
+                        issues.len()
+                    ))
+                }
+            })?;
+    }
+    Ok(json!({}))
+}
+
+/// Edit one issue's parent. A cleared parent is read back, because Jira
+/// answers 204 to the documented `update.parent.set.none` while leaving the
+/// parent in place; clearing is confirmed rather than assumed.
+async fn edit_parent(
+    issue: &str,
+    body: &Value,
+    confirm_cleared: bool,
+    operation: &str,
+    client: &ApiClient,
+) -> Result<()> {
+    let path = format!("/rest/api/3/issue/{}", encode_path_segment(issue));
+    let request = client
+        .put(Service::Jira, &path)
+        .await?
+        .header("Content-Type", "application/json")
+        .json(body);
+    client.execute(operation, request).await?;
+    if !confirm_cleared {
+        return Ok(());
+    }
+    let request = client
+        .get(Service::Jira, &path)
+        .await?
+        .query(&[("fields", "parent")]);
+    let data: Value = client.execute(operation, request).await?.json().await?;
+    // Jira omits `fields` when every requested field is empty, so the issue's
+    // own key is what shows this is an issue rather than a drifted body.
+    require_field(&data, "/key", operation)?;
+    if let Some(parent) = data.pointer("/fields/parent/key").and_then(Value::as_str) {
+        anyhow::bail!(
+            "Jira accepted clearing the parent of {issue}, but it is still under {parent}"
+        );
+    }
+    Ok(())
+}
+
 /// Permanently delete an issue. Jira has no recycle bin for issues, so this is
 /// irreversible — the CLI layer requires an explicit `--yes`. When the issue
 /// has subtasks, Jira rejects the call unless `delete_subtasks` is set.

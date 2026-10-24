@@ -907,8 +907,8 @@ Assign issues to an epic, or remove them from their epics
 Usage: atlassian-cli jira epic <COMMAND>
 
 Commands:
-  assign    Assign issues to an epic
-  unassign  Remove issues from their epics
+  assign    Put issues under an epic by setting their parent
+  unassign  Take issues out of their epic by clearing their parent
   help      Print this message or the help of the given subcommand(s)
 
 Options:
@@ -919,7 +919,7 @@ Options:
 ## `atlassian-cli jira epic assign`
 
 ```text
-Assign issues to an epic
+Put issues under an epic by setting their parent
 
 Usage: atlassian-cli jira epic assign <EPIC_KEY> <ISSUES>...
 
@@ -938,7 +938,7 @@ Options:
 ## `atlassian-cli jira epic unassign`
 
 ```text
-Remove issues from their epics
+Take issues out of their epic by clearing their parent
 
 Usage: atlassian-cli jira epic unassign <ISSUES>...
 

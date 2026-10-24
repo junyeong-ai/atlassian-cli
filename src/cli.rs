@@ -501,7 +501,7 @@ pub(crate) enum SprintAction {
 
 #[derive(Subcommand)]
 pub(crate) enum EpicAction {
-    /// Assign issues to an epic
+    /// Put issues under an epic by setting their parent
     Assign {
         /// Epic issue key
         epic_key: String,
@@ -509,7 +509,7 @@ pub(crate) enum EpicAction {
         #[arg(required = true)]
         issues: Vec<String>,
     },
-    /// Remove issues from their epics
+    /// Take issues out of their epic by clearing their parent
     Unassign {
         /// Issue keys to unassign
         #[arg(required = true)]
