@@ -101,7 +101,7 @@ pub fn markdown_to_confluence(markdown: &str) -> Result<String> {
     if let Some(character) = storage.chars().find(|&c| !is_xml_char(c)) {
         let location = match markdown.find(character) {
             Some(offset) => format!("on line {}", markdown[..offset].matches('\n').count() + 1),
-            None => "through a character reference".to_string(),
+            None => "through an escape".to_string(),
         };
         bail!(
             "Markdown contains U+{:04X} {location}, which storage format cannot carry; remove it",
@@ -146,7 +146,7 @@ fn code_macro(language: Option<&str>, body: &str) -> String {
 }
 
 fn image_macro(source: &str, alt: &str) -> Result<String> {
-    let resource = if has_scheme(source) {
+    let resource = if has_scheme(source) || source.starts_with("//") {
         format!(r#"<ri:url ri:value="{}" />"#, escape(source))
     } else {
         let path = source.split(['?', '#']).next().unwrap_or_default();
@@ -164,7 +164,8 @@ fn image_macro(source: &str, alt: &str) -> Result<String> {
 }
 
 /// Whether a reference starts with an RFC 3986 scheme. A relative reference
-/// cannot: its first segment may not contain `:`.
+/// cannot: its first segment may not contain `:`. A network-path reference
+/// (`//host/…`) has no scheme but is still a URL, so callers test for it too.
 fn has_scheme(reference: &str) -> bool {
     reference.split_once(':').is_some_and(|(scheme, _)| {
         let mut chars = scheme.chars();
@@ -206,14 +207,16 @@ mod tests {
         assert_eq!(
             storage(
                 "![a \"chart\"](https://img.example/c.png?x=1&y=2) ![](<Screen Shot.png>) \
-                 ![](images/my%20diagram.png?raw=1#top) ![](a%2Fb.png) ![a ![b](c) d](e.png)"
+                 ![](images/my%20diagram.png?raw=1#top) ![](a%2Fb.png) ![a ![b](c) d](e.png) \
+                 ![](//cdn.example/x.png)"
             ),
             "<p><ac:image ac:alt=\"a &quot;chart&quot;\">\
              <ri:url ri:value=\"https://img.example/c.png?x=1&amp;y=2\" /></ac:image> \
              <ac:image ac:alt=\"\"><ri:attachment ri:filename=\"Screen Shot.png\" /></ac:image> \
              <ac:image ac:alt=\"\"><ri:attachment ri:filename=\"my diagram.png\" /></ac:image> \
              <ac:image ac:alt=\"\"><ri:attachment ri:filename=\"a/b.png\" /></ac:image> \
-             <ac:image ac:alt=\"a b d\"><ri:attachment ri:filename=\"e.png\" /></ac:image></p>\n"
+             <ac:image ac:alt=\"a b d\"><ri:attachment ri:filename=\"e.png\" /></ac:image> \
+             <ac:image ac:alt=\"\"><ri:url ri:value=\"//cdn.example/x.png\" /></ac:image></p>\n"
         );
     }
 
@@ -242,10 +245,7 @@ mod tests {
         assert!(err.contains("U+001B on line 3"), "{err}");
         for reference in ["a &#1; b", "[a](u \"t&#x1B;\")", "```&#8;\nx\n```"] {
             let err = markdown_to_confluence(reference).unwrap_err().to_string();
-            assert!(
-                err.contains("through a character reference"),
-                "{reference}: {err}"
-            );
+            assert!(err.contains("through an escape"), "{reference}: {err}");
         }
         assert!(markdown_to_confluence("tab\tand\r\nnewline").is_ok());
         let err = markdown_to_confluence("![x](images/)")
