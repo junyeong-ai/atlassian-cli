@@ -25,7 +25,7 @@ const NON_IDEMPOTENT_HINT: &str = "not retried automatically because repeating t
     could apply it twice; check whether it took effect before sending it again";
 
 pub(crate) const UNREPLAYABLE_BODY_HINT: &str = "not retried automatically because the request \
-    body cannot be resent; wait for the server's requested interval, then send it again";
+    body cannot be resent; wait before sending it again";
 
 const WAIT_OVER_CAP_HINT: &str = "Retry-After exceeds the 60-second automatic wait limit; wait \
     for the server's requested interval before trying again";
