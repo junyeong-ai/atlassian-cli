@@ -177,7 +177,7 @@ Options:
           Issue description; `-` reads it from standard input
 
       --parent <PARENT>
-          Parent issue key — required by every sub-task type, and how a team-managed project puts an issue under its epic
+          Parent issue key — required by every sub-task type, and how an issue goes under its epic
 
       --fields <FIELDS>
           Any other field the create screen requires, as a JSON object — '{"components":[{"name":"api"}],"customfield_10010":"X"}'

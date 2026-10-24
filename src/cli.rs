@@ -204,8 +204,8 @@ pub(crate) enum JiraSubcommand {
         /// Issue description; `-` reads it from standard input
         #[arg(long, allow_hyphen_values = true)]
         description: Option<String>,
-        /// Parent issue key — required by every sub-task type, and how a
-        /// team-managed project puts an issue under its epic
+        /// Parent issue key — required by every sub-task type, and how an
+        /// issue goes under its epic
         #[arg(long)]
         parent: Option<String>,
         /// Any other field the create screen requires, as a JSON object —
