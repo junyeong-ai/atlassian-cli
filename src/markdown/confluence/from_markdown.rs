@@ -14,15 +14,6 @@ use pulldown_cmark::{CodeBlockKind, CowStr, Event, Tag, TagEnd, html};
 /// names cannot carry the `ac:` namespace, so macros need `--format storage`.
 /// Characters XML cannot carry are refused, which keeps the output well-formed.
 pub fn markdown_to_confluence(markdown: &str) -> Result<String> {
-    if let Some((offset, character)) = markdown.char_indices().find(|&(_, c)| !is_xml_char(c)) {
-        let line = markdown[..offset].matches('\n').count() + 1;
-        bail!(
-            "Markdown contains U+{:04X} on line {line}, which storage format cannot carry; \
-             remove it",
-            u32::from(character)
-        );
-    }
-
     let mut events = Vec::new();
     let mut code: Option<(Option<String>, String)> = None;
     let mut html_block: Option<String> = None;
@@ -68,7 +59,7 @@ pub fn markdown_to_confluence(markdown: &str) -> Result<String> {
                 Event::End(TagEnd::Image) if open.nested > 0 => open.nested -= 1,
                 Event::End(TagEnd::Image) => {
                     events.push(Event::InlineHtml(
-                        image_macro(&open.source, &open.alt).into(),
+                        image_macro(&open.source, &open.alt)?.into(),
                     ));
                     image = None;
                 }
@@ -105,6 +96,18 @@ pub fn markdown_to_confluence(markdown: &str) -> Result<String> {
 
     let mut storage = String::new();
     html::push_html(&mut storage, events.into_iter());
+    // Checked on the output because Markdown decodes character references:
+    // `&#1;` is clean source that renders a character XML excludes.
+    if let Some(character) = storage.chars().find(|&c| !is_xml_char(c)) {
+        let location = match markdown.find(character) {
+            Some(offset) => format!("on line {}", markdown[..offset].matches('\n').count() + 1),
+            None => "through a character reference".to_string(),
+        };
+        bail!(
+            "Markdown contains U+{:04X} {location}, which storage format cannot carry; remove it",
+            u32::from(character)
+        );
+    }
     Ok(storage)
 }
 
@@ -117,7 +120,10 @@ struct Image {
 
 /// The characters XML 1.0 admits; storage format is parsed as XML.
 fn is_xml_char(c: char) -> bool {
-    matches!(c, '\t' | '\n' | '\r' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..)
+    matches!(
+        c,
+        '\t' | '\n' | '\r' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..
+    )
 }
 
 fn code_macro(language: Option<&str>, body: &str) -> String {
@@ -139,18 +145,22 @@ fn code_macro(language: Option<&str>, body: &str) -> String {
     code
 }
 
-fn image_macro(source: &str, alt: &str) -> String {
+fn image_macro(source: &str, alt: &str) -> Result<String> {
     let resource = if has_scheme(source) {
         format!(r#"<ri:url ri:value="{}" />"#, escape(source))
     } else {
-        let path = percent_decode_str(source).decode_utf8_lossy();
-        let filename = path.rsplit('/').next().unwrap_or_default();
-        format!(r#"<ri:attachment ri:filename="{}" />"#, escape(filename))
+        let path = source.split(['?', '#']).next().unwrap_or_default();
+        let segment = path.rsplit('/').next().unwrap_or_default();
+        let filename = percent_decode_str(segment).decode_utf8_lossy();
+        if filename.is_empty() {
+            bail!("image source {source:?} names no attachment file");
+        }
+        format!(r#"<ri:attachment ri:filename="{}" />"#, escape(&filename))
     };
-    format!(
+    Ok(format!(
         r#"<ac:image ac:alt="{}">{resource}</ac:image>"#,
         escape(alt)
-    )
+    ))
 }
 
 /// Whether a reference starts with an RFC 3986 scheme. A relative reference
@@ -196,12 +206,13 @@ mod tests {
         assert_eq!(
             storage(
                 "![a \"chart\"](https://img.example/c.png?x=1&y=2) ![](<Screen Shot.png>) \
-                 ![](images/my%20diagram.png) ![a ![b](c) d](e.png)"
+                 ![](images/my%20diagram.png?raw=1#top) ![](a%2Fb.png) ![a ![b](c) d](e.png)"
             ),
             "<p><ac:image ac:alt=\"a &quot;chart&quot;\">\
              <ri:url ri:value=\"https://img.example/c.png?x=1&amp;y=2\" /></ac:image> \
              <ac:image ac:alt=\"\"><ri:attachment ri:filename=\"Screen Shot.png\" /></ac:image> \
              <ac:image ac:alt=\"\"><ri:attachment ri:filename=\"my diagram.png\" /></ac:image> \
+             <ac:image ac:alt=\"\"><ri:attachment ri:filename=\"a/b.png\" /></ac:image> \
              <ac:image ac:alt=\"a b d\"><ri:attachment ri:filename=\"e.png\" /></ac:image></p>\n"
         );
     }
@@ -229,6 +240,17 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("U+001B on line 3"), "{err}");
+        for reference in ["a &#1; b", "[a](u \"t&#x1B;\")", "```&#8;\nx\n```"] {
+            let err = markdown_to_confluence(reference).unwrap_err().to_string();
+            assert!(
+                err.contains("through a character reference"),
+                "{reference}: {err}"
+            );
+        }
         assert!(markdown_to_confluence("tab\tand\r\nnewline").is_ok());
+        let err = markdown_to_confluence("![x](images/)")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("names no attachment file"), "{err}");
     }
 }
