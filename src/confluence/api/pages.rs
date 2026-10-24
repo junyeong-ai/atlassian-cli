@@ -36,12 +36,14 @@ pub async fn get_page(
     Ok(data)
 }
 
+/// The page's direct children in the content tree: pages, folders,
+/// whiteboards, databases and embeds, each carrying its `type`.
 pub async fn get_page_children(page_id: &str, client: &ApiClient) -> Result<Value> {
     let path = format!(
-        "/wiki/api/v2/pages/{}/children",
+        "/wiki/api/v2/pages/{}/direct-children",
         encode_path_segment(page_id)
     );
-    let items = fetch_all_v2_results(client, "get child pages", &path, &[]).await?;
+    let items = fetch_all_v2_results(client, "get page children", &path, &[]).await?;
     Ok(v2_list_envelope(items, client))
 }
 

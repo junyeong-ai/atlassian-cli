@@ -587,7 +587,7 @@ pub(crate) enum ConfluenceSubcommand {
         #[arg(long, value_name = "VERSION")]
         base_version: Option<u64>,
     },
-    /// List the direct child pages of a page (metadata only)
+    /// List a page's direct children: pages, folders, whiteboards, databases and embeds
     Children { page_id: String },
     /// Read a page's comments and threads, or write footer comments
     Comment {

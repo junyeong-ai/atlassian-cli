@@ -83,9 +83,9 @@ The two API generations disagree on what `next` is relative to, which is the onl
 
 Do not re-inline a one-page GET for any v2 list — silent truncation past the first page is exactly what this helper exists to prevent.
 
-## `children` has no markdown format
+## `children` lists the content tree
 
-v2 `/wiki/api/v2/pages/{id}/children` returns metadata only (no body), so the `--format` flag is intentionally absent on `confluence children`.
+`get_page_children` reads `/wiki/api/v2/pages/{id}/direct-children`, which replaced the deprecated `/children` and returns every content type below a page (pages, folders, whiteboards, databases, embeds). Items keep their `type`; filtering to pages would hide folders that hold pages. The response is metadata only, so `confluence children` has no `--format`. Under OAuth it needs `read:hierarchical-content:confluence`.
 
 ## Space filter injection
 

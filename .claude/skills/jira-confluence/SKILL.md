@@ -96,7 +96,7 @@ atlassian-cli jira list labels       # existing labels
 atlassian-cli jira user search "Kim" --limit 5   # accountId for assignee fields, JQL and CQL
 ```
 
-An `accountId` identifies the same person in Jira and Confluence. Assignee, reporter and user fields take `{"accountId": "..."}`; JQL and CQL compare against the bare id. Under OAuth, user search needs `read:jira-user`.
+An `accountId` identifies the same person in Jira and Confluence. Assignee, reporter and user fields take `{"accountId": "..."}`; JQL and CQL compare against the bare id. User search matches the start of a display name or email, and an account without the *Browse users and groups* permission gets an empty list rather than an error. Under OAuth it needs `read:jira-user`.
 
 ### Agile — boards, sprints, epics
 
@@ -112,7 +112,7 @@ atlassian-cli jira epic unassign PROJ-1             # detach from its epic
 
 Board/sprint commands use the agile API. Pass `--project` to let the CLI resolve the board; if the project has several boards it lists them and asks for `--board`.
 
-`epic assign`/`unassign` drive the agile **Epic Link** endpoint, which only takes effect on **company-managed** projects. Team-managed (next-gen) projects model the epic as the issue's `parent`, so there the command returns success but has no effect — pass `--parent EPIC-1` when creating, or set it after with `jira update KEY '{"parent":{"key":"EPIC-1"}}'` (when the project's field config allows it). A sub-task is the same field and cannot be created without it: Jira takes the parent on the create screen, so there is no issue to update into place.
+`epic assign`/`unassign` call the agile epic endpoints, which Atlassian documents as not working for epics in **team-managed** (next-gen) projects. The `parent` field works for every project type: pass `--parent EPIC-1` when creating, or set it after with `jira update KEY '{"parent":{"key":"EPIC-1"}}'`. A sub-task is the same field and cannot be created without it: Jira takes the parent on the create screen, so there is no issue to update into place.
 
 OAuth agile commands require endpoint-specific grants beyond core Jira scopes. Board discovery needs `read:board-scope:jira-software` and `read:project:jira`; sprint reads need `read:sprint:jira-software`; sprint moves need `write:sprint:jira-software`; moving to backlog needs `write:board-scope:jira-software`; epic assign/unassign needs `write:epic:jira-software`. `sprint list --project` also performs board discovery. Use only the grants needed for the requested operations; see the [Software scope reference](https://developer.atlassian.com/cloud/jira/software/scopes-for-oauth-2-3LO-and-forge-apps/).
 
@@ -132,7 +132,7 @@ A depth-limit marker in Markdown means content was truncated; inspect the unconv
 # Read
 atlassian-cli confluence get 12345 --format markdown
 atlassian-cli confluence search "space = TEAM" --limit 20
-atlassian-cli confluence children 12345          # children is JSON only (no --format)
+atlassian-cli confluence children 12345          # direct children of any type, each with its `type`; JSON only
 atlassian-cli confluence comment list 12345 --format markdown   # every reply, footer and inline
 
 # Large reads — cursor pagination (list endpoints auto-follow cursors to completion)
@@ -174,7 +174,7 @@ atlassian-cli confluence attachment upload 12345 ./diagram.png --comment "v2"
 atlassian-cli confluence attachment upload 12345 ./icon.svg --content-type image/svg+xml
 ```
 
-- To edit a page, read it, change the body, and write it back with `--base-version` set to the `version.number` you read. Without it the update overwrites whatever is current, including a save made while you worked; with it Confluence answers `409` when the page changed, and the fix is to re-read, reapply the edit and retry.
+- To edit a page, read it, change the body, and write it back with `--base-version` set to the `version.number` you read. Without it the update overwrites whatever is current, including a save made while you worked; with it Confluence answers `409` when the page changed, and the fix is to re-read, reapply the edit and retry. A space that requires approval for edits can also answer `409`; its message says so.
 - Markdown converts to storage format with code blocks as the `code` macro. An image whose source has a scheme (`https://…`) embeds that URL; any other source names the page attachment by its last path segment, the name `attachment upload` gives the file, so upload it first. Write Confluence macros and HTML with `--format storage`; in Markdown they stay literal text.
 - `comment list` returns one flat, depth-first array covering both comment families and every level of every thread. Each entry carries `location` (`footer`/`inline`), `depth`, and `parentCommentId` (`null` at a root), so rebuild the tree from those rather than assuming the array is top-level only.
 - `comment get`/`replies`/`update`/`delete` take the **comment id**; `comment list`/`add` take the **page id**.
@@ -182,7 +182,7 @@ atlassian-cli confluence attachment upload 12345 ./icon.svg --content-type image
 - `--location` defaults to `footer` on `comment get`/`replies` — an id from an inline thread needs `--location inline`, and every entry `comment list` returns already states which it is. A wrong `--location` is a 404, not a fallback.
 - `property set` values are **strict JSON** — quote bare strings as `'"text"'`, not `text`.
 - `attachment upload` upserts by filename; add `--minor` to suppress watcher notifications on re-upload. The `Content-Type` is mapped from the file extension (so `diagram.png` → `image/png` and renders inline instead of becoming an opaque download); pass `--content-type <mime>` to override. Note: Confluence Cloud often blocks **inline SVG** rendering for security, so embed diagrams as PNG when you need them to display.
-- For OAuth, request the scopes for every endpoint a command calls, including reads before writes. Page-property `set`/`delete` need `read:page:confluence` and `write:page:confluence`; comment `update` needs `read:comment:confluence` and `write:comment:confluence`, while comment `delete` needs `delete:comment:confluence`. Page create also looks up its space; page update reads its current version. Check the [property](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-content-properties/), [comment](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-comment/), and [page](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-page/) endpoint requirements. A `401 "scope does not match"` can indicate missing grants. Enable required scopes on the app, request them in the profile, then reauthorize; changing app permissions alone does not update an existing token.
+- For OAuth, request the scopes for every endpoint a command calls, including reads before writes. Page-property `set`/`delete` need `read:page:confluence` and `write:page:confluence`; comment `update` needs `read:comment:confluence` and `write:comment:confluence`, while comment `delete` needs `delete:comment:confluence`. Page create also looks up its space; page update reads its current version unless `--base-version` is given; `children` needs `read:hierarchical-content:confluence`. Check the [property](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-content-properties/), [comment](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-comment/), and [page](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-page/) endpoint requirements. A `401 "scope does not match"` can indicate missing grants. Enable required scopes on the app, request them in the profile, then reauthorize; changing app permissions alone does not update an existing token.
 - CQL compares user fields against account ids (`creator = "<accountId>"`); find them with `jira user search`.
 
 ## Pagination & output cheatsheet

@@ -402,7 +402,7 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 | `create <SPACE> <TITLE> <CONTENT> [--parent <ID>]` | 페이지 생성 (`--parent`로 부모 페이지 아래 중첩) |
 | `update <ID> <TITLE> <CONTENT> [--base-version <N>]` | 페이지 수정. `--base-version`을 주면 그 버전 이후 저장된 변경이 있을 때 덮어쓰지 않고 409로 거부 |
 | `delete <ID> --yes` | 페이지 삭제 (휴지통) |
-| `children <ID>` | 하위 페이지 |
+| `children <ID>` | 직속 하위 항목 (페이지·폴더·화이트보드·데이터베이스·임베드, 항목마다 `type`) |
 | `comment list <ID> [--location footer\|inline] [--roots-only]` | 페이지 댓글 — 기본은 footer·inline 두 계열 전부, 대댓글 포함. 항목마다 `location`·`depth`·`parentCommentId` |
 | `comment get <COMMENT_ID> [--location ...]` | 댓글 단건 (기본 `footer`) |
 | `comment replies <COMMENT_ID> [--location ...]` | 한 댓글 아래 전체 스레드 |

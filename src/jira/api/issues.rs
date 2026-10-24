@@ -50,7 +50,7 @@ pub async fn get_issue(
         // the caller's `--fields`, and a value carrying `&` or `#` written into
         // the URL would start a parameter of its own or a fragment, changing
         // the request the server answers.
-        .query(&[("fields", selected.as_str()), ("expand", "-renderedFields")])
+        .query(&[("fields", selected.as_str())])
         .header("Accept", "application/json");
     let response = client.execute("get issue", request).await?;
 

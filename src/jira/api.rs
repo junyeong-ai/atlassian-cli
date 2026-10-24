@@ -285,6 +285,10 @@ pub async fn get_issue_types(client: &ApiClient) -> Result<Value> {
     ))
 }
 
+/// `/priority` is deprecated in favour of the paginated `/priority/search`, but
+/// that endpoint requires the admin scope `manage:jira-configuration` under
+/// OAuth where this one takes `read:jira-work`, so moving would cost OAuth users
+/// the command.
 pub async fn get_priorities(client: &ApiClient) -> Result<Value> {
     let request = client.get(Service::Jira, "/rest/api/3/priority").await?;
     let response = client.execute("get priorities", request).await?;

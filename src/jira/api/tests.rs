@@ -91,7 +91,9 @@ fn test_add_comment_missing_comment() {
 // would hit; synthetic data-only tests for these endpoints have been removed.
 
 use crate::test_utils::mock_client;
-use wiremock::matchers::{body_json, body_string, body_string_contains, method, path, query_param};
+use wiremock::matchers::{
+    body_json, body_string, body_string_contains, method, path, query_param, query_param_is_missing,
+};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// A 2xx without an `issues` array is drift. Reading it as a page of no
@@ -1130,7 +1132,7 @@ async fn integ_get_issue_sends_a_field_selector_the_caller_cannot_break_out_of()
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/PROJ-1"))
         .and(query_param("fields", "summary&expand=changelog"))
-        .and(query_param("expand", "-renderedFields"))
+        .and(query_param_is_missing("expand"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "key": "PROJ-1" })))
         .expect(1)
         .mount(&server)
@@ -1463,12 +1465,11 @@ async fn integ_add_link_maps_source_to_outward() {
 #[tokio::test]
 async fn integ_get_issue_honors_explicit_fields() {
     // `--fields` reaches the request URL verbatim — no hardwired whitelist
-    // caps it — and rendered fields stay suppressed.
+    // caps it.
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/PROJ-1"))
         .and(query_param("fields", "*all"))
-        .and(query_param("expand", "-renderedFields"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(json!({ "key": "PROJ-1", "fields": { "summary": "S" } })),

@@ -963,7 +963,7 @@ Commands:
   get         Fetch a single page by ID
   create      Create a page
   update      Replace a page's title and body
-  children    List the direct child pages of a page (metadata only)
+  children    List a page's direct children: pages, folders, whiteboards, databases and embeds
   comment     Read a page's comments and threads, or write footer comments
   label       List, add, or remove labels on a page
   property    List, set, or delete content properties (structured JSON metadata) on a page
@@ -1115,7 +1115,7 @@ Options:
 ## `atlassian-cli confluence children`
 
 ```text
-List the direct child pages of a page (metadata only)
+List a page's direct children: pages, folders, whiteboards, databases and embeds
 
 Usage: atlassian-cli confluence children <PAGE_ID>
 

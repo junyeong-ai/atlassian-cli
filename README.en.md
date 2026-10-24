@@ -449,7 +449,7 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 | `create <SPACE> <TITLE> <CONTENT> [--parent <ID>]` | Create page (nest under a parent with `--parent`) | `confluence create TEAM "Title" "<p>Body</p>" --parent 12345` |
 | `update <ID> <TITLE> <CONTENT> [--base-version <N>]` | Update page; with `--base-version`, a save made after that version is refused with 409 instead of overwritten | `confluence update 123456 "Title" - --format markdown --base-version 7` |
 | `delete <ID> --yes` | Delete page (to trash) | `confluence delete 123456 --yes` |
-| `children <ID>` | List children | `confluence children 123456` |
+| `children <ID>` | Direct children of any type (pages, folders, whiteboards, databases, embeds), each with its `type` | `confluence children 123456` |
 | `comment list <ID> [--location footer\|inline] [--roots-only]` | Every comment on a page — both families, replies included; each entry carries `location`, `depth`, `parentCommentId` | `confluence comment list 123456` |
 | `comment get <COMMENT_ID> [--location ...]` | One comment by id (defaults to `footer`) | `confluence comment get 67890` |
 | `comment replies <COMMENT_ID> [--location ...]` | The whole thread under one comment | `confluence comment replies 67890` |

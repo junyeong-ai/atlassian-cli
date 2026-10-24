@@ -2058,3 +2058,44 @@ async fn search_preserves_explicit_space_and_quoted_sorting_on_the_wire() {
         assert_eq!(result["items"][0]["id"], "42");
     }
 }
+
+/// Children come from `direct-children`, which replaced the retired
+/// `children` endpoint and lists every content type in the tree. Each item
+/// keeps the `type` that tells a page from a folder, and the cursor is followed
+/// to the end.
+#[tokio::test]
+async fn integ_page_children_lists_every_direct_child_across_pages() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/wiki/api/v2/pages/42/direct-children"))
+        .and(query_param_is_missing("cursor"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [{ "id": "1", "type": "page", "title": "Spec" }],
+            "_links": { "next": "/wiki/api/v2/pages/42/direct-children?cursor=c2" }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/wiki/api/v2/pages/42/direct-children"))
+        .and(query_param("cursor", "c2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [{ "id": "2", "type": "folder", "title": "Archive" }],
+            "_links": {}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let result = get_page_children("42", &mock_client(server.uri()))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result,
+        json!({ "items": [
+            { "id": "1", "type": "page", "title": "Spec" },
+            { "id": "2", "type": "folder", "title": "Archive" }
+        ] })
+    );
+}
