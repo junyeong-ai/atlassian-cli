@@ -1140,6 +1140,53 @@ mod tests {
         ));
     }
 
+    /// A Markdown list is a body that starts with `-`. It parses as the body on
+    /// either side of the options, which keep their meaning, and a missing body
+    /// is still a usage error rather than an option taken for one.
+    #[test]
+    fn a_body_may_start_with_a_hyphen_without_swallowing_options() {
+        const BIN: &str = "atlassian-cli";
+        for args in [
+            [
+                BIN, "jira", "comment", "add", "K-1", "- item", "--format", "markdown",
+            ]
+            .as_slice(),
+            &[
+                BIN, "jira", "comment", "add", "K-1", "--format", "markdown", "- item",
+            ],
+        ] {
+            let Command::Jira(JiraCommand {
+                subcommand:
+                    JiraSubcommand::Comment {
+                        action:
+                            CommentAction::Add {
+                                text,
+                                format: JiraFormat::Markdown,
+                                ..
+                            },
+                    },
+            }) = Cli::try_parse_from(args).unwrap().command
+            else {
+                panic!("{args:?} parsed as another command");
+            };
+            assert_eq!(text, "- item", "{args:?}");
+        }
+        let description = Cli::try_parse_from([
+            BIN,
+            "jira",
+            "create",
+            "P",
+            "S",
+            "Task",
+            "--description",
+            "- a",
+        ]);
+        assert!(description.is_ok());
+        let missing =
+            Cli::try_parse_from([BIN, "jira", "comment", "add", "K-1", "--format", "markdown"]);
+        assert!(missing.is_err());
+    }
+
     /// `link remove` takes the issue pair or one link's id, and the handler's
     /// last arm rests on the parse refusing everything else. An argument
     /// relationship names its counterpart by string, so `debug_assert` is here

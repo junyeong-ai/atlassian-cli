@@ -202,7 +202,7 @@ pub(crate) enum JiraSubcommand {
         summary: String,
         issue_type: String,
         /// Issue description; `-` reads it from standard input
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         description: Option<String>,
         /// Parent issue key — required by every sub-task type, and how a
         /// team-managed project puts an issue under its epic
@@ -293,6 +293,7 @@ pub(crate) enum CommentAction {
     Add {
         issue_key: String,
         /// Comment text; `-` reads it from standard input
+        #[arg(allow_hyphen_values = true)]
         text: String,
         /// Format of the comment text
         #[arg(long, value_enum, default_value_t)]
@@ -303,6 +304,7 @@ pub(crate) enum CommentAction {
         issue_key: String,
         comment_id: String,
         /// Comment text; `-` reads it from standard input
+        #[arg(allow_hyphen_values = true)]
         text: String,
         /// Format of the comment text
         #[arg(long, value_enum, default_value_t)]
@@ -558,6 +560,7 @@ pub(crate) enum ConfluenceSubcommand {
         space: String,
         title: String,
         /// Page body; `-` reads it from standard input
+        #[arg(allow_hyphen_values = true)]
         content: String,
         /// Parent page id to nest under (omit to create at the space root)
         #[arg(long)]
@@ -571,6 +574,7 @@ pub(crate) enum ConfluenceSubcommand {
         page_id: String,
         title: String,
         /// Page body; `-` reads it from standard input
+        #[arg(allow_hyphen_values = true)]
         content: String,
         /// Parent page id to re-parent under (omit to keep the current parent)
         #[arg(long)]
@@ -686,6 +690,7 @@ pub(crate) enum ConfluenceCommentAction {
     Add {
         page_id: String,
         /// Comment body; `-` reads it from standard input
+        #[arg(allow_hyphen_values = true)]
         body: String,
         /// Reply to an existing comment instead of posting a top-level one
         #[arg(long = "reply-to")]
@@ -698,6 +703,7 @@ pub(crate) enum ConfluenceCommentAction {
     Update {
         comment_id: String,
         /// New comment body; `-` reads it from standard input
+        #[arg(allow_hyphen_values = true)]
         body: String,
         /// Format of the comment body
         #[arg(long, value_enum, default_value_t)]
