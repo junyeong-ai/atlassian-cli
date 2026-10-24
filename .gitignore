@@ -23,11 +23,6 @@ Thumbs.db
 *.log
 logs/
 
-# Testing
-tarpaulin-report.html
-cobertura.xml
-coverage/
-
 # Benchmarks
 criterion/
 

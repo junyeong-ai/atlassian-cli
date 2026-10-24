@@ -82,43 +82,10 @@ jobs:
       - name: Doctests
         run: cargo test --workspace --all-features --doc --locked
 
-  coverage:
-    name: Coverage
-    needs: [lint]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - run: |
-          rustup toolchain install
-          rustup component add llvm-tools
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          key: coverage
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
-        with:
-          tool: cargo-llvm-cov@0.9.1,cargo-nextest@0.9.149
-      - name: Generate LCOV report
-        run: |
-          cargo llvm-cov nextest \
-            --workspace --all-features \
-            --lcov --output-path lcov.info \
-            --locked
-      - name: Upload to Codecov
-        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
-        with:
-          files: lcov.info
-          fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
-          flags: unittests
-          name: codecov-atlassian-cli
-
   success:
     name: Success
     if: always()
-    needs: [lint, msrv, test, coverage]
+    needs: [lint, msrv, test]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs
