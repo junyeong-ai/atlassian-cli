@@ -4,10 +4,11 @@
 [![Security](https://github.com/junyeong-ai/atlassian-cli/workflows/Security/badge.svg)](https://github.com/junyeong-ai/atlassian-cli/actions/workflows/security.yml)
 [![Rust](https://img.shields.io/badge/rust-1.98.0%2B%20(2024%20edition)-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
 [![Version](https://img.shields.io/badge/version-0.14.0-blue?style=flat-square)](https://github.com/junyeong-ai/atlassian-cli/releases)
+[![DeepWiki](https://img.shields.io/badge/DeepWiki-junyeong--ai%2Fatlassian--cli-blue.svg?logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACwAAAAyCAYAAAAnWDnqAAAAAXNSR0IArs4c6QAAA05JREFUaEPtmUtyEzEQhtWTQyQLHNak2AB7ZnyXZMEjXMGeK/AIi+QuHrMnbChYY7MIh8g01fJoopFb0uhhEqqcbWTp06/uv1saEDv4O3n3dV60RfP947Mm9/SQc0ICFQgzfc4CYZoTPAswgSJCCUJUnAAoRHOAUOcATwbmVLWdGoH//PB8mnKqScAhsD0kYP3j/Yt5LPQe2KvcXmGvRHcDnpxfL2zOYJ1mFwrryWTz0advv1Ut4CJgf5uhDuDj5eUcAUoahrdY/56ebRWeraTjMt/00Sh3UDtjgHtQNHwcRGOC98BJEAEymycmYcWwOprTgcB6VZ5JK5TAJ+fXGLBm3FDAmn6oPPjR4rKCAoJCal2eAiQp2x0vxTPB3ALO2CRkwmDy5WohzBDwSEFKRwPbknEggCPB/imwrycgxX2NzoMCHhPkDwqYMr9tRcP5qNrMZHkVnOjRMWwLCcr8ohBVb1OMjxLwGCvjTikrsBOiA6fNyCrm8V1rP93iVPpwaE+gO0SsWmPiXB+jikdf6SizrT5qKasx5j8ABbHpFTx+vFXp9EnYQmLx02h1QTTrl6eDqxLnGjporxl3NL3agEvXdT0WmEost648sQOYAeJS9Q7bfUVoMGnjo4AZdUMQku50McDcMWcBPvr0SzbTAFDfvJqwLzgxwATnCgnp4wDl6Aa+Ax283gghmj+vj7feE2KBBRMW3FzOpLOADl0Isb5587h/U4gGvkt5v60Z1VLG8BhYjbzRwyQZemwAd6cCR5/XFWLYZRIMpX39AR0tjaGGiGzLVyhse5C9RKC6ai42ppWPKiBagOvaYk8lO7DajerabOZP46Lby5wKjw1HCRx7p9sVMOWGzb/vA1hwiWc6jm3MvQDTogQkiqIhJV0nBQBTU+3okKCFDy9WwferkHjtxib7t3xIUQtHxnIwtx4mpg26/HfwVNVDb4oI9RHmx5WGelRVlrtiw43zboCLaxv46AZeB3IlTkwouebTr1y2NjSpHz68WNFjHvupy3q8TFn3Hos2IAk4Ju5dCo8B3wP7VPr/FGaKiG+T+v+TQqIrOqMTL1VdWV1DdmcbO8KXBz6esmYWYKPwDL5b5FA1a0hwapHiom0r/cKaoqr+27/XcrS5UwSMbQAAAABJRU5ErkJggg==)](https://deepwiki.com/junyeong-ai/atlassian-cli)
 
 > **🌐 한국어** | **[English](README.en.md)**
 
-Atlassian Cloud CLI — Jira + Confluence. 단일 Rust 바이너리. OAuth 2.0 (3LO, ⭐ 권장), Service Account, Scoped API token, Basic (classic API token) 네 가지 인증 방식 지원.
+Jira와 Confluence Cloud를 다루는 단일 Rust 바이너리입니다. 사람뿐 아니라 AI 에이전트가 직접 다루도록 설계했습니다. 모든 명령은 JSON을 출력하고, 서식 있는 본문은 Markdown으로 읽고 쓰며, 긴 본문은 표준 입력에서 받고, 실패는 안정된 종료 코드와 함께 JSON 객체 하나로 보고합니다. `jira-confluence` Claude Code 스킬을 함께 배포하며, OAuth 2.0 (3LO), 서비스 계정, scoped API 토큰, classic API 토큰의 네 가지 인증 방식을 지원합니다.
 
 ---
 
@@ -18,324 +19,272 @@ Atlassian Cloud CLI — Jira + Confluence. 단일 Rust 바이너리. OAuth 2.0 (
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | bash
 export PATH="${INSTALL_DIR:-$HOME/.local/bin}:$PATH"
 
-# 2. 설정 초기화
+# 2. 설정을 만들고 인증 방식을 고릅니다 ("인증" 참고)
 atlassian-cli config init --global
-
-# 3. 설정 편집 — 아래 "인증" 섹션에서 oauth / service_account / scoped_token / basic 중 선택
 atlassian-cli config edit --global
 
-# 4. (oauth 인 경우만) 브라우저로 로그인
+# 3. 로그인합니다 (oauth만 해당, 브라우저가 없으면 --no-browser)
 atlassian-cli auth login
-# 브라우저가 없는 환경에서는 위 명령 대신: atlassian-cli auth login --no-browser
 
-# 5. 검증
+# 4. 자격 증명을 확인하고 첫 검색을 실행합니다
 atlassian-cli config validate
-
-# 6. 사용
-atlassian-cli jira search "project = PROJ" --limit 5
+atlassian-cli jira search "assignee = currentUser()" --limit 5
 ```
 
 ---
 
-## 주요 기능
+## 사용법
 
 ### Jira
+
 ```bash
 # 읽기
 atlassian-cli jira get PROJ-123 --format markdown
-atlassian-cli jira search "assignee = currentUser()" --limit 10
+atlassian-cli jira search "assignee = currentUser() AND statusCategory != Done" --format markdown --limit 20
 atlassian-cli jira search "project = PROJ" --all --stream > issues.jsonl
 atlassian-cli jira comment list PROJ-123 --format markdown
+
+# 쓰기 — Markdown은 ADF로 변환되고, `-`는 본문을 표준 입력에서 읽습니다
+atlassian-cli jira create PROJ "Safari에서 로그인 실패" Bug --format markdown --description - < report.md
+atlassian-cli jira comment add PROJ-123 "**staging**에서 재현" --format markdown
+atlassian-cli jira user search "Kim"                  # 담당자 필드·JQL·CQL에 쓰는 accountId
+atlassian-cli jira update PROJ-123 '{"assignee": {"accountId": "5b10a2844c20165700ede21g"}}'
 atlassian-cli jira transition list PROJ-123
-
-# 쓰기 (--format markdown 이면 Markdown 을 ADF 로 변환, `-` 는 표준 입력에서 읽음)
-atlassian-cli jira create PROJ "Summary" Bug --format markdown --description - < report.md
-atlassian-cli jira create PROJ "Summary" Sub-task --parent PROJ-123
-atlassian-cli jira create PROJ "Summary" Task --fields '{"components":[{"name":"api"}]}'
-atlassian-cli jira update PROJ-123 '{"summary":"New title"}'
-atlassian-cli jira comment add PROJ-123 "**staging** 에서 재현" --format markdown
-atlassian-cli jira user search "Kim"              # 담당자 필드·JQL·CQL 에 쓰는 accountId
-atlassian-cli jira comment update PROJ-123 10042 "Edited"
 atlassian-cli jira transition apply PROJ-123 31
-atlassian-cli jira delete PROJ-123 --yes          # 영구 삭제 (--yes 필수)
+atlassian-cli jira delete PROJ-123 --yes               # 영구 삭제
 
-# 링크 · 작업시간 · 와처
+# 링크·작업 시간·와처·애자일
 atlassian-cli jira link add PROJ-1 PROJ-2 --type Blocks
 atlassian-cli jira worklog add PROJ-123 "2h 30m" --comment "조사"
 atlassian-cli jira watcher add PROJ-123
-
-# 애자일 — 보드 · 스프린트 · 에픽
 atlassian-cli jira sprint list --project PROJ
 atlassian-cli jira sprint move 55 PROJ-1 PROJ-2
-atlassian-cli jira epic assign EPIC-1 PROJ-1
+atlassian-cli jira epic assign EPIC-1 PROJ-1 PROJ-2    # 각 이슈의 parent를 설정
 ```
 
 ### Confluence
+
 ```bash
 # 읽기
-atlassian-cli confluence search "space = TEAM" --limit 10
+atlassian-cli confluence search "space = TEAM AND type = page" --format markdown --limit 10
 atlassian-cli confluence get 123456 --format markdown
-atlassian-cli confluence children 123456
-atlassian-cli confluence comment list 123456 --format markdown   # 대댓글·인라인 댓글 모두 포함
+atlassian-cli confluence children 123456               # 페이지·폴더·화이트보드·데이터베이스·임베드
+atlassian-cli confluence comment list 123456 --format markdown
 
-# 페이지 (기본은 storage format, --format markdown 이면 Markdown 변환)
-atlassian-cli confluence create TEAM "Title" - --format markdown < page.md
-atlassian-cli confluence update 123456 "Title" - --format markdown --base-version 7 < page.md   # 7 이후 저장이 있으면 409 로 거부
-atlassian-cli confluence delete 123456 --yes              # 휴지통 (--yes 필수)
-
-# 댓글 · 라벨 · 콘텐츠 속성
-atlassian-cli confluence comment list 123456 --location inline   # 본문에 앵커된 댓글만
-atlassian-cli confluence comment list 123456 --roots-only        # 최상위 댓글만
-atlassian-cli confluence comment get 67890                       # 댓글 id 로 단건 조회
-atlassian-cli confluence comment replies 67890                   # 한 스레드만
-atlassian-cli confluence comment add 123456 "리뷰 **완료**" --format markdown
-atlassian-cli confluence comment add 123456 "<p>답글</p>" --reply-to 67890
+# 쓰기 — Markdown은 storage format으로 변환됩니다
+atlassian-cli confluence create TEAM "설계 노트" - --format markdown --parent 123456 < notes.md
+atlassian-cli confluence update 123456 "설계 노트" - --format markdown --base-version 7 < notes.md
+atlassian-cli confluence comment add 123456 "**좋습니다**" --format markdown
+atlassian-cli confluence attachment upload 123456 ./diagram.png
 atlassian-cli confluence label add 123456 needs-review
 atlassian-cli confluence property set 123456 review '{"status":"done"}'
-
-# 스페이스 · 첨부
-atlassian-cli confluence space list
-atlassian-cli confluence attachment upload 123456 ./diagram.png
+atlassian-cli confluence delete 123456 --yes           # 페이지를 휴지통으로 이동
 ```
 
-### 공통
+`--base-version`에는 읽어 온 `version.number`를 넣습니다. 그 버전 이후 다른 사람이 저장했다면 수정은 그 변경을 덮어쓰지 않고 409로 거부됩니다.
+
+### 스크립트와 에이전트를 위한 출력
+
+- 결과는 stdout에 JSON으로 출력되고, 목록은 `items`로 감쌉니다. `--pretty`, `--profile`, `--config` 같은 루트 옵션은 하위 명령 앞에 둡니다.
+- `--format`은 서식 있는 본문의 표현을 정합니다. 기본값은 Jira `adf`, Confluence `storage`이며, `markdown`은 읽을 때 JSON 봉투 안의 본문 필드를 변환하고 쓸 때 본문을 변환해 보냅니다. `html`은 기본값의 별칭으로 남아 있습니다.
+- 본문 인자에 `-`를 주면 표준 입력에서 읽으며, 빈 입력은 거부합니다. 따옴표로 감싼 heredoc은 이스케이프가 필요 없고 인자 크기 제한도 받지 않습니다.
+- `--all`은 검색의 모든 페이지를 가져오고, `--all --stream`은 페이지가 도착하는 대로 JSONL을 쓰며 진행 상황을 stderr에 보고합니다.
+- Markdown 쓰기는 GitHub 표와 취소선을 포함한 CommonMark를 따릅니다. ADF는 목록 항목이나 인용 안에 제목·인용·표·구분선을 담을 수 없으므로, 그런 Markdown은 위치를 밝혀 거부합니다. 원시 HTML은 글자 그대로 남으며, Confluence 매크로는 `--format storage`로 씁니다.
+
+모든 명령·인자·기본값은 생성된 [CLI 참조](docs/cli.md)에 있고, 설치된 버전의 설명은 `atlassian-cli <명령> --help`로 확인합니다.
+
 ```bash
-atlassian-cli --pretty jira get PROJ-123 | jq -r '.fields.summary'
-atlassian-cli --profile work jira search "..."
-atlassian-cli -v jira search "..."           # -v/-vv/-vvv: info/debug/trace
+atlassian-cli completions zsh > "${fpath[1]}/_atlassian-cli"   # bash, fish, elvish, powershell도 지원
 ```
 
 ---
 
 ## 설치
 
-**자동 설치** (권장):
 ```bash
+# 최신 릴리스. 함께 들어 있는 스킬을 ~/.claude/skills에 배포합니다
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | bash
-```
-최신 릴리스의 사전 빌드 바이너리를 설치하고, 그 바이너리가 자기 안에 담고 있는 `jira-confluence` Claude Code skill 을 `~/.claude/skills` 에 배포합니다.
 
-```bash
-# 특정 릴리스 설치
+# 특정 릴리스나 다른 디렉터리
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.14.0 bash
-
-# 이후 업데이트·제거는 바이너리가 직접 한다 (설치 스크립트 재실행 불필요)
-atlassian-cli self update
-atlassian-cli self uninstall --yes
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | INSTALL_DIR="$HOME/bin" bash
 ```
 
-설치 후 생명주기는 `self` 명령군이 담당합니다 — 아래 [설치 관리](#설치-관리) 참조.
+**수동 설치.** [Releases](https://github.com/junyeong-ai/atlassian-cli/releases)에서 플랫폼에 맞는 압축 파일과 `.sha256`을 받아 `sha256sum -c`(Linux)나 `shasum -a 256 -c`(macOS)로 검증하고, `tar -xzf`로 푼 `atlassian-cli`를 `PATH`에 있는 디렉터리로 옮깁니다. Windows에서는 릴리스의 `.zip`에서 `atlassian-cli.exe`를 꺼냅니다. 스킬은 `atlassian-cli self skill install`로 배포합니다.
 
-**소스 빌드 (Linux/macOS)**:
+**소스 빌드.** Rust 1.98.0 이상이 필요하며, 개발에 쓰는 도구체인은 `rust-toolchain.toml`이 고정합니다.
+
 ```bash
 git clone https://github.com/junyeong-ai/atlassian-cli
 cd atlassian-cli
 cargo install --path . --locked --root "$HOME/.local" --target "$(rustc --print host-tuple)"
-export PATH="$HOME/.local/bin:$PATH"
-atlassian-cli --version
 ```
 
-소스 설치는 `rust-toolchain.toml`의 도구체인으로 현재 호스트용 바이너리를 빌드해 `$HOME/.local/bin`에 설치합니다. 다른 방식으로 설치한 바이너리를 교체하려면 `cargo install`에 `--force`를 추가하세요. 새 터미널에서도 실행하려면 위 `export PATH`를 사용하는 셸의 시작 파일에 추가하세요. 스킬은 `atlassian-cli self skill install`로 별도 설치합니다.
+다른 방식으로 설치한 바이너리를 교체하려면 `--force`를 더합니다.
 
-**지원 플랫폼**: Linux (x86_64, aarch64), macOS (Intel, Apple Silicon), Windows (x86_64). `install.sh` 자동 설치는 Linux/macOS용이며, Windows는 Release의 `.zip`에서 `atlassian-cli.exe`를 풀어 사용자 PATH에 등록된 폴더에 둡니다. 모든 플랫폼이 `.tar.gz` 를 발행하므로 `self update` 는 어디서나 동작합니다.
+릴리스는 Linux(x86_64, aarch64), macOS(Intel, Apple Silicon), Windows(x86_64)용으로 나옵니다. `install.sh`는 Linux와 macOS에서 동작합니다. 모든 플랫폼이 `.tar.gz`를 발행하므로 `self update`는 어디서나 동작합니다.
 
 ### 설치 관리
 
 ```bash
-atlassian-cli self status                     # 버전·경로·skill 상태·토큰을 가진 프로파일 (네트워크 없음)
-atlassian-cli self update                     # 최신 릴리스로 교체
-atlassian-cli self update --version 0.10.0     # 특정 버전 (다운그레이드는 명시할 때만 허용)
-atlassian-cli self update --verify-attestations   # GitHub build provenance 까지 검증 (gh CLI 필요)
-atlassian-cli self update --force              # 이미 그 버전을 보고하는 바이너리도 다시 교체 (재설치)
-atlassian-cli self skill install               # skill 재배포
+atlassian-cli self status                          # 버전·경로·스킬 상태·토큰을 가진 프로파일 (네트워크 없음)
+atlassian-cli self update                          # 최신 릴리스로 교체
+atlassian-cli self update --version 0.13.9         # 특정 릴리스. 이전 버전으로 가려면 이름을 명시
+atlassian-cli self update --verify-attestations    # GitHub 빌드 출처 증명까지 검증 (gh CLI 필요)
+atlassian-cli self update --force                  # 이미 그 버전을 보고하는 바이너리도 교체
+atlassian-cli self skill install                   # 이 바이너리에 든 스킬을 다시 배포
 atlassian-cli self skill remove --yes
 atlassian-cli self uninstall --yes [--keep-skill] [--keep-credentials] [--purge-config]
 ```
 
-- skill 은 바이너리에 컴파일되어 들어가므로, 바이너리가 들고 다니는 사본은 언제나 자기 것입니다. 디스크에 배포된 사본은 별개이고, `self status` 가 그걸 **바이트 비교**로 판정해 직접 수정했거나 다운그레이드가 남긴 이전 버전을 `stale` 로 잡습니다.
-- `self update` 는 내려받은 바이너리를 **교체 전에** 실행해 버전을 확인합니다. 이 기계에서 돌지 않는 바이너리는 아무것도 건드리지 않고 실패합니다.
-- `self uninstall` 은 OS 키체인에 남은 OAuth 토큰까지 지웁니다 (`--keep-credentials` 로 보존). 키체인이 있는데 읽을 수 없으면(잠김, 또는 `ATLASSIAN_NO_KEYCHAIN` 로 열람 금지) **거부**합니다 — 토큰을 남긴 채 바이너리만 사라지는 게 최악이기 때문입니다. 키체인이 응답하지 않는 환경에서는 두 번에 나눠 끝납니다 — 첫 실행이 `credentials.json` 을 지우고 지운 것을 밝히며 거부하고, `--keep-credentials` 로 두 번째 실행이 완료합니다. `auth logout` 도 **응답하지 않는** 키체인에 대해서는 같은 이유로 0이 아닌 코드로 끝납니다 — 모든 릴리스 타깃이 키체인을 포함하므로 "닿지 못함"을 "없음"으로 읽을 수 없습니다. `ATLASSIAN_NO_KEYCHAIN` 이 켜져 있을 때는 0으로 끝나고 키체인을 건드리지 않았다고 알립니다 — 물어본 적이 없기 때문이며, 거기 있는 것을 지우려면 플래그를 한 번 끄고 실행하면 됩니다. `--purge-config` 는 이 도구가 쓴 설정 파일을 지우고 디렉터리는 비었을 때만 지우므로, `--keep-credentials` 와 함께 써도 `credentials.json` 은 남습니다. 비밀정보가 없는 `credentials.json.lock`이 남아 있으면 디렉터리도 보존됩니다. 프로젝트 로컬 설정(`.atlassian.toml`)은 건드리지 않습니다.
-**Requirement**: 소스 빌드 최소 지원 버전은 Rust 1.98.0이며, 기본 도구체인은 Rust 1.99.1입니다.
+- `self update`는 교체하기 전에 내려받은 바이너리를 실행해 보고하는 버전을 확인합니다. 이 기계에서 실행되지 않는 바이너리라면 설치는 그대로 남습니다.
+- 스킬은 바이너리에 컴파일되어 있습니다. `self status`는 배포된 사본을 바이트 단위로 비교해, 직접 수정했거나 다운그레이드로 달라진 사본을 `stale`로 보고합니다.
+- `self uninstall`은 `--keep-credentials`가 없으면 OS 키체인의 OAuth 토큰도 지웁니다. 키체인이 있는데 읽을 수 없으면 거부합니다. 토큰이 남았는데 그 위치를 아는 도구가 사라지는 것이 가장 나쁘기 때문입니다. 키체인이 응답하지 않으면 첫 실행은 `credentials.json`을 지우고 무엇을 지웠는지 밝히며 거부하고, `--keep-credentials`를 준 두 번째 실행이 마무리합니다.
+- `auth logout`도 같은 이유로, 응답하지 않는 키체인에 대해서는 0이 아닌 코드로 끝납니다. `ATLASSIAN_NO_KEYCHAIN`이 설정되어 있으면 0으로 끝나며 키체인을 건드리지 않았다고 알립니다.
+- `--purge-config`는 이 도구가 쓴 설정 파일을 지우고, 그 결과 디렉터리가 비었을 때만 디렉터리도 지웁니다. 프로젝트의 `.atlassian.toml`은 건드리지 않습니다.
 
 ---
 
 ## 인증
 
-네 가지 방식을 **명시적**으로 선택해야 합니다 (자동 판별 없음):
+방식은 명시적으로 고르며, 추측하지 않습니다.
 
-| 방식 | 행위자 | 요청 호스트 | 특징 |
+| 방식 | 행위자 | 요청 호스트 | 설명 |
 |---|---|---|---|
-| `basic` | 본인 (API token 발급자) | `{domain}` | 가장 단순. **classic (unscoped) 토큰 전용** |
-| `scoped_token` | 본인 (API token 발급자) | `api.atlassian.com` | **scope 가 붙은 토큰 전용**. 토큰에 부여한 scope 로 권한 제한 |
-| `service_account` | 비인간 service account | `api.atlassian.com` | 자동화·CI 용. 별도 principal |
-| `oauth` | 본인 (대화형 로그인) | `api.atlassian.com` | 사용자 권한 그대로 + refresh token 자동 관리 |
+| `oauth` ⭐ | 로그인한 사용자 | `api.atlassian.com` | 브라우저 로그인. 토큰은 OS 키체인에 보관하고 자동 갱신 |
+| `service_account` | 서비스 계정 | `api.atlassian.com` | 자동화와 CI를 위한 OAuth 2.0 client credentials |
+| `scoped_token` | 토큰 소유자 | `api.atlassian.com` | scope가 **있는** API 토큰. 그 scope로 권한이 제한됨 |
+| `basic` | 토큰 소유자 | `{domain}` | scope가 **없는** classic API 토큰 |
 
-두 토큰 방식은 서로의 토큰을 받지 않습니다. 사이트 호스트는 scope 가 붙은 토큰을 조용히 무시해 401 을 돌려주고, 게이트웨이는 classic 토큰을 거부합니다. 401 응답의 `hint`는 토큰 만료·인증 방식 불일치·권한 부족 등 확인할 원인을 안내합니다. 토큰 종류와 scope를 확인한 뒤 설정을 변경하세요.
+두 토큰 방식은 서로의 토큰을 받지 않습니다. 사이트 호스트는 scope가 있는 토큰에 401을 돌려주고, 게이트웨이는 classic 토큰을 거부합니다. 401에는 만료, 방식 불일치, scope 부족처럼 확인할 원인을 알려 주는 `hint`가 붙습니다. 두 종류 모두 <https://id.atlassian.com/manage-profile/security/api-tokens>에서 만듭니다. Atlassian은 scoped 토큰을 권장하며, 2024-12-15 이전에 발급된 토큰은 2026-03-14부터 2026-05-12 사이에 만료되었습니다([토큰 관리](https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/)).
 
-### OAuth 2.0 (3LO — 본인 계정으로 로그인) ⭐ 권장
-
-브라우저로 로그인하면 토큰이 OS keychain (또는 0600 파일)에 저장됩니다. Refresh token이 있으면 만료 5분 전에 갱신하고, 없으면 access token의 실제 만료까지 사용합니다.
+### OAuth 2.0 (3LO) — 권장
 
 ```toml
 # ~/.config/atlassian-cli/config.toml
-[default]
-
 [default.auth]
 method = "oauth"
-client_id = "..."          # developer.atlassian.com 에서 발급
-client_secret = "..."      # 권장: ATLASSIAN_CLIENT_SECRET env var
-redirect_port = 8976       # OAuth app 에 등록한 redirect URI 와 일치 (127.0.0.1:8976/callback)
-# scopes 미지정 시 기본값 = ["read:jira-user", "read:jira-work", "write:jira-work", "offline_access"]
-# Confluence 검색·페이지·스페이스 조회 권한 예시 (쓰기에는 별도 권한 필요):
-#   scopes = ["read:jira-user", "read:jira-work", "write:jira-work",
-#             "read:confluence-content.all", "read:page:confluence",
-#             "read:space:confluence", "offline_access"]
-# cloud_id = "..."   # 여러 site 접근 가능할 때 1개로 고정
+client_id = "..."          # developer.atlassian.com에서 발급
+client_secret = "..."      # ATLASSIAN_CLIENT_SECRET 환경 변수 권장
+redirect_port = 8976       # 앱의 callback URL과 일치해야 함
+# scopes 기본값: ["read:jira-user", "read:jira-work", "write:jira-work", "offline_access"]
+# cloud_id = "..."         # 계정이 여러 사이트에 접근할 때 하나로 고정
 ```
 
-
-기본 Jira 권한 외에 실제 명령에 필요한 scope만 추가하세요. `sprint list --project`는 보드 조회 권한도 필요합니다.
-
-| 명령 | 추가 OAuth scope | 공식 API |
-|---|---|---|
-| `board list` | `read:board-scope:jira-software`, `read:project:jira` | [Board](https://developer.atlassian.com/cloud/jira/software/rest/api-group-board/) |
-| `sprint list --board` | `read:sprint:jira-software` | [Board sprints](https://developer.atlassian.com/cloud/jira/software/rest/api-group-board/#api-rest-agile-1-0-board-boardid-sprint-get) |
-| `sprint move` | `write:sprint:jira-software` | [Sprint](https://developer.atlassian.com/cloud/jira/software/rest/api-group-sprint/) |
-| `sprint backlog` | `write:board-scope:jira-software` | [Backlog](https://developer.atlassian.com/cloud/jira/software/rest/api-group-backlog/) |
-
-Confluence 쓰기에는 [각 API의 scope](https://developer.atlassian.com/cloud/confluence/rest/v2/intro/)를 확인하세요. 페이지 속성 변경은 `read:page:confluence`와 `write:page:confluence`, 댓글 삭제는 `delete:comment:confluence`가 필요합니다. 조회 후 변경하는 명령은 두 단계의 권한이 모두 필요합니다. 앱에 scope를 부여하고 프로파일에 명시한 뒤 `auth login`으로 다시 동의하세요.
-
-> **헤드리스 / AI 에이전트**: 데스크톱 OS 에서 키체인이 GUI 프롬프트로 블로킹될 수 있습니다. `ATLASSIAN_NO_KEYCHAIN=1` 을 설정하면 키체인을 건너뛰고 0600 파일 저장소를 사용합니다. 환경 단위 설정으로 쓰세요(켰다 껐다 X) — 플래그가 켜진 동안 `auth logout`은 파일만 지웁니다. 이전에 키체인으로 로그인한 적이 있으면 플래그 없이 `auth logout`을 한 번 실행해 키체인을 비우세요.
+<https://developer.atlassian.com/console/myapps/>에서 OAuth 2.0 (3LO) 앱을 만들고, callback URL로 `http://127.0.0.1:8976/callback`을 등록하고, 프로파일이 요청할 scope를 부여한 뒤 client ID와 secret을 복사합니다. 앱이 부여하지 않은 scope는 동의 단계에서 거부됩니다.
 
 ```bash
-atlassian-cli auth login         # 브라우저 열림 → Atlassian 로그인 → 자동 토큰 저장
-atlassian-cli auth status        # 만료 시간, scope, 저장 위치 확인
-atlassian-cli auth refresh       # 수동 갱신 (디버깅용)
-atlassian-cli auth logout        # 토큰 폐기
+atlassian-cli auth login       # 브라우저를 엽니다. --no-browser면 URL을 출력
+atlassian-cli auth status      # 만료·scope·저장소
+atlassian-cli auth refresh     # 강제 갱신
+atlassian-cli auth logout      # 저장된 세션 삭제
 ```
 
-준비물 — Atlassian developer console (<https://developer.atlassian.com/console/myapps/>) 에서:
-1. OAuth 2.0 (3LO) app 생성
-2. Callback URL 에 `http://127.0.0.1:8976/callback` 등록 (port 는 위 config 와 일치)
-3. Permissions 에서 사용할 scope 부여 (Jira API + 필요 시 Confluence API). 부여하지 않은 scope 를 config 에 적으면 사용자 동의 단계에서 거부됨.
-4. Settings 에서 client_id / client_secret 복사
+refresh token이 있는 세션은 만료 5분 전에 갱신됩니다. 기본 Jira 권한 외에는 쓰는 명령에 필요한 scope만 요청합니다.
 
-### Service account (자동화·CI 용)
+| 명령 | 추가 scope | API |
+|---|---|---|
+| `board list`, `sprint list --project` | `read:board-scope:jira-software`, `read:project:jira` | [Board](https://developer.atlassian.com/cloud/jira/software/rest/api-group-board/) |
+| `sprint list` | `read:sprint:jira-software` | [Board sprints](https://developer.atlassian.com/cloud/jira/software/rest/api-group-board/#api-rest-agile-1-0-board-boardid-sprint-get) |
+| `sprint move` | `write:sprint:jira-software` | [Sprint](https://developer.atlassian.com/cloud/jira/software/rest/api-group-sprint/) |
+| `sprint backlog` | `write:board-scope:jira-software` | [Backlog](https://developer.atlassian.com/cloud/jira/software/rest/api-group-backlog/) |
+| Confluence 검색과 페이지 읽기 | `read:confluence-content.all`, `read:page:confluence`, `read:space:confluence` | [Confluence v2](https://developer.atlassian.com/cloud/confluence/rest/v2/intro/) |
+| `confluence children` | `read:hierarchical-content:confluence` | [Page](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-page/) |
+
+Confluence 쓰기에는 쓰기 전에 하는 읽기까지 포함해, 호출하는 모든 엔드포인트의 scope가 필요합니다. 속성 변경에는 `read:page:confluence`와 `write:page:confluence`가, 댓글 삭제에는 `delete:comment:confluence`가 필요합니다. 앱에 scope를 허용하고 프로파일에 추가한 뒤에는 `auth login`을 다시 실행합니다. 기존 토큰에는 새 scope가 붙지 않습니다.
+
+> **헤드리스와 AI 에이전트:** 데스크톱 OS에서는 키체인이 GUI 프롬프트에서 멈출 수 있습니다. 실행 환경에 `ATLASSIAN_NO_KEYCHAIN=1`을 설정하면 0600 파일 저장소를 쓰며, 이 값은 계속 유지해야 합니다. 설정되어 있는 동안 `auth logout`은 파일 저장소만 지웁니다.
+
+### 서비스 계정
 
 ```bash
 export ATLASSIAN_AUTH_METHOD=service_account
 export ATLASSIAN_CLIENT_ID="..."
 export ATLASSIAN_CLIENT_SECRET="..."
-# ATLASSIAN_CLOUD_ID 는 선택 (미지정 시 자동 검색)
+# ATLASSIAN_CLOUD_ID는 자격 증명이 여러 사이트에 접근할 때만 필요
 ```
 
-또는 `~/.config/atlassian-cli/config.toml` (chmod 600 권장):
 ```toml
 [default.auth]
 method = "service_account"
 client_id = "..."
 client_secret = "..."
-# cloud_id = "..."   # optional
 ```
 
-### Basic (classic API token)
-
-```bash
-export ATLASSIAN_AUTH_METHOD=basic
-export ATLASSIAN_DOMAIN=company.atlassian.net
-export ATLASSIAN_EMAIL=user@example.com
-export ATLASSIAN_API_TOKEN=...
-```
-
-또는:
-```toml
-[default]
-domain = "company.atlassian.net"
-
-[default.auth]
-method = "basic"
-email = "user@example.com"
-token = "..."
-```
-
-API token 발급: <https://id.atlassian.com/manage-profile/security/api-tokens>
-
-### Scoped API token (scope 가 붙은 토큰)
-
-2024-12-15 이전에 발급된 토큰은 2026-03-14 ~ 05-12 사이에 만료되었습니다. Atlassian은 scoped 토큰을 권장합니다. 생성한 토큰의 종류에 맞는 인증 방식을 선택하세요. [공식 토큰 관리 안내](https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/)를 참고하세요. scope 가 붙은 토큰은 사이트 URL 이 아니라 `api.atlassian.com` 게이트웨이로만 통합니다.
+### Scoped API 토큰
 
 ```bash
 export ATLASSIAN_AUTH_METHOD=scoped_token
-export ATLASSIAN_DOMAIN=company.atlassian.net   # cloud_id 를 여기서 자동 해석
-export ATLASSIAN_EMAIL=user@example.com
-export ATLASSIAN_API_TOKEN=...
-# export ATLASSIAN_CLOUD_ID=...   # 직접 고정하면 domain 불필요
+export ATLASSIAN_DOMAIN="company.atlassian.net"   # cloud ID를 여기서 해석
+export ATLASSIAN_EMAIL="user@example.com"
+export ATLASSIAN_API_TOKEN="..."
 ```
 
-또는:
+cloud ID는 자격 증명이 필요 없는 `https://{domain}/_edge/tenant_info`에서 읽으며, 이 방식이 사이트 호스트에 보내는 유일한 요청입니다. `ATLASSIAN_CLOUD_ID`나 `[auth].cloud_id`를 지정하면 이 조회를 건너뛰고 domain도 필요 없습니다. `config validate`는 Jira로 신원을 확인하므로, Confluence scope만 있는 토큰은 정상이어도 이 검사에 실패합니다. 그런 토큰은 `confluence space list`로 확인합니다.
+
+### Classic API 토큰 (`basic`)
+
 ```toml
 [default]
 domain = "company.atlassian.net"
 
 [default.auth]
-method = "scoped_token"
+method = "basic"
 email = "user@example.com"
 token = "..."
-# cloud_id = "..."   # 생략 시 domain 으로부터 해석
 ```
 
-`cloud_id` 는 `https://{domain}/_edge/tenant_info` 로 해석합니다 (인증 불필요). 이 조회는 이 method 에서 사이트 호스트를 건드리는 유일한 부분이라, 매 실행마다 왕복이 한 번 발생합니다 — `cloud_id` 를 직접 지정하면 사이트 호스트를 아예 거치지 않습니다. 값은 <https://admin.atlassian.com> 의 사이트 URL 에서도 확인할 수 있습니다.
-
-`config validate` 는 `/myself` 로 신원을 확인하므로 토큰에 Jira 읽기 scope 가 필요합니다. Confluence 전용 scope 토큰이면 이 명령은 401 로 실패하지만 토큰 자체는 정상입니다 — `confluence space list` 같은 가벼운 읽기로 확인하세요.
-
-### 다중 프로파일
-
-```toml
-[default]
-[default.auth]
-method = "service_account"
-client_id = "..."
-client_secret = "..."
-
-[work]
-domain = "work.atlassian.net"
-[work.auth]
-method = "basic"
-email = "..."
-token = "..."
-```
-
-사용: `atlassian-cli --profile work ...`
-
-**OAuth scope**: 사용하는 엔드포인트가 요구하는 scope를 앱에 허용하고 프로파일의 `scopes`에 추가한 뒤 `auth login`을 다시 실행하세요. 프로파일은 계정·사이트·권한 구성을 분리할 때 사용합니다. [공식 OAuth 설정 안내](https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/)를 참고하세요.
-
-`config path/edit`는 `--config` 파일을 우선 선택합니다. `--global`을 함께 지정하면 글로벌 파일을 선택합니다. `--config <파일> config init`은 해당 경로에 설정을 생성하며 기존 파일을 덮어쓰지 않습니다. `config list`는 명시한 파일의 프로필도 포함합니다. `config show`는 비밀값을 마스킹한 TOML을 출력하며, 프로필 이름과 문자열을 그대로 보존합니다.
-
-`EDITOR`는 모든 플랫폼에서 POSIX 인용 규칙을 따르는 실행 파일과 인자 목록입니다(예: `code --wait`). 공백이나 역슬래시가 있는 실행 경로는 변수 값 안에서도 따옴표로 감싸세요. Windows 환경 변수 값의 예는 `'C:\Program Files\Microsoft VS Code\Code.exe' --wait`입니다.
-
-### 우선순위
-
-설정 우선순위는 `CLI 플래그 > 환경 변수 > --config 파일 > 프로젝트 설정 > 글로벌 설정`입니다. 파일의 운영 설정은 항목을 생략하면 상속하고, `[]`를 명시하면 상위 목록을 지웁니다. `[performance]`의 일부 값만 지정해도 나머지 값은 상속합니다.
-
-인증은 선택한 프로필에 `[auth]`가 있는 가장 높은 우선순위 파일의 섹션 전체를 사용합니다. 해당 섹션을 생략하면 하위 파일의 인증 설정을 유지하지만, 섹션 안에서 생략한 자격증명은 하위 파일에서 상속하지 않습니다. 선택한 인증 설정의 각 자격증명에는 `CLI 플래그 > 환경 변수 > 설정 파일` 순서를 적용합니다. `ATLASSIAN_AUTH_METHOD`로 method를 바꾸면 기존 파일 인증의 자격증명을 사용하지 않으며, 새 method에 필요한 값을 CLI나 환경 변수로 제공해야 합니다.
+같은 값을 `ATLASSIAN_AUTH_METHOD=basic`, `ATLASSIAN_DOMAIN`, `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN`으로 줄 수도 있습니다.
 
 ---
 
-## 필터 & 최적화
+## 설정
 
-**프로젝트/스페이스 자동 주입**:
+### 파일과 프로파일
+
+설정은 우선순위가 높은 순서로 `--config <파일>` 경로, 프로젝트 파일(작업 디렉터리에서 위로 올라가며 찾는 `.atlassian.toml` 또는 `.atlassian/config.toml`), 전역 파일 `~/.config/atlassian-cli/config.toml`에서 읽습니다. `config init --global`은 네 가지 방식을 주석으로 담은 시작 파일을 씁니다.
+
 ```toml
-[default.jira]
-projects_filter = ["PROJ1", "PROJ2"]
+[default.auth]
+method = "oauth"
+client_id = "..."
 
-[default.confluence]
-spaces_filter = ["TEAM1"]
+[work]
+domain = "work.atlassian.net"
+
+[work.auth]
+method = "basic"
+email = "user@example.com"
+token = "..."
 ```
 
-JQL `status = Open` → `project IN ("PROJ1","PROJ2") AND (status = Open)`. JQL에 이미 `project` 절이 있으면 주입을 건너뜁니다.
+프로파일은 `atlassian-cli --profile work ...`로 고릅니다. 계정·사이트·권한이 다르면 프로파일을 나눕니다.
 
-**성능 튜닝**:
+### 우선순위
+
+설정은 CLI 플래그 > 환경 변수 > `--config` 파일 > 프로젝트 파일 > 전역 파일 순서로 정해집니다. 생략한 항목은 다음 파일에서 상속하고, `[]`를 명시하면 상속된 목록을 비웁니다. 빈 환경 변수는 설정하지 않은 것으로 봅니다.
+
+선택한 프로파일에 `[auth]` 섹션을 정의한 파일 가운데 우선순위가 가장 높은 파일이 섹션 전체를 정합니다. 섹션을 생략하면 하위 파일의 인증을 유지하지만, 섹션 안에서 생략한 자격 증명은 상속하지 않습니다. 각 자격 증명은 CLI 플래그 > 환경 변수 > 그 섹션 순서로 정해집니다. `ATLASSIAN_AUTH_METHOD`로 다른 방식을 고르면 파일의 자격 증명은 쓰지 않으므로, 새 방식에 필요한 값은 플래그나 환경 변수로 줍니다.
+
+### 설정 관리
+
+- `config path`와 `config edit`는 `--config`가 있으면 그 파일을, `--global`이 있으면 전역 파일을 대상으로 합니다.
+- `config init --config <파일>`은 그 경로에 시작 파일을 쓰며 기존 파일을 덮어쓰지 않습니다.
+- `config list`는 읽은 파일(명시한 파일 포함)과 설정된 환경 변수를 보여 줍니다.
+- `config show`는 해석된 프로파일을 비밀 값을 가린 TOML로 출력합니다.
+- `EDITOR`는 모든 플랫폼에서 POSIX 인용 규칙을 따르는 실행 파일과 인자입니다(예: `code --wait`). 공백이나 역슬래시가 있는 경로는 값 안에서 따옴표로 감쌉니다: `'C:\Program Files\Microsoft VS Code\Code.exe' --wait`.
+
+### 범위 필터와 응답 크기
+
 ```toml
+[default.jira]
+projects_filter = ["PROJ1", "PROJ2"]       # project를 지정하지 않은 JQL에 주입
+search_default_fields = ["key", "summary", "status"]
+search_custom_fields = ["customfield_10015"]
+
+[default.confluence]
+spaces_filter = ["TEAM"]                    # space를 지정하지 않은 CQL에 주입
+
 [default.performance]
 request_timeout_ms = 30000
 rate_limit_delay_ms = 200
@@ -344,146 +293,49 @@ rate_limit_delay_ms = 200
 response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 ```
 
-`REQUEST_TIMEOUT_MS` 환경 변수가 `request_timeout_ms`를, `RESPONSE_EXCLUDE_FIELDS` 환경 변수가 `response_exclude_fields`를 덮어씁니다.
+`projects_filter`가 있으면 `status = Open`은 `project IN ("PROJ1","PROJ2") AND (status = Open)`으로 실행되고, 이미 project를 지정한 쿼리는 그대로 실행됩니다. `--fields`가 없으면 `jira search`는 기본 필드 17개를 요청합니다. `search_default_fields`는 이를 대체하고, `search_custom_fields`는 확장합니다. 환경 변수 `JIRA_SEARCH_DEFAULT_FIELDS`, `JIRA_SEARCH_CUSTOM_FIELDS`, `RESPONSE_EXCLUDE_FIELDS`, `REQUEST_TIMEOUT_MS`가 이 설정을 덮어씁니다.
 
 ---
 
-## 문제 해결
+## 오류와 종료 코드
 
-**401 Unauthorized (basic / scoped_token)** — 토큰 만료, 인증 방식 불일치 또는 scope 부족을 확인하세요. Scoped 토큰은 `scoped_token`, classic 토큰은 `basic`을 사용합니다. `hint`는 가능한 원인과 확인할 항목을 안내합니다.
-
-**Failed to resolve cloud_id from ...** — `_edge/tenant_info` 조회가 실패했습니다. 사이트 호스트 접근·도메인 설정을 확인하고, 해당 조회를 사용할 수 없다면 `cloud_id` 를 직접 지정하세요 (`ATLASSIAN_CLOUD_ID` 또는 `[auth].cloud_id`).
-
-**API 토큰 관리자 차단 (403)** — OAuth 2.0 service account로 전환. 관리자에게 OAuth 2.0 client credentials 요청.
-
-**Service account token request failed (400: invalid_client)** — `client_id`/`client_secret` 오타. `config validate`로 확인.
-
-**Multiple Atlassian sites found** — service account credential이 여러 사이트 접근 권한을 가짐. `cloud_id`를 명시.
-
-**401 Unauthorized; scope does not match** — OAuth scope 부족. 토큰 자체는 유효하니 다른 엔드포인트는 동작할 수 있음. 사용 중인 엔드포인트에 맞는 scope 부여 필요.
-
-**Invalid Atlassian domain format** — `.atlassian.net`으로 끝나야 함. 스푸핑 방지.
-
-**Profile 'X' not found in any loaded config file** — 모든 로드된 config 파일에 해당 profile이 없음. 파일 경로와 철자 확인.
-
----
-
-## 명령어 참조
-
-### Jira
-| 명령어 | 설명 |
-|--------|------|
-| `get <KEY>` | 이슈 조회 |
-| `search <JQL>` | JQL 검색 |
-| `create <PROJECT> <SUMMARY> <TYPE>` | 이슈 생성. 하위작업은 `--parent <KEY>` 필수, 프로젝트가 요구하는 나머지 필드는 `--fields <JSON>` |
-| `update <KEY> <JSON>` | 이슈 수정 |
-| `delete <KEY> --yes [--delete-subtasks]` | 이슈 영구 삭제 (비가역) |
-| `comment add <KEY> <TEXT>` | 댓글 추가 |
-| `comment update <KEY> <COMMENT_ID> <TEXT>` | 댓글 수정 |
-| `comment list <KEY>` | 댓글 목록 |
-| `comment delete <KEY> <COMMENT_ID>` | 댓글 삭제 |
-| `transition list <KEY>` | 전환 목록 |
-| `transition apply <KEY> <ID>` | 상태 전환 |
-| `link add/remove/list <KEY...>`, `link types` | 이슈 링크. `remove` 는 이슈 쌍(`--type`) 또는 `--id <링크 id>` — 둘 중 하나만 |
-| `worklog add/list/update/remove <KEY> ...` | 작업시간 기록. `add --started` 는 Jira 형식만 받습니다 — `2026-08-22T09:30:00.000+0900` (밀리초 3자리, 오프셋에 콜론 없음) |
-| `watcher add/remove/list <KEY>` | 와처 |
-| `user search <QUERY> [--limit N]` | 사용자 검색. 담당자 필드·JQL·CQL 에 쓰는 `accountId` 조회 |
-| `list types/priorities/statuses/labels` | 전역 메타데이터 조회 |
-| `board list --project <KEY>` | 애자일 보드 목록 |
-| `sprint list [--project <KEY> | --board <ID>] [--state active]`, `sprint move/backlog ...` | 스프린트 조회 / 백로그 이동 |
-| `epic assign <EPIC> <KEY...>`, `epic unassign <KEY...>` | 에픽 연결 / 해제 |
-
-### Confluence
-| 명령어 | 설명 |
-|--------|------|
-| `search <CQL>` | CQL 검색 |
-| `get <ID>` | 페이지 조회 |
-| `create <SPACE> <TITLE> <CONTENT> [--parent <ID>]` | 페이지 생성 (`--parent`로 부모 페이지 아래 중첩) |
-| `update <ID> <TITLE> <CONTENT> [--base-version <N>]` | 페이지 수정. `--base-version`을 주면 그 버전 이후 저장된 변경이 있을 때 덮어쓰지 않고 409로 거부 |
-| `delete <ID> --yes` | 페이지 삭제 (휴지통) |
-| `children <ID>` | 직속 하위 항목 (페이지·폴더·화이트보드·데이터베이스·임베드, 항목마다 `type`) |
-| `comment list <ID> [--location footer\|inline] [--roots-only]` | 페이지 댓글 — 기본은 footer·inline 두 계열 전부, 대댓글 포함. 항목마다 `location`·`depth`·`parentCommentId` |
-| `comment get <COMMENT_ID> [--location ...]` | 댓글 단건 (기본 `footer`) |
-| `comment replies <COMMENT_ID> [--location ...]` | 한 댓글 아래 전체 스레드 |
-| `comment add <ID> <BODY> [--reply-to <COMMENT_ID>]` | footer 댓글 작성 (page id) |
-| `comment update/delete <COMMENT_ID> ...` | 댓글 수정 / 삭제 (comment id) |
-| `label list/add/remove <ID> [LABEL]` | 페이지 라벨 |
-| `property list/set/delete <ID> [KEY] [JSON]` | 콘텐츠 속성 (값은 strict JSON) |
-| `space list`, `space get <KEY>` | 스페이스 조회 |
-| `attachment list <ID>`, `attachment upload <ID> <FILE> [--content-type <MIME>] [--minor]` | 첨부 조회 / 업로드 (`--minor`: 알림 억제; Content-Type은 확장자에서 자동 매핑, `--content-type`로 오버라이드) |
-
-### Config
-| 명령어 | 설명 |
-|--------|------|
-| `init [--global]` | 설정 초기화 |
-| `show` | 설정 표시 (secrets 마스킹) |
-| `list` | 파일 경로 + 환경변수 상태 |
-| `path [--global]` | 활성 설정 파일 경로 |
-| `edit [--global]` | `$EDITOR`로 편집 |
-| `validate` | 전략을 구성하고 신원을 확인 — `cloud_id` 가 고정된 service account 는 확인할 신원이 없어 해당 사이트로는 요청이 가지 않습니다 |
-
-전체 명령·인자·기본값은 [CLI 참조](docs/cli.md)에서 확인할 수 있습니다. 설치된 버전은 `atlassian-cli <명령> --help`로 확인하세요.
-
-### 공통 옵션
-| 옵션 | 설명 |
-|------|------|
-| `--pretty` | JSON pretty print (글로벌; 서브커맨드 앞에 위치) |
-| `--profile <NAME>` | 설정 프로파일 선택 |
-| `--config <PATH>` | 설정 파일 경로 오버라이드 |
-| `--domain` `--email` `--token` `--client-id` `--client-secret` `--cloud-id` | 인증 필드 오버라이드 — 필드별 우선순위(CLI 플래그 > 환경변수 > 설정 파일)의 최상위 |
-| `-v` / `-vv` / `-vvv` (`--verbose`) | 로깅 레벨 (stderr) |
-| `--format adf\|storage\|markdown` | 본문 형식. 기본은 Jira `adf`, Confluence `storage`. `markdown`은 읽기에서 content 필드를 변환(JSON envelope 유지)하고 쓰기에서 Markdown 본문을 변환 |
-| `-` (본문 인자) | 본문을 표준 입력에서 읽음. 빈 입력은 거부 |
-| `--all` | `search`: 전체 페이지네이션 |
-| `--stream` | `search --all`: JSONL을 stdout으로 |
-| `--fields a,b,c` | `jira search`/`jira get`: 반환 필드 지정 (`get`은 `*all`로 전체 필드) |
-| `--expand a,b` | `confluence search`: 확장 필드 |
-| `--limit <N>` | `search`: 페이지 크기 (Jira `--all`에서는 무시) |
-
-### 에러와 종료 코드
-
-실행 중 발생한 실패는 **stderr**로 한 줄짜리 JSON 객체를 출력합니다. 잘못된 옵션·누락된 인자 등 CLI 사용법 오류는 텍스트 도움말과 종료 코드 `2`를 반환합니다. stdout은 결과 전용입니다. 이미 출력을 시작한 명령도 실패할 수 있습니다 — `--stream` 은 페이지를 받는 대로 내보내고, `auth status` 는 확인한 부분까지 보고한 뒤 나머지에서 실패합니다. 출력이 있는지가 아니라 종료 코드를 읽으세요:
+실행 중 실패하면 stderr에 JSON 객체 하나를 출력하고, stdout에는 결과만 나옵니다. 알 수 없는 옵션 같은 사용법 오류는 텍스트를 출력하고 `2`로 끝납니다. 명령은 출력한 뒤에도 실패할 수 있으므로(`--stream`은 페이지가 도착하는 대로 씁니다), 출력이 있는지가 아니라 종료 코드를 확인합니다.
 
 ```json
 {"error":{"message":"Failed to get issue (404 Not Found): ...","operation":"get issue","status":404}}
 ```
 
-API 실패에는 `status`/`operation`이 포함되고, 알려진 해결책이 있으면 `hint` 필드가 붙습니다 (예: `basic` 인증에 scoped 토큰 사용). 429 (rate limit)는 읽기와 멱등 요청만 최대 3회 재시도합니다. 그 밖의 쓰기는 이미 적용됐을 수 있어 바로 종료 코드 `5`로 반환하며, 오류에 `retryAfterSeconds`와 `rateLimitReason`이 붙습니다. `Retry-After`의 초 단위·HTTP 날짜 형식을 지원하고, 대기 시간이 60초를 넘으면 재시도하지 않고 반환합니다.
+API 실패에는 `status`와 `operation`이 있고, 알려진 해결책이 있으면 `hint`가 붙습니다. 읽기와 멱등 요청은 429를 최대 3번 재시도합니다. 그 밖의 쓰기는 이미 적용되었을 수 있으므로 `retryAfterSeconds`와 `rateLimitReason`을 담아 바로 반환합니다. 다시 보내기 전에 적용되었는지 확인합니다. 60초를 넘는 대기는 기다리지 않고 호출자에게 돌려줍니다.
 
 | 종료 코드 | 의미 |
 |---|---|
 | `0` | 성공 |
 | `1` | 일반 실패 |
-| `2` | CLI 사용법 오류 |
-| `3` | 인증/권한 (401, 403) |
+| `2` | 사용법 오류 |
+| `3` | 인증 또는 권한 (401, 403) |
 | `4` | 대상 없음 (404) |
-| `5` | rate limit (429, 재시도 소진) |
+| `5` | rate limit (429) |
 | `6` | 서버 오류 (5xx) |
 
-### 셸 자동완성
+---
 
-```bash
-atlassian-cli completions zsh > "${fpath[1]}/_atlassian-cli"   # zsh
-atlassian-cli completions bash > /etc/bash_completion.d/atlassian-cli
-```
+## 문제 해결
 
-지원: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
+- **`basic`이나 `scoped_token`에서 401** — 토큰이 만료되었거나 토큰 종류가 방식과 맞지 않습니다. scope가 있는 토큰은 `scoped_token`, classic 토큰은 `basic`을 씁니다. 자격 증명을 바꾸기 전에 `hint`를 읽습니다.
+- **401 "scope does not match"** — 이 엔드포인트에 필요한 scope가 OAuth 토큰에 없습니다. 다른 명령은 계속 동작합니다. scope를 허용하고 프로파일에 추가한 뒤 `auth login`을 다시 실행합니다.
+- **API 토큰에서 403** — 관리자가 API 토큰을 막았을 수 있습니다. 서비스 계정을 씁니다.
+- **`Failed to resolve cloud_id`** — `_edge/tenant_info`를 읽지 못했습니다. `cloud_id`를 지정합니다.
+- **서비스 계정의 `invalid_client`** — client ID나 secret이 틀렸습니다. `config validate`로 확인합니다.
+- **`Multiple Atlassian sites found`** — 자격 증명이 여러 사이트에 접근합니다. `cloud_id`를 지정합니다.
+- **`Invalid Atlassian domain`** — domain은 `.atlassian.net`으로 끝나야 합니다.
+- **`Profile 'X' not found`** — 읽은 파일 중 그 프로파일을 정의한 곳이 없습니다. `config list`로 확인합니다.
+- **검색 필드가 예상과 다름** — `--fields`가 `search_default_fields`보다, `search_default_fields`가 기본 17개와 `search_custom_fields`보다 우선합니다.
 
 ---
 
-## 개발자 가이드
+## 개발
 
-개발 명령, 아키텍처, 호환성 계약은 [AGENTS.md](AGENTS.md)를 참고하세요. 개발 컴파일러는 Rust 1.99.1로 고정하며 최소 지원 버전은 `Cargo.toml`에서 관리합니다.
-
-## Claude Code Skill
-
-설치 스크립트는 `jira-confluence` 스킬을 사용자 레벨(`~/.claude/skills/jira-confluence`)에 배포하며, 배포하지 못하면 경고만 남기고 설치 자체는 계속됩니다. 스킬은 바이너리에 컴파일되어 들어 있고 배포는 `self skill install` 이 합니다 — 어디서 실행하든 배포된 사본은 정의상 그 바이너리의 것입니다.
-
----
-
-## 지원
-
-- **GitHub Issues**: <https://github.com/junyeong-ai/atlassian-cli/issues>
+개발 명령, 아키텍처, 호환성 계약은 [AGENTS.md](AGENTS.md)에 있습니다. 문제는 <https://github.com/junyeong-ai/atlassian-cli/issues>에 알려 주세요.
 
 ---
 
@@ -492,7 +344,5 @@ atlassian-cli completions bash > /etc/bash_completion.d/atlassian-cli
 **🌐 한국어** | **[English](README.en.md)**
 
 **Version 0.14.0** • Rust 2024 Edition
-
-Made with ❤️ for productivity
 
 </div>

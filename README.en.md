@@ -8,538 +8,334 @@
 
 > **🌐 [한국어](README.md)** | **English**
 
----
-
-> **⚡ Fast and Powerful Atlassian Cloud Command-Line Tool**
->
-> - 🚀 **Single binary** (no runtime required)
-> - 🎯 **Response field filtering** (configurable defaults and custom fields)
-> - 📄 **Full pagination** (fetch all results with `--all`)
-> - 📝 **Markdown both ways** (`--format markdown` on reads and writes)
-> - 🔧 **Layered config** (CLI → ENV → `--config` → Project → Global)
+A single Rust binary for Jira and Confluence Cloud, built to be driven by AI agents as well as people. Every command prints JSON, rich text is read and written as Markdown, long bodies come from standard input, and a failure is one JSON object with a stable exit code. It ships the `jira-confluence` Claude Code skill and supports four authentication methods: OAuth 2.0 (3LO), service accounts, scoped API tokens and classic API tokens.
 
 ---
 
-## ⚡ Quick Start (1 minute)
+## Quick start
 
 ```bash
 # 1. Install
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | bash
 export PATH="${INSTALL_DIR:-$HOME/.local/bin}:$PATH"
 
-# 2. Initialize config
+# 2. Create a config and pick an authentication method (see Authentication)
 atlassian-cli config init --global
-
-# 3. Edit config (pick oauth / service_account / scoped_token / basic — see Authentication)
 atlassian-cli config edit --global
 
-# 4. (oauth only) Sign in once via the browser
+# 3. Sign in (oauth only; add --no-browser on a machine without one)
 atlassian-cli auth login
 
-# 5. Validate credentials
+# 4. Check the credentials and run a first search
 atlassian-cli config validate
-
-# 6. Start using
-atlassian-cli jira search "status = Open" --limit 5
-atlassian-cli confluence search "type=page" --limit 10
+atlassian-cli jira search "assignee = currentUser()" --limit 5
 ```
 
 ---
 
-## 🎯 Key Features
+## Usage
 
-### Jira Operations
+### Jira
+
 ```bash
-# Search issues (JQL)
-atlassian-cli jira search "project = PROJ AND status = Open" --limit 10
-atlassian-cli jira search "assignee = currentUser()" --fields key,summary,status
-atlassian-cli jira search "status = Open" --format markdown  # ADF → Markdown
-atlassian-cli jira search "project = PROJ" --all             # Fetch all results
-atlassian-cli jira search "project = PROJ" --all --stream    # JSONL streaming
+# Read
+atlassian-cli jira get PROJ-123 --format markdown
+atlassian-cli jira search "assignee = currentUser() AND statusCategory != Done" --format markdown --limit 20
+atlassian-cli jira search "project = PROJ" --all --stream > issues.jsonl
+atlassian-cli jira comment list PROJ-123 --format markdown
 
-# Get/Create/Update issues
-atlassian-cli jira get PROJ-123
-atlassian-cli jira get PROJ-123 --format markdown  # description as Markdown
-atlassian-cli jira create PROJ "Bug fix" Bug --format markdown --description - < report.md
-atlassian-cli jira create PROJ "Sub-task" Sub-task --parent PROJ-123
-atlassian-cli jira create PROJ "Task" Task --fields '{"components":[{"name":"api"}]}'
-atlassian-cli jira update PROJ-123 '{"summary":"New title"}'
-
-# Comment/Transition
+# Write — Markdown becomes ADF, and `-` reads the body from standard input
+atlassian-cli jira create PROJ "Login fails on Safari" Bug --format markdown --description - < report.md
 atlassian-cli jira comment add PROJ-123 "Reproduced on **staging**" --format markdown
-atlassian-cli jira user search "Kim"            # accountId for assignee fields, JQL and CQL
-atlassian-cli jira comment update PROJ-123 10042 "Edited comment"
+atlassian-cli jira user search "Kim"                  # accountId for assignee fields, JQL and CQL
+atlassian-cli jira update PROJ-123 '{"assignee": {"accountId": "5b10a2844c20165700ede21g"}}'
 atlassian-cli jira transition list PROJ-123
 atlassian-cli jira transition apply PROJ-123 31
-atlassian-cli jira delete PROJ-123 --yes        # permanent delete (--yes required)
+atlassian-cli jira delete PROJ-123 --yes               # permanent
 
-# Links, worklogs, watchers
+# Links, worklogs, watchers and agile
 atlassian-cli jira link add PROJ-1 PROJ-2 --type Blocks
 atlassian-cli jira worklog add PROJ-123 "2h 30m" --comment "Investigation"
 atlassian-cli jira watcher add PROJ-123
-
-# Agile — boards, sprints, epics
 atlassian-cli jira sprint list --project PROJ
 atlassian-cli jira sprint move 55 PROJ-1 PROJ-2
-atlassian-cli jira epic assign EPIC-1 PROJ-1
+atlassian-cli jira epic assign EPIC-1 PROJ-1 PROJ-2    # sets each issue's parent
 ```
 
-### Confluence Operations
+### Confluence
+
 ```bash
-# Search pages (CQL)
-atlassian-cli confluence search "type=page AND space=TEAM" --limit 10
-atlassian-cli confluence search "type=page" --all           # Fetch all results
-atlassian-cli confluence search "type=page" --all --stream  # JSONL streaming
-atlassian-cli confluence search "type=page" --format markdown  # Markdown conversion (body included by default)
-
-# Get page (Markdown conversion)
+# Read
+atlassian-cli confluence search "space = TEAM AND type = page" --format markdown --limit 10
 atlassian-cli confluence get 123456 --format markdown
-
-# Get/Create/Update pages
-atlassian-cli confluence get 123456                          # storage format (default)
-atlassian-cli confluence get 123456 --format markdown        # Markdown conversion
-atlassian-cli confluence create TEAM "API Docs" - --format markdown < page.md   # `-` reads standard input
-atlassian-cli confluence update 123456 "New Title" - --format markdown --base-version 7 < page.md   # 409 if saved after version 7
-
-# Children & comments — every reply, footer and inline
-atlassian-cli confluence children 123456
+atlassian-cli confluence children 123456               # pages, folders, whiteboards, databases, embeds
 atlassian-cli confluence comment list 123456 --format markdown
-atlassian-cli confluence comment list 123456 --location inline   # anchored comments only
-atlassian-cli confluence comment list 123456 --roots-only        # top level only
-atlassian-cli confluence comment get 67890                       # one comment by id
-atlassian-cli confluence comment replies 67890                   # one thread
 
-# Comments / labels / properties / spaces / attachments
-atlassian-cli confluence comment add 123456 "Looks **good**" --format markdown --reply-to 67890
+# Write — Markdown becomes storage format
+atlassian-cli confluence create TEAM "Design notes" - --format markdown --parent 123456 < notes.md
+atlassian-cli confluence update 123456 "Design notes" - --format markdown --base-version 7 < notes.md
+atlassian-cli confluence comment add 123456 "Looks **good**" --format markdown
+atlassian-cli confluence attachment upload 123456 ./diagram.png
 atlassian-cli confluence label add 123456 needs-review
 atlassian-cli confluence property set 123456 review '{"status":"done"}'
-atlassian-cli confluence space list
-atlassian-cli confluence attachment upload 123456 ./diagram.png
+atlassian-cli confluence delete 123456 --yes           # moves the page to the trash
 ```
 
-### Config & Optimization
+`--base-version` is the `version.number` you read. When someone saved after that version, the update is refused with 409 instead of overwriting their change.
+
+### Output for scripts and agents
+
+- Results go to stdout as JSON, and lists use an `items` envelope. Root options such as `--pretty`, `--profile` and `--config` precede the subcommand.
+- `--format` names the rich-text representation: `adf` for Jira or `storage` for Confluence by default, or `markdown`, which converts read content inside the JSON envelope and write bodies before they are sent. `html` remains an alias of the default.
+- Body arguments take `-` to read standard input, and refuse it empty. A quoted heredoc needs no escaping and has no argument-size limit.
+- `--all` follows every page of a search; `--all --stream` writes JSONL as pages arrive and reports progress on stderr.
+- Markdown writes follow CommonMark with GitHub tables and strikethrough. ADF cannot hold a heading, quote, table or rule inside a list item or quote, so such Markdown is refused with its location. Raw HTML stays literal text; write Confluence macros with `--format storage`.
+
+The generated [CLI reference](docs/cli.md) lists every command, argument and default; `atlassian-cli <command> --help` describes the installed version.
+
 ```bash
-# Config management
-atlassian-cli config show            # Show config (masked token)
-atlassian-cli config path            # Config file path
-atlassian-cli config edit            # Edit with default editor
-
-# JSON output
-atlassian-cli jira get PROJ-123 | jq -r '.fields.summary'
+atlassian-cli completions zsh > "${fpath[1]}/_atlassian-cli"   # also bash, fish, elvish, powershell
 ```
-
-**Important Notes**:
-- Field optimization: 17 default fields (excludes `description`, `id`, `renderedFields`)
-- Project filter: `projects_filter` auto-injects into JQL
-- ADF auto-conversion: Plain text → Atlassian Document Format
 
 ---
 
-## 📦 Installation
+## Installation
 
-### Method 1: Prebuilt Binary (Recommended) ⭐
-
-**Automated install**:
 ```bash
+# Latest release; deploys the bundled skill to ~/.claude/skills
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | bash
-```
-Installs the latest prebuilt binary, which then deploys the `jira-confluence` Claude Code skill it carries to `~/.claude/skills`.
 
-```bash
-# Install a specific release
+# A specific release, or another directory
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | ATLASSIAN_CLI_VERSION=v0.14.0 bash
-
-# After that the binary manages itself — no need to re-run the installer
-atlassian-cli self update
-atlassian-cli self uninstall --yes
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/atlassian-cli/main/scripts/install.sh | INSTALL_DIR="$HOME/bin" bash
 ```
 
-**Manual install (Linux/macOS)**:
+**Manual install.** Download your platform's archive and its `.sha256` from [Releases](https://github.com/junyeong-ai/atlassian-cli/releases), verify it with `sha256sum -c` (Linux) or `shasum -a 256 -c` (macOS), extract it with `tar -xzf`, and move `atlassian-cli` into a directory on your `PATH`. On Windows, extract `atlassian-cli.exe` from the release `.zip`. Run `atlassian-cli self skill install` to deploy the skill.
 
-Download the archive matching your platform and its `.sha256` file from [Releases](https://github.com/junyeong-ai/atlassian-cli/releases). Verify the checksum with `sha256sum -c` (Linux) or `shasum -a 256 -c` (macOS), passing the checksum filename, then extract that archive with `tar -xzf`.
-
-```bash
-mkdir -p "$HOME/.local/bin"
-mv atlassian-cli "$HOME/.local/bin/"
-export PATH="$HOME/.local/bin:$PATH"
-atlassian-cli --version
-```
-
-Add the `export PATH` line to your shell startup file for future terminals. Install the bundled skill separately with `atlassian-cli self skill install`.
-
-**Supported Platforms**:
-- Linux: x86_64, aarch64
-- macOS: Intel (x86_64), Apple Silicon (aarch64)
-- Windows: x86_64
-
-`install.sh` supports Linux/macOS automation. On Windows, extract `atlassian-cli.exe` from the release `.zip` into a directory on your user PATH. Every platform publishes a `.tar.gz`, so `self update` works everywhere.
-
-### Managing the installation
-
-```bash
-atlassian-cli self status                     # version, paths, skill state, profiles holding tokens (no network)
-atlassian-cli self update                     # replace with the latest release
-atlassian-cli self update --version 0.10.0     # a specific one; going back takes an explicit version
-atlassian-cli self update --force              # replace even a binary already reporting that version
-atlassian-cli self update --verify-attestations   # also check GitHub build provenance (needs the gh CLI)
-atlassian-cli self skill install               # redeploy the skill
-atlassian-cli self skill remove --yes
-atlassian-cli self uninstall --yes [--keep-skill] [--keep-credentials] [--purge-config]
-```
-
-- The skill is compiled into the binary, so the copy a binary carries is always its own. What is deployed on disk is a separate thing: `self status` compares it **byte for byte** and reports `stale` for one that was edited, or left behind by a predecessor a downgrade put back.
-- `self update` runs the downloaded binary and checks the version it reports **before** replacing anything, so a binary that will not run on this machine leaves the installation untouched.
-- `self uninstall` also clears OAuth tokens from the OS keychain (`--keep-credentials` to keep them), and **refuses** when a keychain exists but will not be read — locked, or `ATLASSIAN_NO_KEYCHAIN` forbidding the look — because leaving tokens behind with no tool that knows where they are is the worst outcome. A keychain that will not answer takes two runs: the first clears `credentials.json` and refuses, naming what it removed, and `--keep-credentials` finishes the second. `auth logout` exits non-zero against a keychain that would not answer, for the same reason — every released target has a keychain compiled in, so "could not reach it" is not "there was nothing in it". Under `ATLASSIAN_NO_KEYCHAIN` it exits zero and says the keychain was not touched: nothing was asked of it, and unsetting the flag for one run is the way to clear what it holds. `--purge-config` removes the config file this tool writes and the directory only if that leaves it empty, so `credentials.json` survives alongside `--keep-credentials`. The directory is also kept if the credential-free `credentials.json.lock` remains. Project-local `.atlassian.toml` is never touched.
-
-### Method 2: Build from Source (Linux/macOS)
+**From source.** Building needs Rust 1.98.0 or later; `rust-toolchain.toml` pins the toolchain the project is developed with.
 
 ```bash
 git clone https://github.com/junyeong-ai/atlassian-cli
 cd atlassian-cli
 cargo install --path . --locked --root "$HOME/.local" --target "$(rustc --print host-tuple)"
-export PATH="$HOME/.local/bin:$PATH"
-atlassian-cli --version
 ```
 
-The source installation builds for the current host with the toolchain pinned by `rust-toolchain.toml` and installs into `$HOME/.local/bin`. Add `--force` to `cargo install` to replace a binary installed by another method. Add the `export PATH` line to your shell startup file for future terminals. Install the bundled skill separately with `atlassian-cli self skill install`.
+Add `--force` to replace a binary installed another way.
 
-**Requirements**: Rust 1.98.0+; development builds use the pinned Rust 1.99.1 toolchain
+Releases cover Linux (x86_64, aarch64), macOS (Intel, Apple Silicon) and Windows (x86_64). `install.sh` runs on Linux and macOS. Every platform publishes a `.tar.gz`, so `self update` works everywhere.
 
-### 🤖 Claude Code Skill
+### Managing the installation
 
-`scripts/install.sh` deploys it to `~/.claude/skills/jira-confluence`, where it is available in every project — and where it cannot, it warns and the install still completes. Manage it afterwards with `self skill install` / `self skill remove`.
+```bash
+atlassian-cli self status                          # version, paths, skill state, profiles holding tokens (no network)
+atlassian-cli self update                          # replace with the latest release
+atlassian-cli self update --version 0.13.9         # a specific release; going back needs it named
+atlassian-cli self update --verify-attestations    # also check GitHub build provenance (needs the gh CLI)
+atlassian-cli self update --force                  # replace even a binary that already reports that version
+atlassian-cli self skill install                   # redeploy the skill this binary carries
+atlassian-cli self skill remove --yes
+atlassian-cli self uninstall --yes [--keep-skill] [--keep-credentials] [--purge-config]
+```
+
+- `self update` runs the downloaded binary and checks the version it reports before replacing anything, so a binary that cannot run on this machine leaves the installation untouched.
+- The skill is compiled into the binary. `self status` compares the deployed copy byte for byte and reports `stale` when it differs, as it does after an edit or a downgrade.
+- `self uninstall` also clears OAuth tokens from the OS keychain unless `--keep-credentials` is given. It refuses when a keychain exists but cannot be read, because tokens left behind with no tool that knows about them are the worst outcome. When the keychain does not answer, the first run clears `credentials.json` and refuses, naming what it removed, and a second run with `--keep-credentials` finishes.
+- `auth logout` exits non-zero against a keychain that does not answer, for the same reason. Under `ATLASSIAN_NO_KEYCHAIN` it exits zero and says the keychain was not touched.
+- `--purge-config` removes the config file this tool wrote, and its directory only when that leaves it empty. Project-local `.atlassian.toml` files are never touched.
 
 ---
 
-## 🔑 Authentication
+## Authentication
 
-Pick one explicitly (no auto-detection):
+Choose a method explicitly; it is never inferred.
 
-| Method | Principal | Request host | Notes |
+| Method | Acts as | Request host | Notes |
 |---|---|---|---|
-| `oauth` ⭐ | the signed-in user | `api.atlassian.com` | 3LO + PKCE; tokens stored in OS keychain, auto-refreshed |
-| `service_account` | non-human SA | `api.atlassian.com` | OAuth 2.0 client_credentials; for CI / automation |
-| `scoped_token` | API-token owner | `api.atlassian.com` | **API token with scopes only**; permissions limited to the scopes granted to the token |
-| `basic` | API-token owner | `{domain}` | **classic (unscoped) token only** |
+| `oauth` ⭐ | the signed-in user | `api.atlassian.com` | browser sign-in; tokens kept in the OS keychain and refreshed |
+| `service_account` | a service account | `api.atlassian.com` | OAuth 2.0 client credentials for automation and CI |
+| `scoped_token` | the token's owner | `api.atlassian.com` | API token **with** scopes; limited to those scopes |
+| `basic` | the token's owner | `{domain}` | classic API token **without** scopes |
 
-The two token methods do not accept each other's tokens: the site host silently
-ignores a token carrying scopes and answers 401, and the gateway rejects a
-classic one. On a 401, `hint` describes possible causes such as expiry, routing
-mismatch or missing scopes. Check the token before changing configuration. Issue
-either kind at <https://id.atlassian.com/manage-profile/security/api-tokens>.
+The two token methods do not accept each other's tokens: the site host answers 401 to a token carrying scopes, and the gateway rejects a classic one. A 401 carries a `hint` naming the causes to check, such as expiry, the wrong method or a missing scope. Create either kind of token at <https://id.atlassian.com/manage-profile/security/api-tokens>; Atlassian recommends scoped tokens, and tokens issued before 2024-12-15 expired between 2026-03-14 and 2026-05-12 ([token management](https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/)).
 
 ### OAuth 2.0 (3LO) — recommended
-
-Sign in via the browser; tokens persist in the OS keychain with a 0600 file
-fallback. Sessions with a refresh token refresh about five minutes before
-expiry; sessions without one remain usable until actual access-token expiry.
 
 ```toml
 # ~/.config/atlassian-cli/config.toml
 [default.auth]
 method = "oauth"
-client_id = "..."          # issued at developer.atlassian.com
-client_secret = "..."      # prefer ATLASSIAN_CLIENT_SECRET env var
-redirect_port = 8976       # must match the Callback URL on the OAuth app
+client_id = "..."          # from developer.atlassian.com
+client_secret = "..."      # prefer the ATLASSIAN_CLIENT_SECRET environment variable
+redirect_port = 8976       # must match the app's callback URL
 # scopes defaults to ["read:jira-user", "read:jira-work", "write:jira-work", "offline_access"]
-# Example grants for Confluence search, page reads and space reads (writes need additional scopes):
-#   scopes = ["read:jira-user", "read:jira-work", "write:jira-work",
-#             "read:confluence-content.all", "read:page:confluence",
-#             "read:space:confluence", "offline_access"]
-# cloud_id = "..."          # pin one site when the user has access to many
+# cloud_id = "..."         # pin one site when the account reaches several
 ```
 
+Set up the app at <https://developer.atlassian.com/console/myapps/>: create an OAuth 2.0 (3LO) app, add `http://127.0.0.1:8976/callback` as its callback URL, grant the scopes the profile requests, and copy the client ID and secret. A scope the app does not grant is refused at consent.
 
-Add only the scopes needed for the commands you use, beyond the core Jira grants. `sprint list --project` also needs board discovery permissions.
+```bash
+atlassian-cli auth login       # opens the browser; --no-browser prints the URL instead
+atlassian-cli auth status      # expiry, scopes, storage backend
+atlassian-cli auth refresh     # force a refresh
+atlassian-cli auth logout      # clear the stored session
+```
 
-| Command | Additional OAuth scopes | Official API |
+Sessions with a refresh token refresh five minutes before expiry. Request only the scopes your commands use, beyond the default Jira grants:
+
+| Command | Additional scopes | API |
 |---|---|---|
-| `board list` | `read:board-scope:jira-software`, `read:project:jira` | [Board](https://developer.atlassian.com/cloud/jira/software/rest/api-group-board/) |
-| `sprint list --board` | `read:sprint:jira-software` | [Board sprints](https://developer.atlassian.com/cloud/jira/software/rest/api-group-board/#api-rest-agile-1-0-board-boardid-sprint-get) |
+| `board list`, `sprint list --project` | `read:board-scope:jira-software`, `read:project:jira` | [Board](https://developer.atlassian.com/cloud/jira/software/rest/api-group-board/) |
+| `sprint list` | `read:sprint:jira-software` | [Board sprints](https://developer.atlassian.com/cloud/jira/software/rest/api-group-board/#api-rest-agile-1-0-board-boardid-sprint-get) |
 | `sprint move` | `write:sprint:jira-software` | [Sprint](https://developer.atlassian.com/cloud/jira/software/rest/api-group-sprint/) |
 | `sprint backlog` | `write:board-scope:jira-software` | [Backlog](https://developer.atlassian.com/cloud/jira/software/rest/api-group-backlog/) |
+| Confluence search and page reads | `read:confluence-content.all`, `read:page:confluence`, `read:space:confluence` | [Confluence v2](https://developer.atlassian.com/cloud/confluence/rest/v2/intro/) |
+| `confluence children` | `read:hierarchical-content:confluence` | [Page](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-page/) |
 
-For Confluence writes, check the [scope requirements of each endpoint](https://developer.atlassian.com/cloud/confluence/rest/v2/intro/). Page-property changes need `read:page:confluence` and `write:page:confluence`; comment deletion needs `delete:comment:confluence`. Commands that read before writing need both steps' grants. Enable scopes on the app, request them in the profile, then run `auth login` to authorize again.
+Confluence writes need the scopes of every endpoint they call, including a read before the write: property changes need `read:page:confluence` and `write:page:confluence`, and comment deletion needs `delete:comment:confluence`. After enabling a scope on the app and adding it to the profile, run `auth login` again; an existing token does not gain it.
 
-> **Headless / AI agent**: on a desktop OS the keychain may block with a GUI prompt. Set `ATLASSIAN_NO_KEYCHAIN=1` to skip the keychain and use the 0600 file store. Treat it as a per-environment setting (don't toggle it on/off) — while set, `auth logout` clears only the file store. If you previously logged in with the keychain, run `auth logout` once without the flag to clear it.
+> **Headless and AI agents:** on a desktop OS the keychain can block on a GUI prompt. Set `ATLASSIAN_NO_KEYCHAIN=1` for the environment to use the 0600 file store instead, and keep it set; while it is set, `auth logout` clears only the file store.
 
-```bash
-atlassian-cli auth login       # browser → Atlassian → tokens persisted
-# Without a browser, use: atlassian-cli auth login --no-browser
-atlassian-cli auth status      # expiry, scopes, storage backend
-atlassian-cli auth refresh     # force refresh (debugging)
-atlassian-cli auth logout      # clears stored tokens
-```
-
-Prereqs at <https://developer.atlassian.com/console/myapps/>:
-1. Create an OAuth 2.0 (3LO) app.
-2. Add `http://127.0.0.1:8976/callback` as the Callback URL (port must match `redirect_port`).
-3. Grant the scopes you list in config — unscoped scopes are rejected at consent.
-4. Copy `client_id` / `client_secret` from Settings.
-
-Request each endpoint’s required OAuth scopes in the profile after enabling them on the app, then run `auth login` again. Separate profiles when account, site or permission needs differ. See the [official OAuth setup guide](https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/).
-
-### Service Account / API tokens — environment variables
+### Service account
 
 ```bash
-# Service account (CI / automation)
 export ATLASSIAN_AUTH_METHOD=service_account
 export ATLASSIAN_CLIENT_ID="..."
 export ATLASSIAN_CLIENT_SECRET="..."
-# ATLASSIAN_CLOUD_ID is optional when the credential accesses exactly one site
+# ATLASSIAN_CLOUD_ID is needed only when the credential reaches more than one site
+```
 
-# Scoped API token (token created with scopes)
+```toml
+[default.auth]
+method = "service_account"
+client_id = "..."
+client_secret = "..."
+```
+
+### Scoped API token
+
+```bash
 export ATLASSIAN_AUTH_METHOD=scoped_token
-export ATLASSIAN_DOMAIN="company.atlassian.net"   # resolves cloud_id
-export ATLASSIAN_EMAIL="user@example.com"
-export ATLASSIAN_API_TOKEN="..."
-# ATLASSIAN_CLOUD_ID pins the site directly; the domain is then unnecessary
-
-# Basic (classic, unscoped API token)
-export ATLASSIAN_AUTH_METHOD=basic
-export ATLASSIAN_DOMAIN="company.atlassian.net"
+export ATLASSIAN_DOMAIN="company.atlassian.net"   # resolves the cloud ID
 export ATLASSIAN_EMAIL="user@example.com"
 export ATLASSIAN_API_TOKEN="..."
 ```
 
-Tokens issued before 2024-12-15 expired between 2026-03-14 and 2026-05-12.
-Atlassian recommends scoped tokens; choose the auth method matching the token
-you create. See [API token management](https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/).
+The cloud ID is read from `https://{domain}/_edge/tenant_info`, which needs no credentials and is this method's only request to the site host. Set `ATLASSIAN_CLOUD_ID` or `[auth].cloud_id` to skip it; the domain is then unnecessary. `config validate` checks the identity through Jira, so a token with only Confluence scopes fails it while still working: check such a token with `confluence space list`.
 
-`scoped_token` resolves `cloud_id` from `https://{domain}/_edge/tenant_info`,
-which needs no credentials. That lookup is the only part of this method that
-touches the site host, and it runs once per invocation — pin `cloud_id` to skip
-it entirely, or when the site host does not answer from your network. The value
-also appears in the site URL at <https://admin.atlassian.com>.
+### Classic API token (`basic`)
 
-Blank env vars are treated as **absent** — `export VAR=""` no longer shadows
-the config-file value.
+```toml
+[default]
+domain = "company.atlassian.net"
 
-### Config file
-
-**Locations** (highest priority first within each scope):
-- Custom path: `--config <file>`
-- Project: `./.atlassian.toml` or `./.atlassian/config.toml` (walked upward from cwd)
-- Global: `~/.config/atlassian-cli/config.toml`
-
-Generate a starter with `atlassian-cli config init --global`. The template
-ships all four auth methods as commented examples.
-
-`config path/edit` select the `--config` file first; an explicit `--global` selects the global file instead. `--config <file> config init` creates a starter at that path without overwriting an existing file. `config list` includes profiles from the explicit file. `config show` emits TOML with masked secrets, preserving profile names and string values.
-
-On every platform, `EDITOR` is an executable followed by arguments using POSIX quoting (for example, `code --wait`). Quote executable paths containing spaces or backslashes inside the variable value. A Windows variable value can be `'C:\Program Files\Microsoft VS Code\Code.exe' --wait`.
-
-Omitted operational settings inherit from earlier files; an explicit `[]` clears an inherited list. Setting one `[performance]` field preserves the other inherited fields. To inherit a list from an existing config, remove its `[]` assignment.
-
-### Field optimization (optional env)
-
-```bash
-export JIRA_SEARCH_DEFAULT_FIELDS="key,summary,status"
-export JIRA_SEARCH_CUSTOM_FIELDS="customfield_10015"
-export RESPONSE_EXCLUDE_FIELDS="self,avatarUrls,iconUrl"
+[default.auth]
+method = "basic"
+email = "user@example.com"
+token = "..."
 ```
 
-### Config Priority
-
-```
-CLI flags > Environment variables > `--config` file > Project config > Global config
-```
-
-For authentication, use the entire `[auth]` section from the highest-priority file that defines it for the selected profile. Omitting the section preserves authentication from a lower-priority file; omitting a credential inside the section does not inherit that credential from another file. Resolve each credential in the selected auth configuration as CLI flag > environment variable > config file. Selecting a different method through `ATLASSIAN_AUTH_METHOD` discards the file's auth credentials; supply the new method's required values through CLI flags or environment variables.
+The same values can come from `ATLASSIAN_AUTH_METHOD=basic`, `ATLASSIAN_DOMAIN`, `ATLASSIAN_EMAIL` and `ATLASSIAN_API_TOKEN`.
 
 ---
 
-## 🏗️ Core Architecture
+## Configuration
 
-Layered config priority, ADF auto-conversion, field optimization (17 default fields), cursor-based pagination.
-For detailed architecture, see [AGENTS.md](AGENTS.md).
+### Files and profiles
+
+Configuration is read from, highest priority first: the `--config <file>` path, a project file (`.atlassian.toml` or `.atlassian/config.toml`, found by walking up from the working directory), and the global `~/.config/atlassian-cli/config.toml`. `config init --global` writes a commented starter with all four methods.
+
+```toml
+[default.auth]
+method = "oauth"
+client_id = "..."
+
+[work]
+domain = "work.atlassian.net"
+
+[work.auth]
+method = "basic"
+email = "user@example.com"
+token = "..."
+```
+
+Select a profile with `atlassian-cli --profile work ...`; separate profiles when the account, site or permissions differ.
+
+### Precedence
+
+Settings resolve as CLI flags > environment variables > `--config` file > project file > global file. An omitted setting inherits from the next file, and an explicit `[]` clears an inherited list. A blank environment variable counts as unset.
+
+For the selected profile, the highest-priority file that defines an `[auth]` section supplies the whole section: omitting the section keeps authentication from a lower file, but a credential omitted inside it is not inherited. Each credential then resolves as CLI flag > environment variable > that section. Choosing another method through `ATLASSIAN_AUTH_METHOD` discards the file's credentials, so supply the new method's values through flags or environment variables.
+
+### Managing configuration
+
+- `config path` and `config edit` target the `--config` file when given, and the global file with `--global`.
+- `config init --config <file>` writes a starter there and never overwrites an existing file.
+- `config list` shows the files read, including an explicit one, and which environment variables are set.
+- `config show` prints the resolved profile as TOML with secrets masked.
+- `EDITOR` is an executable followed by arguments in POSIX quoting on every platform, for example `code --wait`. Quote a path containing spaces or backslashes inside the value: `'C:\Program Files\Microsoft VS Code\Code.exe' --wait`.
+
+### Scope filters and response size
+
+```toml
+[default.jira]
+projects_filter = ["PROJ1", "PROJ2"]       # injected into JQL that names no project
+search_default_fields = ["key", "summary", "status"]
+search_custom_fields = ["customfield_10015"]
+
+[default.confluence]
+spaces_filter = ["TEAM"]                    # injected into CQL that names no space
+
+[default.performance]
+request_timeout_ms = 30000
+rate_limit_delay_ms = 200
+
+[default.optimization]
+response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
+```
+
+With `projects_filter`, `status = Open` runs as `project IN ("PROJ1","PROJ2") AND (status = Open)`, while a query that already names a project runs unchanged. Without `--fields`, `jira search` requests a default set of 17 fields: `search_default_fields` replaces it, and `search_custom_fields` extends it. The environment variables `JIRA_SEARCH_DEFAULT_FIELDS`, `JIRA_SEARCH_CUSTOM_FIELDS`, `RESPONSE_EXCLUDE_FIELDS` and `REQUEST_TIMEOUT_MS` override these settings.
 
 ---
 
-## 🔧 Troubleshooting
+## Errors and exit codes
 
-### Config Not Found
-
-```bash
-# Check config
-atlassian-cli config path
-atlassian-cli config show
-
-# Reinitialize
-atlassian-cli config init --global
-```
-
-### API Authentication Failed
-
-**Checklist**:
-- [ ] Domain format: `company.atlassian.net` (without https://)
-- [ ] Email format valid
-- [ ] Token correct (watch for copy/paste spaces)
-- [ ] Token shape matches the method — a token with scopes needs `scoped_token`,
-      a classic one needs `basic`. Check the error's `hint` for possible causes
-      before changing the method or replacing credentials.
-
-### `Failed to resolve cloud_id from ...`
-
-`scoped_token` reads the cloud ID from `https://{domain}/_edge/tenant_info`.
-When that host is unreachable from your network, pin the value instead via
-`ATLASSIAN_CLOUD_ID` or `[auth].cloud_id`; the domain is then unnecessary.
-
-### Field Filtering Not Working
-
-**Priority check**:
-1. CLI `--fields` (highest priority)
-2. `JIRA_SEARCH_DEFAULT_FIELDS` environment variable
-3. Default 17 fields + `JIRA_SEARCH_CUSTOM_FIELDS`
-
-```bash
-# Test
-JIRA_SEARCH_DEFAULT_FIELDS="key,summary" atlassian-cli jira search "project = PROJ"
-```
-
-### Project Filter Auto-Injection
-
-With `projects_filter` config, JQL auto-injected:
-```
-Input: status = Open
-Executed: project IN (PROJ1,PROJ2) AND (status = Open)
-```
-
----
-
-## 📚 Command Reference
-
-### Jira Commands
-
-| Command | Description | Example |
-|---------|-------------|---------|
-| `get <KEY>` | Get issue | `jira get PROJ-123` |
-| `get <KEY> --format markdown` | Get issue (Markdown) | `jira get PROJ-123 --format markdown` |
-| `search <JQL>` | JQL search | `jira search "status = Open" --limit 10` |
-| `search <JQL> --all` | Fetch all results | `jira search "project = PROJ" --all` |
-| `search <JQL> --all --stream` | JSONL streaming | `jira search "project = PROJ" --all --stream` |
-| `search <JQL> --format markdown` | JQL search (Markdown) | `jira search "status = Open" --format markdown` |
-| `create <PROJECT> <SUMMARY> <TYPE>` | Create issue (`--parent` for sub-tasks, `--fields` for the rest) | `jira create PROJ "Title" Sub-task --parent PROJ-1` |
-| `update <KEY> <JSON>` | Update issue | `jira update PROJ-123 '{"summary":"New"}'` |
-| `delete <KEY> --yes [--delete-subtasks]` | Delete issue (irreversible) | `jira delete PROJ-123 --yes` |
-| `comment add <KEY> <TEXT>` | Add comment | `jira comment add PROJ-123 "Done"` |
-| `comment update <KEY> <COMMENT_ID> <TEXT>` | Update comment | `jira comment update PROJ-123 10042 "Done"` |
-| `comment list <KEY>` | List comments | `jira comment list PROJ-123` |
-| `comment delete <KEY> <COMMENT_ID>` | Delete comment | `jira comment delete PROJ-123 10042` |
-| `transition list <KEY>` | List transitions | `jira transition list PROJ-123` |
-| `transition apply <KEY> <ID>` | Transition issue | `jira transition apply PROJ-123 31` |
-| `link add/remove/list`, `link types` | Issue links. `remove` takes the issue pair (with `--type`) or `--id <link id>`, never both | `jira link remove --id 10001` |
-| `worklog add/list/update/remove` | Time tracking. `add --started` takes Jira's format alone — milliseconds, colon-less offset | `jira worklog add PROJ-123 "2h" --started 2026-08-22T09:30:00.000+0900` |
-| `watcher add/remove/list <KEY>` | Watchers | `jira watcher add PROJ-123` |
-| `user search <QUERY> [--limit N]` | Users and the `accountId` that assignee fields, JQL and CQL take | `jira user search "Kim"` |
-| `list types/priorities/statuses/labels` | Global metadata | `jira list types` |
-| `board list --project <KEY>` | Agile boards | `jira board list --project PROJ` |
-| `sprint list [--board <ID>] [--state active]`, `sprint move/backlog` | Sprints / backlog | `jira sprint move 55 PROJ-1 PROJ-2` |
-| `epic assign <EPIC> <KEY...>`, `epic unassign <KEY...>` | Epic membership | `jira epic assign EPIC-1 PROJ-1` |
-
-### Confluence Commands
-
-| Command | Description | Example |
-|---------|-------------|---------|
-| `search <CQL>` | CQL search | `confluence search "type=page" --limit 10` |
-| `search <CQL> --format markdown` | CQL search (Markdown) | `confluence search "type=page" --format markdown` |
-| `get <ID>` | Get page | `confluence get 123456` |
-| `get <ID> --format markdown` | Get page (Markdown) | `confluence get 123456 --format markdown` |
-| `create <SPACE> <TITLE> <CONTENT> [--parent <ID>]` | Create page (nest under a parent with `--parent`) | `confluence create TEAM "Title" "<p>Body</p>" --parent 12345` |
-| `update <ID> <TITLE> <CONTENT> [--base-version <N>]` | Update page; with `--base-version`, a save made after that version is refused with 409 instead of overwritten | `confluence update 123456 "Title" - --format markdown --base-version 7` |
-| `delete <ID> --yes` | Delete page (to trash) | `confluence delete 123456 --yes` |
-| `children <ID>` | Direct children of any type (pages, folders, whiteboards, databases, embeds), each with its `type` | `confluence children 123456` |
-| `comment list <ID> [--location footer\|inline] [--roots-only]` | Every comment on a page — both families, replies included; each entry carries `location`, `depth`, `parentCommentId` | `confluence comment list 123456` |
-| `comment get <COMMENT_ID> [--location ...]` | One comment by id (defaults to `footer`) | `confluence comment get 67890` |
-| `comment replies <COMMENT_ID> [--location ...]` | The whole thread under one comment | `confluence comment replies 67890` |
-| `comment add/update/delete ...` | Footer comment writes | `confluence comment add 123456 "<p>Hi</p>" --reply-to 67890` |
-| `label list/add/remove <ID> [LABEL]` | Page labels | `confluence label add 123456 needs-review` |
-| `property list/set/delete <ID> [KEY] [JSON]` | Content properties (value is strict JSON) | `confluence property set 123456 review '{"status":"done"}'` |
-| `space list`, `space get <KEY>` | Spaces | `confluence space get TEAM` |
-| `attachment list/upload <ID> [FILE] [--content-type <MIME>] [--minor]` | Attachments (`--minor` suppresses notifications; Content-Type auto-mapped from extension; `--content-type` overrides) | `confluence attachment upload 123456 ./a.png` |
-
-### Config Commands
-
-| Command | Description | Example |
-|---------|-------------|---------|
-| `init [--global]` | Initialize config | `config init --global` |
-| `show` | Show config | `config show` |
-| `edit [--global]` | Edit with editor | `config edit` |
-| `path [--global]` | File path | `config path` |
-| `list` | List locations | `config list` |
-| `validate` | Construct the strategy and probe the identity; a service account with a pinned `cloud_id` has no identity to probe, so nothing reaches that site | `config validate` |
-
-See the generated [CLI reference](docs/cli.md) for every command, argument and default. Use `atlassian-cli <command> --help` for the installed version.
-
-### Common Options
-
-Root options must precede the subcommand.
-
-| Option | Description | Applies To |
-|--------|-------------|------------|
-| `--domain` `--email` `--token` `--client-id` `--client-secret` `--cloud-id` | Auth field overrides — the highest tier of the per-field precedence (CLI flag > env var > config file) | Global |
-| `--profile <NAME>` | Select config profile | Global |
-| `--config <PATH>` | Override config path | Global |
-| `--pretty` | Pretty-print JSON | Global |
-| `-v` / `-vv` / `-vvv` (`--verbose`) | stderr logging level | Global |
-| `--limit <N>` | Page size (ignored by Jira `--all`) | search |
-| `--all` | All results (pagination) | jira search, confluence search |
-| `--stream` | JSONL streaming | jira search, confluence search (requires --all) |
-| `--expand` | Additional expand fields (ancestors, etc.; body.storage included by default) | confluence search |
-| `--format` | Rich-text format: `adf` (Jira) or `storage` (Confluence) by default, or `markdown`, which converts read content inside the JSON envelope and write bodies | jira and confluence reads and writes |
-| `-` (body argument) | Read the body from standard input; empty input is refused | jira and confluence writes |
-| `--fields` | Specify fields | jira search, jira get |
-
-### Errors & exit codes
-
-Runtime failures print a single-line JSON object to **stderr**. CLI usage errors
-(invalid options or missing arguments) use text diagnostics and exit code `2`.
-Stdout carries results only. A command that has already printed can still fail — `--stream` emits each
-page as it arrives, `auth status` reports what it could establish before failing
-on the rest — so read the exit code rather than the presence of output:
+A runtime failure prints one JSON object to stderr; stdout carries results only. Usage errors, such as an unknown option, print text and exit with `2`. A command can fail after printing output (`--stream` writes pages as they arrive), so read the exit code rather than the presence of output.
 
 ```json
 {"error":{"message":"Failed to get issue (404 Not Found): ...","operation":"get issue","status":404}}
 ```
 
-API failures include `status` and `operation`; a `hint` field appears when a
-known remediation exists (e.g. an API token sent to the host that refuses its
-shape). Reads and idempotent requests retry 429 responses up to three times;
-any other write may already have been applied, so it returns exit code `5` at
-once with `retryAfterSeconds` and `rateLimitReason`. `Retry-After` supports
-seconds and HTTP dates; waits over 60 seconds return without retrying.
+API failures carry `status` and `operation`, and a `hint` when a remediation is known. Reads and idempotent requests retry a 429 up to three times. Any other write may already have been applied, so it returns at once with `retryAfterSeconds` and `rateLimitReason`; check whether it took effect before sending it again. Waits longer than 60 seconds are returned to the caller rather than slept through.
 
 | Exit code | Meaning |
 |---|---|
 | `0` | success |
 | `1` | generic failure |
-| `2` | CLI usage error |
-| `3` | authentication / permission (401, 403) |
+| `2` | usage error |
+| `3` | authentication or permission (401, 403) |
 | `4` | not found (404) |
-| `5` | rate limited (429, retries exhausted) |
+| `5` | rate limited (429) |
 | `6` | server error (5xx) |
 
-### Shell completion
+---
 
-```bash
-atlassian-cli completions zsh > "${fpath[1]}/_atlassian-cli"   # zsh
-atlassian-cli completions bash > /etc/bash_completion.d/atlassian-cli
-```
+## Troubleshooting
 
-Supported: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
+- **401 with `basic` or `scoped_token`** — the token expired, or its shape does not match the method: a token with scopes needs `scoped_token`, a classic one needs `basic`. Read the `hint` before replacing credentials.
+- **401 "scope does not match"** — the OAuth token lacks a scope this endpoint needs; other commands still work. Grant the scope, add it to the profile and run `auth login` again.
+- **403 for API tokens** — an administrator may have blocked API tokens; use a service account instead.
+- **`Failed to resolve cloud_id`** — `_edge/tenant_info` could not be read; pin `cloud_id`.
+- **`invalid_client` from a service account** — the client ID or secret is wrong; check with `config validate`.
+- **`Multiple Atlassian sites found`** — the credential reaches several sites; pin `cloud_id`.
+- **`Invalid Atlassian domain`** — the domain must end with `.atlassian.net`.
+- **`Profile 'X' not found`** — no file read defines that profile; check `config list`.
+- **Unexpected search fields** — `--fields` wins over `search_default_fields`, which wins over the 17 defaults plus `search_custom_fields`.
 
 ---
 
-## 🚀 Developer Guide
+## Development
 
-**Architecture, debugging, contribution guide**: See [AGENTS.md](AGENTS.md)
-
----
-
-## 💬 Support
-
-- **GitHub Issues**: [Report issues](https://github.com/junyeong-ai/atlassian-cli/issues)
-- **Developer Docs**: [AGENTS.md](AGENTS.md)
+Development commands, architecture and compatibility contracts are in [AGENTS.md](AGENTS.md). Report problems at <https://github.com/junyeong-ai/atlassian-cli/issues>.
 
 ---
 
@@ -548,7 +344,5 @@ Supported: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 **🌐 [한국어](README.md)** | **English**
 
 **Version 0.14.0** • Rust 2024 Edition
-
-Made with ❤️ for productivity
 
 </div>
