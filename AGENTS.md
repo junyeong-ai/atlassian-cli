@@ -87,17 +87,20 @@ only where their contracts are the same.
 - Percent-encode identifiers with `http_utils::encode_path_segment`; use the
   request query builder for parameter values. Validate cloud IDs before routing.
 - Retry a 429 automatically only for idempotent requests: an idempotent method,
-  or a POST declared idempotent through `ApiClient::execute_idempotent`. Atlassian does not
-  promise a rate-limited request went unprocessed, so other writes return the
-  429 with `retryAfterSeconds` and `rateLimitReason`. Retry at most three times
-  with jitter, refreshing authorization before each retry. Respect both forms of
-  `Retry-After`; surface waits over 60 seconds to the caller instead of retrying
-  early. Multipart bodies are not replayed, and no other failure is retried.
+  or a POST declared idempotent through `ApiClient::execute_idempotent`.
+  Atlassian does not promise a rate-limited request went unprocessed, so other
+  writes return the 429 with `retryAfterSeconds` and `rateLimitReason`. Retry at
+  most three times with jitter, refreshing authorization before each retry.
+  Respect both forms of `Retry-After`; surface waits over 60 seconds to the
+  caller instead of retrying early. Multipart bodies are not replayed, and no
+  other failure is retried.
 - Pagination validates the raw collection and end signal before filtering each
   result. Use the existing Jira page contracts and Confluence cursor walker.
-- Jira search uses `/rest/api/3/search/jql`. Agile uses `/rest/agile/1.0`.
-  Confluence CQL search uses v1; v2 reads coexist with supported v1 label and
-  attachment writes. Check endpoint support before changing versions.
+- Jira search uses `/rest/api/3/search/jql`. Boards and sprints use
+  `/rest/agile/1.0`; epic membership edits the issue `parent`. Confluence CQL
+  search uses v1; v2 reads coexist with supported v1 label and attachment
+  writes. Check endpoint support against the official specs before changing
+  versions.
 - Apply the configured request timeout to API calls and OAuth token exchanges.
   Credential-bearing requests must not follow redirects.
 - Search scope detection distinguishes fields from values, including quoted field
@@ -121,7 +124,8 @@ or running a downloaded binary and verify its version before replacement.
 
 The distributable skill is `.claude/skills/jira-confluence/SKILL.md` and is
 compiled into the binary. Its version and both README release versions must
-match `Cargo.toml`. Keep the README languages consistent. Put exhaustive CLI
+match `Cargo.toml`. Keep `README.md` and `README.en.md` structurally identical:
+the same sections in the same order with the same examples. Put exhaustive CLI
 syntax in the generated reference and task guidance in the skill. Document
 external service policies with authoritative links and distinguish API-token,
 OAuth app and service-account behavior.

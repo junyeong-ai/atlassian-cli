@@ -7,7 +7,7 @@ allowed-tools: Bash
 
 # atlassian-cli
 
-Pass **root options before the subcommand**. Use `atlassian-cli --help` or `atlassian-cli <command> --help` for the installed version’s exact arguments and defaults:
+Pass **root options before the subcommand**. Use `atlassian-cli --help` or `atlassian-cli <command> --help` for the installed version's exact arguments and defaults:
 
 ```bash
 atlassian-cli --profile work jira get PROJ-123 --format markdown
@@ -33,7 +33,7 @@ EOF
 atlassian-cli jira get PROJ-123 --format markdown
 atlassian-cli jira get PROJ-123 --fields '*all'             # full issue incl. custom fields
 atlassian-cli jira get PROJ-123 --fields summary,status,customfield_10020
-atlassian-cli jira search "assignee = currentUser() AND status != Done" --format markdown --limit 20
+atlassian-cli jira search "assignee = currentUser() AND statusCategory != Done" --format markdown --limit 20
 atlassian-cli jira search "project = PROJ" --fields key,summary,status --limit 50
 atlassian-cli jira comment list PROJ-123 --format markdown
 atlassian-cli jira transition list PROJ-123      # discover IDs before applying
@@ -240,7 +240,7 @@ atlassian-cli auth logout                # clears the stored session, whatever m
 
 Switch profiles with `--profile <name>`; never invent profile names — list them via `atlassian-cli config list`. With an explicit `--config <file>`, `config list` includes that file and `config path/edit/init` target it. `--global` on path, edit or init selects the global file instead. `config show` emits the resolved profile as TOML with masked secrets; replace redactions before using it for authentication.
 
-Operational settings omitted from a file inherit from earlier files; `[]` explicitly clears a list. For `config edit`, `EDITOR` uses POSIX quoting on every platform: pass a program and arguments, quoting paths with spaces or backslashes inside the variable value (for example, `'C:\Program Files\Microsoft VS Code\Code.exe' --wait`).
+`config edit` opens an interactive editor and waits for it; edit the file `config path` prints instead. Operational settings omitted from a file inherit from earlier files; `[]` explicitly clears a list.
 
 For the selected profile, the highest-priority file defining an `[auth]` section replaces that section entirely. Omit the section to preserve authentication from earlier files; credentials omitted inside it do not inherit from those files. Each credential then resolves as CLI flag > environment variable > selected file auth. When `ATLASSIAN_AUTH_METHOD` selects a different method, supply its credentials through CLI flags or environment variables.
 
