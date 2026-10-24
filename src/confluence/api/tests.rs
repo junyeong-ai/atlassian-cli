@@ -978,6 +978,36 @@ async fn integ_upload_attachment_puts_multipart_with_token_header() {
     assert_eq!(result, json!({ "id": "att9" }));
 }
 
+/// A multipart body cannot be resent, so a rate-limited upload is returned
+/// after one request with a hint that says why, not that it may apply twice.
+#[tokio::test]
+async fn integ_upload_attachment_is_not_resent_after_a_rate_limit() {
+    let server = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path("/wiki/rest/api/content/123/child/attachment"))
+        .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "0"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(tmp.path(), b"hello").unwrap();
+
+    let client = mock_client(server.uri());
+    let err = upload_attachment(
+        "123",
+        tmp.path().to_str().unwrap(),
+        None,
+        false,
+        None,
+        &client,
+    )
+    .await
+    .unwrap_err();
+    let api = err.downcast_ref::<crate::client::ApiError>().unwrap();
+    assert_eq!(api.status, 429);
+    assert_eq!(api.hint, Some(crate::client::UNREPLAYABLE_BODY_HINT));
+}
+
 #[tokio::test]
 async fn integ_upload_attachment_reports_missing_file() {
     let server = MockServer::start().await;

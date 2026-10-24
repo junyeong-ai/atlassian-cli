@@ -1123,6 +1123,32 @@ async fn integ_search_asks_for_a_page_and_answers_with_the_envelope() {
     assert_eq!(result["items"][1]["key"], "X-2", "{result}");
 }
 
+/// JQL search is a POST that changes nothing, so a rate-limited page is
+/// asked for again instead of failing the read.
+#[tokio::test]
+async fn integ_search_asks_again_for_a_rate_limited_page() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "0"))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "issues": [] })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = mock_client(server.uri());
+    let result = search("project = X", 25, None, false, &client)
+        .await
+        .unwrap();
+    assert_eq!(result["count"], 0, "{result}");
+}
+
 /// `--fields` is the caller's, so it goes through the query builder. Written
 /// into the URL, a value carrying `&` would start a parameter of its own and
 /// change the request — here it must stay one encoded `fields` value.

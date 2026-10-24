@@ -21,8 +21,11 @@ const RATE_LIMIT_BACKOFF_BASE: Duration = Duration::from_millis(500);
 /// together do not retry together.
 const RATE_LIMIT_JITTER: f64 = 0.3;
 
-const NOT_REPLAYED_HINT: &str = "not retried automatically because repeating this request \
+const NON_IDEMPOTENT_HINT: &str = "not retried automatically because repeating this request \
     could apply it twice; check whether it took effect before sending it again";
+
+pub(crate) const UNREPLAYABLE_BODY_HINT: &str = "not retried automatically because the request \
+    body cannot be resent; wait for the server's requested interval, then send it again";
 
 const WAIT_OVER_CAP_HINT: &str = "Retry-After exceeds the 60-second automatic wait limit; wait \
     for the server's requested interval before trying again";
@@ -328,9 +331,10 @@ impl ApiClient {
             } else {
                 (None, None)
             };
-            let hint = match (rate_limited, replayable, delay) {
-                (true, false, _) => Some(NOT_REPLAYED_HINT),
-                (true, true, None) => Some(WAIT_OVER_CAP_HINT),
+            let hint = match (rate_limited, idempotent, replayable, delay) {
+                (true, false, _, _) => Some(NON_IDEMPOTENT_HINT),
+                (true, true, false, _) => Some(UNREPLAYABLE_BODY_HINT),
+                (true, true, true, None) => Some(WAIT_OVER_CAP_HINT),
                 _ => self.error_hint(status),
             };
             let body = response.text().await.unwrap_or_default();
@@ -571,33 +575,7 @@ mod tests {
             api.rate_limit_reason.as_deref(),
             Some("jira-per-issue-on-write")
         );
-        assert_eq!(api.hint, Some(NOT_REPLAYED_HINT));
-    }
-
-    #[tokio::test]
-    async fn execute_idempotent_retries_a_rate_limited_post() {
-        use crate::test_utils::mock_client;
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/search"))
-            .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "0"))
-            .up_to_n_times(1)
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path("/search"))
-            .respond_with(ResponseTemplate::new(200))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let client = mock_client(server.uri());
-        let request = client.post(Service::Jira, "/search").await.unwrap();
-        let response = client.execute_idempotent("search", request).await.unwrap();
-        assert_eq!(response.status(), 200);
+        assert_eq!(api.hint, Some(NON_IDEMPOTENT_HINT));
     }
 
     #[tokio::test]
