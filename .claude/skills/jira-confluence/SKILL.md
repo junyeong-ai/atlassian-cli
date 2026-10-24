@@ -114,7 +114,7 @@ Board/sprint commands use the agile API. Pass `--project` to let the CLI resolve
 
 An issue's epic is its `parent`, in company-managed and team-managed projects alike. `epic assign` sets it and `epic unassign` clears it, one issue at a time; a failure names the issue it stopped at and how many were already edited. Pass `--parent EPIC-1` to set it while creating. A sub-task's parent is the same field, required at creation and never cleared.
 
-OAuth agile commands require endpoint-specific grants beyond core Jira scopes. Board discovery needs `read:board-scope:jira-software` and `read:project:jira`; sprint reads need `read:sprint:jira-software`; sprint moves need `write:sprint:jira-software`; moving to backlog needs `write:board-scope:jira-software`. Epic membership is an issue edit and needs only `write:jira-work`. `sprint list --project` also performs board discovery. Use only the grants needed for the requested operations; see the [Software scope reference](https://developer.atlassian.com/cloud/jira/software/scopes-for-oauth-2-3LO-and-forge-apps/).
+OAuth agile commands require endpoint-specific grants beyond core Jira scopes. Board discovery needs `read:board-scope:jira-software` and `read:project:jira`; sprint reads need `read:sprint:jira-software`; sprint moves need `write:sprint:jira-software`; moving to backlog needs `write:board-scope:jira-software`. Epic membership is an issue edit: it needs `write:jira-work`, and `epic unassign` also reads the issue back with `read:jira-work`. `sprint list --project` also performs board discovery. Use only the grants needed for the requested operations; see the [Software scope reference](https://developer.atlassian.com/cloud/jira/software/scopes-for-oauth-2-3LO-and-forge-apps/).
 
 ### Rich text
 
@@ -209,7 +209,7 @@ Runtime failures print a single-line JSON object to **stderr**; stdout stays res
 
 Parse `status`/`operation` instead of regexing the message; `hint` (present only when a known remediation exists, e.g. a 401 from an API token sent to the host that refuses its shape) is the remediation to relay to the user. Exit codes: `0` ok, `1` generic, `2` usage, `3` auth (401/403), `4` not found, `5` rate limited (429), `6` server error (5xx).
 
-Reads and idempotent writes retry a 429 up to three times. Any other write returns it at once, because it may already have been applied: check whether it took effect (list the comments, search for the issue) before sending it again. A 429 error carries `retryAfterSeconds` and `rateLimitReason`. Wait at least `retryAfterSeconds` before repeating anything; a wait of minutes means an hourly quota is spent, so stop and report it instead of retrying.
+Reads and idempotent writes retry a 429 up to three times. Any other write returns it at once, because it may already have been applied: check whether it took effect (list the comments, search for the issue) before sending it again. An upload also returns at once because its body cannot be resent; running it again adds a new version of the file. A 429 error carries `retryAfterSeconds` and `rateLimitReason` when Atlassian sent them. Wait at least `retryAfterSeconds` before repeating anything, or, when it is absent, start at two seconds and double the wait each time; a wait of minutes means an hourly quota is spent, so stop and report it instead of retrying.
 
 ## Authentication
 
@@ -232,11 +232,11 @@ When the user reports auth trouble or asks to switch accounts:
 
 ```bash
 atlassian-cli auth status                # expiry, scopes, storage backend
-atlassian-cli auth login                 # OAuth 3LO; opens browser
-atlassian-cli auth login --no-browser    # SSH session — prints the URL
 atlassian-cli auth refresh               # force token refresh (debugging)
 atlassian-cli auth logout                # clears the stored session, whatever method the profile is on
 ```
+
+`auth login` waits up to five minutes for a person to finish signing in through a browser, so ask the user to run `atlassian-cli auth login` in their own terminal rather than running it yourself. Without a browser on that machine they add `--no-browser` and open the printed URL in a browser that can reach the callback port; over SSH that means forwarding it first with `ssh -L 8976:127.0.0.1:8976 <host>`.
 
 Switch profiles with `--profile <name>`; never invent profile names — list them via `atlassian-cli config list`. With an explicit `--config <file>`, `config list` includes that file and `config path/edit/init` target it. `--global` on path, edit or init selects the global file instead. `config show` emits the resolved profile as TOML with masked secrets; replace redactions before using it for authentication.
 

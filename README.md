@@ -8,7 +8,7 @@
 
 > **🌐 한국어** | **[English](README.en.md)**
 
-Jira와 Confluence Cloud를 다루는 단일 Rust 바이너리입니다. 사람뿐 아니라 AI 에이전트가 직접 다루도록 설계했습니다. 모든 명령은 JSON을 출력하고, 서식 있는 본문은 Markdown으로 읽고 쓰며, 긴 본문은 표준 입력에서 받고, 실패는 안정된 종료 코드와 함께 JSON 객체 하나로 보고합니다. `jira-confluence` Claude Code 스킬을 함께 배포하며, OAuth 2.0 (3LO), 서비스 계정, scoped API 토큰, classic API 토큰의 네 가지 인증 방식을 지원합니다.
+Jira와 Confluence Cloud를 다루는 단일 Rust 바이너리입니다. 사람뿐 아니라 AI 에이전트가 직접 다루도록 설계했습니다. Jira와 Confluence 명령은 JSON을 출력하고, 서식 있는 본문은 Markdown으로 읽고 쓰며, 긴 본문은 표준 입력에서 받고, 실패는 안정된 종료 코드와 함께 JSON 객체 하나로 보고합니다. `jira-confluence` Claude Code 스킬을 함께 배포하며, OAuth 2.0 (3LO), 서비스 계정, scoped API 토큰, classic API 토큰의 네 가지 인증 방식을 지원합니다.
 
 ---
 
@@ -85,9 +85,9 @@ atlassian-cli confluence delete 123456 --yes           # 페이지를 휴지통�
 
 ### 스크립트와 에이전트를 위한 출력
 
-- 결과는 stdout에 JSON으로 출력되고, 목록은 `items`로 감쌉니다. `--pretty`, `--profile`, `--config` 같은 루트 옵션은 하위 명령 앞에 둡니다.
-- `--format`은 서식 있는 본문의 표현을 정합니다. 기본값은 Jira `adf`, Confluence `storage`이며, `markdown`은 읽을 때 JSON 봉투 안의 본문 필드를 변환하고 쓸 때 본문을 변환해 보냅니다. `html`은 기본값의 별칭으로 남아 있습니다.
-- 본문 인자에 `-`를 주면 표준 입력에서 읽으며, 빈 입력은 거부합니다. 따옴표로 감싼 heredoc은 이스케이프가 필요 없고 인자 크기 제한도 받지 않습니다.
+- `jira`, `confluence`, `self` 명령의 결과는 stdout에 JSON으로 출력되고, 목록은 `items`로 감쌉니다. `--pretty`, `--profile`, `--config` 같은 루트 옵션은 하위 명령 앞에 둡니다.
+- `--format`은 서식 있는 본문의 표현을 정합니다. 기본값은 Jira `adf`, Confluence `storage`이며, `markdown`은 읽을 때 JSON 출력 안의 본문 필드를 변환하고 쓸 때 본문을 변환해 보냅니다. `html`은 기본값의 별칭으로 남아 있습니다.
+- 본문 인자에 `-`를 주면 표준 입력에서 읽으며, 빈 입력은 거부합니다. 구분자를 따옴표로 감싼 heredoc(`<<'EOF'`)은 이스케이프가 필요 없고 인자 크기 제한도 받지 않습니다.
 - `--all`은 검색의 모든 페이지를 가져오고, `--all --stream`은 페이지가 도착하는 대로 JSONL을 쓰며 진행 상황을 stderr에 보고합니다.
 - Markdown 쓰기는 GitHub 표와 취소선을 포함한 CommonMark를 따릅니다. ADF는 목록 항목이나 인용 안에 제목·인용·표·구분선을 담을 수 없으므로, 그런 Markdown은 위치를 밝혀 거부합니다. 원시 HTML은 글자 그대로 남으며, Confluence 매크로는 `--format storage`로 씁니다.
 
@@ -129,7 +129,7 @@ cargo install --path . --locked --root "$HOME/.local" --target "$(rustc --print 
 ```bash
 atlassian-cli self status                          # 버전·경로·스킬 상태·토큰을 가진 프로파일 (네트워크 없음)
 atlassian-cli self update                          # 최신 릴리스로 교체
-atlassian-cli self update --version 0.13.9         # 특정 릴리스. 이전 버전으로 가려면 이름을 명시
+atlassian-cli self update --version 0.13.9         # 특정 릴리스. 이전 버전으로 돌아가려면 버전을 명시
 atlassian-cli self update --verify-attestations    # GitHub 빌드 출처 증명까지 검증 (gh CLI 필요)
 atlassian-cli self update --force                  # 이미 그 버전을 보고하는 바이너리도 교체
 atlassian-cli self skill install                   # 이 바이너리에 든 스킬을 다시 배포
@@ -180,7 +180,9 @@ atlassian-cli auth refresh     # 강제 갱신
 atlassian-cli auth logout      # 저장된 세션 삭제
 ```
 
-refresh token이 있는 세션은 만료 5분 전에 갱신됩니다. 기본 Jira 권한 외에는 쓰는 명령에 필요한 scope만 요청합니다.
+`auth login`은 브라우저 로그인을 최대 5분 기다립니다. `--no-browser`는 URL을 출력할 뿐이며, 로그인을 마친 브라우저는 CLI가 실행되는 기기의 `127.0.0.1:8976`(프로파일의 `redirect_port`)에 접속할 수 있어야 합니다. SSH로 접속한 원격 기기에서는 `ssh -L 8976:127.0.0.1:8976 <host>`로 포트를 전달한 뒤 로그인합니다.
+
+refresh token이 있는 세션은 만료 5분 전에 갱신됩니다. 프로파일에는 기본 Jira 권한 외에 사용할 명령에 필요한 scope만 추가합니다.
 
 | 명령 | 추가 scope | API |
 |---|---|---|
@@ -197,7 +199,7 @@ refresh token이 있는 세션은 만료 5분 전에 갱신됩니다. 기본 Jir
 
 Confluence 쓰기에는 쓰기 전에 하는 읽기까지 포함해, 호출하는 모든 엔드포인트의 scope가 필요합니다. 속성 변경에는 `read:page:confluence`와 `write:page:confluence`가, 댓글 삭제에는 `delete:comment:confluence`가 필요합니다. v1 API를 쓰는 라벨 추가·삭제에는 `write:confluence-content`가, 첨부 업로드에는 `write:confluence-file`이 필요합니다. 앱에 scope를 허용하고 프로파일에 추가한 뒤에는 `auth login`을 다시 실행합니다. 기존 토큰에는 새 scope가 붙지 않습니다.
 
-> **헤드리스와 AI 에이전트:** 데스크톱 OS에서는 키체인이 GUI 프롬프트에서 멈출 수 있습니다. 실행 환경에 `ATLASSIAN_NO_KEYCHAIN=1`을 설정하면 0600 파일 저장소를 쓰며, 이 값은 계속 유지해야 합니다. 설정되어 있는 동안 `auth logout`은 파일 저장소만 지웁니다.
+> **헤드리스와 AI 에이전트:** 데스크톱 OS에서는 키체인이 GUI 프롬프트에서 멈출 수 있습니다. 실행 환경에 `ATLASSIAN_NO_KEYCHAIN=1`을 설정하면 0600 파일 저장소를 쓰며, 이 값은 계속 유지해야 합니다. 설정되어 있는 동안 `auth logout`은 파일 저장소만 지웁니다. 키체인으로 로그인한 적이 있다면 이 값을 설정하기 전에 `auth logout`을 한 번 실행합니다. 키체인에 남은 세션은 이 값을 해제할 때마다 다시 쓰입니다.
 
 ### 서비스 계정
 
@@ -273,7 +275,7 @@ token = "..."
 ### 설정 관리
 
 - `config path`와 `config edit`는 `--config`가 있으면 그 파일을, `--global`이 있으면 전역 파일을 대상으로 합니다.
-- `config init --config <파일>`은 그 경로에 시작 파일을 쓰며 기존 파일을 덮어쓰지 않습니다.
+- `atlassian-cli --config <파일> config init`은 그 경로에 시작 파일을 쓰며 기존 파일을 덮어쓰지 않습니다.
 - `config list`는 읽은 파일(명시한 파일 포함)과 설정된 환경 변수를 보여 줍니다.
 - `config show`는 해석된 프로파일을 비밀 값을 가린 TOML로 출력합니다.
 - `EDITOR`는 모든 플랫폼에서 POSIX 인용 규칙을 따르는 실행 파일과 인자입니다(예: `code --wait`). 공백이나 역슬래시가 있는 경로는 값 안에서 따옴표로 감쌉니다: `'C:\Program Files\Microsoft VS Code\Code.exe' --wait`.
@@ -297,7 +299,7 @@ rate_limit_delay_ms = 200
 response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 ```
 
-`projects_filter`가 있으면 `status = Open`은 `project IN ("PROJ1","PROJ2") AND (status = Open)`으로 실행되고, 이미 project를 지정한 쿼리는 그대로 실행됩니다. `--fields`가 없으면 `jira search`는 기본 필드 17개를 요청합니다. `search_default_fields`는 이를 대체하고, `search_custom_fields`는 확장합니다. 환경 변수 `JIRA_SEARCH_DEFAULT_FIELDS`, `JIRA_SEARCH_CUSTOM_FIELDS`, `RESPONSE_EXCLUDE_FIELDS`, `REQUEST_TIMEOUT_MS`가 이 설정을 덮어씁니다.
+`projects_filter`가 있으면 `status = Open`은 `project IN ("PROJ1","PROJ2") AND (status = Open)`으로 실행되고, 이미 project를 지정한 쿼리는 그대로 실행됩니다. `--fields`가 없으면 `jira search`는 기본 필드 17개를 요청합니다. `search_default_fields`는 이를 대체하고, `search_custom_fields`는 확장합니다. 환경 변수 `JIRA_PROJECTS_FILTER`, `CONFLUENCE_SPACES_FILTER`, `JIRA_SEARCH_DEFAULT_FIELDS`, `JIRA_SEARCH_CUSTOM_FIELDS`, `RESPONSE_EXCLUDE_FIELDS`, `REQUEST_TIMEOUT_MS`가 이 설정을 덮어씁니다.
 
 ---
 
@@ -309,7 +311,7 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 {"error":{"message":"Failed to get issue (404 Not Found): ...","operation":"get issue","status":404}}
 ```
 
-API 실패에는 `status`와 `operation`이 있고, 알려진 해결책이 있으면 `hint`가 붙습니다. 읽기와 멱등 요청은 429를 최대 3번 재시도합니다. 그 밖의 쓰기는 이미 적용되었을 수 있으므로 `retryAfterSeconds`와 `rateLimitReason`을 담아 바로 반환합니다. 다시 보내기 전에 적용되었는지 확인합니다. 60초를 넘는 대기는 기다리지 않고 호출자에게 돌려줍니다.
+API 실패에는 `status`와 `operation`이 있고, 알려진 해결책이 있으면 `hint`가 붙습니다. 429에는 Atlassian이 보낸 경우 `retryAfterSeconds`와 `rateLimitReason`도 붙습니다. 읽기와 멱등 요청은 서버가 요청한 시간 이상 기다린 뒤 429를 최대 3번 재시도하며, 60초를 넘는 대기는 기다리지 않고 호출자에게 돌려줍니다. 그 밖의 쓰기는 이미 적용되었을 수 있으므로 바로 반환합니다. 다시 보내기 전에 적용되었는지 확인합니다. 첨부 업로드는 본문을 다시 보낼 수 없어 재시도하지 않으며, 다시 실행하면 같은 파일의 새 버전이 됩니다. 정책은 Atlassian의 [Jira](https://developer.atlassian.com/cloud/jira/platform/rate-limiting/)와 [Confluence](https://developer.atlassian.com/cloud/confluence/rate-limiting/) 속도 제한 문서에 있습니다.
 
 | 종료 코드 | 의미 |
 |---|---|
@@ -339,7 +341,7 @@ API 실패에는 `status`와 `operation`이 있고, 알려진 해결책이 있�
 
 ## 개발
 
-개발 명령, 아키텍처, 호환성 계약은 [AGENTS.md](AGENTS.md)에 있습니다. 문제는 <https://github.com/junyeong-ai/atlassian-cli/issues>에 알려 주세요.
+개발 명령, 아키텍처, 호환성 계약은 [AGENTS.md](AGENTS.md)에 있습니다. 문제는 <https://github.com/junyeong-ai/atlassian-cli/issues>에 알려 주십시오.
 
 ---
 

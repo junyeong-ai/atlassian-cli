@@ -8,7 +8,7 @@
 
 > **🌐 [한국어](README.md)** | **English**
 
-A single Rust binary for Jira and Confluence Cloud, built to be driven by AI agents as well as people. Every command prints JSON, rich text is read and written as Markdown, long bodies come from standard input, and a failure is one JSON object with a stable exit code. It ships the `jira-confluence` Claude Code skill and supports four authentication methods: OAuth 2.0 (3LO), service accounts, scoped API tokens and classic API tokens.
+A single Rust binary for Jira and Confluence Cloud, built to be driven by AI agents as well as people. Jira and Confluence commands print JSON, rich text is read and written as Markdown, long bodies come from standard input, and a failure is one JSON object with a stable exit code. It ships the `jira-confluence` Claude Code skill and supports four authentication methods: OAuth 2.0 (3LO), service accounts, scoped API tokens and classic API tokens.
 
 ---
 
@@ -85,9 +85,9 @@ atlassian-cli confluence delete 123456 --yes           # moves the page to the t
 
 ### Output for scripts and agents
 
-- Results go to stdout as JSON, and lists use an `items` envelope. Root options such as `--pretty`, `--profile` and `--config` precede the subcommand.
+- Results of `jira`, `confluence` and `self` go to stdout as JSON, and lists use an `items` envelope. Root options such as `--pretty`, `--profile` and `--config` precede the subcommand.
 - `--format` names the rich-text representation: `adf` for Jira or `storage` for Confluence by default, or `markdown`, which converts read content inside the JSON envelope and write bodies before they are sent. `html` remains an alias of the default.
-- Body arguments take `-` to read standard input, and refuse it empty. A quoted heredoc needs no escaping and has no argument-size limit.
+- Body arguments take `-` to read standard input, and refuse it empty. A heredoc with a quoted delimiter (`<<'EOF'`) needs no escaping and has no argument-size limit.
 - `--all` follows every page of a search; `--all --stream` writes JSONL as pages arrive and reports progress on stderr.
 - Markdown writes follow CommonMark with GitHub tables and strikethrough. ADF cannot hold a heading, quote, table or rule inside a list item or quote, so such Markdown is refused with its location. Raw HTML stays literal text; write Confluence macros with `--format storage`.
 
@@ -129,7 +129,7 @@ Releases cover Linux (x86_64, aarch64), macOS (Intel, Apple Silicon) and Windows
 ```bash
 atlassian-cli self status                          # version, paths, skill state, profiles holding tokens (no network)
 atlassian-cli self update                          # replace with the latest release
-atlassian-cli self update --version 0.13.9         # a specific release; going back needs it named
+atlassian-cli self update --version 0.13.9         # a specific release; going back needs the version given
 atlassian-cli self update --verify-attestations    # also check GitHub build provenance (needs the gh CLI)
 atlassian-cli self update --force                  # replace even a binary that already reports that version
 atlassian-cli self skill install                   # redeploy the skill this binary carries
@@ -180,7 +180,9 @@ atlassian-cli auth refresh     # force a refresh
 atlassian-cli auth logout      # clear the stored session
 ```
 
-Sessions with a refresh token refresh five minutes before expiry. Request only the scopes your commands use, beyond the default Jira grants:
+`auth login` waits up to five minutes for the browser sign-in. `--no-browser` only prints the URL: the browser that signs in must still reach `127.0.0.1:8976` (the profile's `redirect_port`) on the machine running the CLI. On a remote host reached over SSH, forward the port with `ssh -L 8976:127.0.0.1:8976 <host>` before signing in.
+
+Sessions with a refresh token refresh five minutes before expiry. Beyond the default Jira grants, add to the profile only the scopes your commands use:
 
 | Command | Additional scopes | API |
 |---|---|---|
@@ -197,7 +199,7 @@ Sessions with a refresh token refresh five minutes before expiry. Request only t
 
 Confluence writes need the scopes of every endpoint they call, including a read before the write: property changes need `read:page:confluence` and `write:page:confluence`, and comment deletion needs `delete:comment:confluence`. Label writes and uploads go through the v1 API and need `write:confluence-content` and `write:confluence-file`. After enabling a scope on the app and adding it to the profile, run `auth login` again; an existing token does not gain it.
 
-> **Headless and AI agents:** on a desktop OS the keychain can block on a GUI prompt. Set `ATLASSIAN_NO_KEYCHAIN=1` for the environment to use the 0600 file store instead, and keep it set; while it is set, `auth logout` clears only the file store.
+> **Headless and AI agents:** on a desktop OS the keychain can block on a GUI prompt. Set `ATLASSIAN_NO_KEYCHAIN=1` for the environment to use the 0600 file store instead, and keep it set; while it is set, `auth logout` clears only the file store. If you have signed in with the keychain, run `auth logout` once before setting it; a session left in the keychain is used again whenever the flag is unset.
 
 ### Service account
 
@@ -273,7 +275,7 @@ For the selected profile, the highest-priority file that defines an `[auth]` sec
 ### Managing configuration
 
 - `config path` and `config edit` target the `--config` file when given, and the global file with `--global`.
-- `config init --config <file>` writes a starter there and never overwrites an existing file.
+- `atlassian-cli --config <file> config init` writes a starter there and never overwrites an existing file.
 - `config list` shows the files read, including an explicit one, and which environment variables are set.
 - `config show` prints the resolved profile as TOML with secrets masked.
 - `EDITOR` is an executable followed by arguments in POSIX quoting on every platform, for example `code --wait`. Quote a path containing spaces or backslashes inside the value: `'C:\Program Files\Microsoft VS Code\Code.exe' --wait`.
@@ -297,7 +299,7 @@ rate_limit_delay_ms = 200
 response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 ```
 
-With `projects_filter`, `status = Open` runs as `project IN ("PROJ1","PROJ2") AND (status = Open)`, while a query that already names a project runs unchanged. Without `--fields`, `jira search` requests a default set of 17 fields: `search_default_fields` replaces it, and `search_custom_fields` extends it. The environment variables `JIRA_SEARCH_DEFAULT_FIELDS`, `JIRA_SEARCH_CUSTOM_FIELDS`, `RESPONSE_EXCLUDE_FIELDS` and `REQUEST_TIMEOUT_MS` override these settings.
+With `projects_filter`, `status = Open` runs as `project IN ("PROJ1","PROJ2") AND (status = Open)`, while a query that already names a project runs unchanged. Without `--fields`, `jira search` requests a default set of 17 fields: `search_default_fields` replaces it, and `search_custom_fields` extends it. The environment variables `JIRA_PROJECTS_FILTER`, `CONFLUENCE_SPACES_FILTER`, `JIRA_SEARCH_DEFAULT_FIELDS`, `JIRA_SEARCH_CUSTOM_FIELDS`, `RESPONSE_EXCLUDE_FIELDS` and `REQUEST_TIMEOUT_MS` override these settings.
 
 ---
 
@@ -309,7 +311,7 @@ A runtime failure prints one JSON object to stderr; stdout carries results only.
 {"error":{"message":"Failed to get issue (404 Not Found): ...","operation":"get issue","status":404}}
 ```
 
-API failures carry `status` and `operation`, and a `hint` when a remediation is known. Reads and idempotent requests retry a 429 up to three times. Any other write may already have been applied, so it returns at once with `retryAfterSeconds` and `rateLimitReason`; check whether it took effect before sending it again. Waits longer than 60 seconds are returned to the caller rather than slept through.
+API failures carry `status` and `operation`, and a `hint` when a remediation is known; a 429 also carries `retryAfterSeconds` and `rateLimitReason` when Atlassian sends them. Reads and idempotent requests retry a 429 up to three times, waiting at least as long as the server asks, and a wait longer than 60 seconds is returned to the caller rather than slept through. Any other write may already have been applied, so it returns at once; check whether it took effect before sending it again. An upload is not retried because its body cannot be resent, and running it again adds a new version of the same file. The policies are in Atlassian's rate limiting guides for [Jira](https://developer.atlassian.com/cloud/jira/platform/rate-limiting/) and [Confluence](https://developer.atlassian.com/cloud/confluence/rate-limiting/).
 
 | Exit code | Meaning |
 |---|---|
