@@ -438,17 +438,18 @@ async fn edit_parent(
         .await?
         .query(&[("fields", "parent")]);
     let read_back = "read back the issue parent";
+    let unconfirmed =
+        || format!("Jira accepted clearing the parent of {issue}, but reading it back failed");
     let data: Value = client
         .execute(read_back, request)
         .await
-        .with_context(|| {
-            format!("Jira accepted clearing the parent of {issue}, but reading it back failed")
-        })?
+        .with_context(unconfirmed)?
         .json()
-        .await?;
+        .await
+        .with_context(unconfirmed)?;
     // Jira omits `fields` when every requested field is empty, so the issue's
     // own key is what shows this is an issue rather than a drifted body.
-    require_field(&data, "/key", read_back)?;
+    require_field(&data, "/key", read_back).with_context(unconfirmed)?;
     if let Some(parent) = data.pointer("/fields/parent/key").and_then(Value::as_str) {
         anyhow::bail!(
             "Jira accepted clearing the parent of {issue}, but it is still under {parent}"
