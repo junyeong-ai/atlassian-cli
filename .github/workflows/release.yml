@@ -51,7 +51,9 @@ jobs:
 
       - name: Install toolchain
         shell: bash
-        run: rustup toolchain install --target "$TARGET"
+        run: |
+          rustup toolchain install
+          rustup target add "$TARGET"
 
       # No build cache: restoring one into the job that produces the published
       # binaries is a cache-poisoning path, so a release builds from scratch.
