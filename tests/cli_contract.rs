@@ -192,3 +192,47 @@ fn invalid_editor_commands_leave_the_config_untouched() {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "[default]\n");
     }
 }
+
+/// `-` with nothing piped in is a forgotten redirect. It is refused before any
+/// request is sent, because taking it as the body would blank the page.
+#[test]
+fn a_body_read_from_empty_standard_input_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        "[default]\ndomain = \"example.atlassian.net\"\n\n[default.auth]\nmethod = \"basic\"\n\
+         email = \"user@example.com\"\ntoken = \"token\"\n",
+    )
+    .unwrap();
+    for arguments in [
+        ["confluence", "update", "123", "Title", "-"].as_slice(),
+        &[
+            "jira", "comment", "add", "PROJ-1", "-", "--format", "markdown",
+        ],
+    ] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_atlassian-cli"));
+        for (name, _) in std::env::vars().filter(|(name, _)| name.starts_with("ATLASSIAN_")) {
+            command.env_remove(name);
+        }
+        let output = command
+            .arg("--config")
+            .arg(&path)
+            .args(arguments)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{arguments:?}");
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        let error: serde_json::Value =
+            serde_json::from_str(stderr.lines().last().unwrap()).unwrap();
+        assert!(
+            error["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("standard input"),
+            "{error}"
+        );
+    }
+}

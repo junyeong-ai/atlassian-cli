@@ -50,18 +50,13 @@ pub async fn create_page(
     title: &str,
     content: &str,
     parent_id: Option<&str>,
-    include_all_fields: Option<bool>,
-    additional_includes: Option<Vec<String>>,
     client: &ApiClient,
 ) -> Result<Value> {
     // Resolve the space key to its numeric id via the shared helper (also used
     // by the `space` discovery commands).
     let space_id = resolve_space_id(space_key, client).await?;
 
-    // Now create the page with v2 API
     let url = "/wiki/api/v2/pages";
-
-    let query_params = apply_v2_filtering(include_all_fields, additional_includes);
 
     let mut body = json!({
         "spaceId": space_id,
@@ -81,7 +76,6 @@ pub async fn create_page(
         .post(Service::Confluence, url)
         .await?
         .header("Content-Type", "application/json")
-        .query(&query_params)
         .json(&body);
     let response = client.execute("create page", request).await?;
 
@@ -99,19 +93,28 @@ pub async fn create_page(
     Ok(created)
 }
 
+/// Replace a page's title and body.
+///
+/// `base_version` is the version the new content was derived from. Given, the
+/// update claims the version after it, and Confluence refuses the write with a
+/// 409 when someone else saved in between; omitted, the update overwrites
+/// whatever version is current.
 pub async fn update_page(
     page_id: &str,
     title: &str,
     content: &str,
     parent_id: Option<&str>,
-    include_all_fields: Option<bool>,
-    additional_includes: Option<Vec<String>>,
+    base_version: Option<u64>,
     client: &ApiClient,
 ) -> Result<Value> {
     let url = format!("/wiki/api/v2/pages/{}", encode_path_segment(page_id));
-    let next_version = fetch_version_number(client, &url).await? + 1;
-
-    let query_params = apply_v2_filtering(include_all_fields, additional_includes);
+    let current = match base_version {
+        Some(version) => version,
+        None => fetch_version_number(client, &url).await?,
+    };
+    let next_version = current
+        .checked_add(1)
+        .ok_or_else(|| anyhow::anyhow!("page version {current} has no successor"))?;
 
     // `status: "current"` is part of the v2 update contract and keeps the page
     // published; this CLI only edits live pages, so it is always "current".
@@ -138,7 +141,6 @@ pub async fn update_page(
         .put(Service::Confluence, &url)
         .await?
         .header("Content-Type", "application/json")
-        .query(&query_params)
         .json(&body);
     let response = client.execute("update page", request).await?;
 

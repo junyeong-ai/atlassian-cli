@@ -425,7 +425,7 @@ async fn integ_create_page_resolves_space_then_posts_storage_body() {
         .await;
 
     let client = mock_client(server.uri());
-    let result = create_page("ENG", "Spec", "<p>x</p>", None, None, None, &client)
+    let result = create_page("ENG", "Spec", "<p>x</p>", None, &client)
         .await
         .unwrap();
     assert_eq!(result, json!({ "id": "pid", "title": "Spec" }));
@@ -451,7 +451,7 @@ async fn integ_create_page_reports_no_title_where_the_response_carried_none() {
         .await;
 
     let client = mock_client(server.uri());
-    let result = create_page("ENG", "Spec", "<p>x</p>", None, None, None, &client)
+    let result = create_page("ENG", "Spec", "<p>x</p>", None, &client)
         .await
         .unwrap();
     assert_eq!(result, json!({ "id": "pid" }));
@@ -487,7 +487,7 @@ async fn integ_create_page_nests_under_parent() {
         .await;
 
     let client = mock_client(server.uri());
-    let result = create_page("ENG", "Child", "<p>x</p>", Some("999"), None, None, &client)
+    let result = create_page("ENG", "Child", "<p>x</p>", Some("999"), &client)
         .await
         .unwrap();
     assert_eq!(result["id"], "pid");
@@ -521,7 +521,7 @@ async fn integ_update_page_reads_version_then_puts() {
         .await;
 
     let client = mock_client(server.uri());
-    let result = update_page("12345", "Updated", "<p>y</p>", None, None, None, &client)
+    let result = update_page("12345", "Updated", "<p>y</p>", None, None, &client)
         .await
         .unwrap();
     assert_eq!(result, json!({ "id": "12345", "version": 6 }));
@@ -557,18 +557,47 @@ async fn integ_update_page_reparents_when_parent_given() {
         .await;
 
     let client = mock_client(server.uri());
-    let result = update_page(
+    let result = update_page("12345", "Updated", "<p>y</p>", Some("777"), None, &client)
+        .await
+        .unwrap();
+    assert_eq!(result["version"], 6);
+}
+
+/// A caller naming the version its edit came from claims the next one without
+/// reading the page again, so a save made in between is Confluence's to refuse
+/// rather than this update's to overwrite.
+#[tokio::test]
+async fn integ_update_page_on_a_base_version_claims_its_successor_without_rereading() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/wiki/api/v2/pages/12345"))
+        .and(body_string_contains(r#""version":{"number":4}"#))
+        .respond_with(ResponseTemplate::new(409).set_body_json(json!({
+            "errors": [{ "title": "Version must be incremented when updating a page. Current Version: [5]. Provided version: [4]" }]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let err = update_page(
         "12345",
-        "Updated",
+        "T",
         "<p>y</p>",
-        Some("777"),
         None,
-        None,
-        &client,
+        Some(3),
+        &mock_client(server.uri()),
     )
     .await
-    .unwrap();
-    assert_eq!(result["version"], 6);
+    .unwrap_err();
+
+    let api = err.downcast_ref::<crate::ApiError>().expect("an API error");
+    assert_eq!(api.status.as_u16(), 409);
+    assert!(err.to_string().contains("Current Version: [5]"), "{err}");
 }
 
 // --- Footer comment write -------------------------------------------
@@ -1779,7 +1808,7 @@ async fn integ_a_space_lookup_uses_a_result_reached_through_an_alias() {
         .await;
 
     let client = mock_client(server.uri());
-    create_page("OLDKEY", "T", "<p>x</p>", None, None, None, &client)
+    create_page("OLDKEY", "T", "<p>x</p>", None, &client)
         .await
         .expect("a historical alias names neither field and still resolves");
 }

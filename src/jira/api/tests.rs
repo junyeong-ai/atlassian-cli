@@ -2819,3 +2819,37 @@ async fn search_preserves_scope_and_quoted_sorting_on_the_wire() {
         assert_eq!(result["items"][0]["key"], "OTHER-1");
     }
 }
+
+/// The query is the caller's text, so it travels as one parameter value even
+/// when it carries `&`, and the bare array the endpoint answers with becomes the
+/// list envelope with the usual noise filtered out.
+#[tokio::test]
+async fn integ_search_users_sends_the_query_as_one_value_and_lists_the_matches() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/search"))
+        .and(query_param("query", "Kim & Lee"))
+        .and(query_param("maxResults", "5"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+            "accountId": "5b10a2844c20165700ede21g",
+            "displayName": "Kim Lee",
+            "active": true,
+            "avatarUrls": { "48x48": "https://avatar.example" }
+        }])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let result = search_users("Kim & Lee", 5, &mock_client(server.uri()))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result,
+        json!({ "items": [{
+            "accountId": "5b10a2844c20165700ede21g",
+            "displayName": "Kim Lee",
+            "active": true
+        }] })
+    );
+}

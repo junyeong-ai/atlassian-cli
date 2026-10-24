@@ -48,12 +48,13 @@ atlassian-cli jira search "project = PROJ" --all --stream > issues.jsonl
 atlassian-cli jira comment list PROJ-123 --format markdown
 atlassian-cli jira transition list PROJ-123
 
-# 쓰기 (plain text는 자동으로 ADF로 변환됨)
-atlassian-cli jira create PROJ "Summary" Bug --description "Plain text"
+# 쓰기 (--format markdown 이면 Markdown 을 ADF 로 변환, `-` 는 표준 입력에서 읽음)
+atlassian-cli jira create PROJ "Summary" Bug --format markdown --description - < report.md
 atlassian-cli jira create PROJ "Summary" Sub-task --parent PROJ-123
 atlassian-cli jira create PROJ "Summary" Task --fields '{"components":[{"name":"api"}]}'
 atlassian-cli jira update PROJ-123 '{"summary":"New title"}'
-atlassian-cli jira comment add PROJ-123 "Comment"
+atlassian-cli jira comment add PROJ-123 "**staging** 에서 재현" --format markdown
+atlassian-cli jira user search "Kim"              # 담당자 필드·JQL·CQL 에 쓰는 accountId
 atlassian-cli jira comment update PROJ-123 10042 "Edited"
 atlassian-cli jira transition apply PROJ-123 31
 atlassian-cli jira delete PROJ-123 --yes          # 영구 삭제 (--yes 필수)
@@ -77,9 +78,9 @@ atlassian-cli confluence get 123456 --format markdown
 atlassian-cli confluence children 123456
 atlassian-cli confluence comment list 123456 --format markdown   # 대댓글·인라인 댓글 모두 포함
 
-# 페이지 (HTML storage format)
-atlassian-cli confluence create TEAM "Title" "<p>Content</p>"
-atlassian-cli confluence update 123456 "Title" "<p>Updated</p>"
+# 페이지 (기본은 storage format, --format markdown 이면 Markdown 변환)
+atlassian-cli confluence create TEAM "Title" - --format markdown < page.md
+atlassian-cli confluence update 123456 "Title" - --format markdown --base-version 7 < page.md   # 7 이후 저장이 있으면 409 로 거부
 atlassian-cli confluence delete 123456 --yes              # 휴지통 (--yes 필수)
 
 # 댓글 · 라벨 · 콘텐츠 속성
@@ -87,7 +88,7 @@ atlassian-cli confluence comment list 123456 --location inline   # 본문에 앵
 atlassian-cli confluence comment list 123456 --roots-only        # 최상위 댓글만
 atlassian-cli confluence comment get 67890                       # 댓글 id 로 단건 조회
 atlassian-cli confluence comment replies 67890                   # 한 스레드만
-atlassian-cli confluence comment add 123456 "<p>리뷰 완료</p>"
+atlassian-cli confluence comment add 123456 "리뷰 **완료**" --format markdown
 atlassian-cli confluence comment add 123456 "<p>답글</p>" --reply-to 67890
 atlassian-cli confluence label add 123456 needs-review
 atlassian-cli confluence property set 123456 review '{"status":"done"}'
@@ -387,6 +388,7 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 | `link add/remove/list <KEY...>`, `link types` | 이슈 링크. `remove` 는 이슈 쌍(`--type`) 또는 `--id <링크 id>` — 둘 중 하나만 |
 | `worklog add/list/update/remove <KEY> ...` | 작업시간 기록. `add --started` 는 Jira 형식만 받습니다 — `2026-08-22T09:30:00.000+0900` (밀리초 3자리, 오프셋에 콜론 없음) |
 | `watcher add/remove/list <KEY>` | 와처 |
+| `user search <QUERY> [--limit N]` | 사용자 검색. 담당자 필드·JQL·CQL 에 쓰는 `accountId` 조회 |
 | `list types/priorities/statuses/labels` | 전역 메타데이터 조회 |
 | `board list --project <KEY>` | 애자일 보드 목록 |
 | `sprint list [--project <KEY> | --board <ID>] [--state active]`, `sprint move/backlog ...` | 스프린트 조회 / 백로그 이동 |
@@ -397,14 +399,14 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 |--------|------|
 | `search <CQL>` | CQL 검색 |
 | `get <ID>` | 페이지 조회 |
-| `create <SPACE> <TITLE> <CONTENT> [--parent <ID>]` | 페이지 생성 (HTML; `--parent`로 부모 페이지 아래 중첩) |
-| `update <ID> <TITLE> <CONTENT>` | 페이지 수정 (HTML) |
+| `create <SPACE> <TITLE> <CONTENT> [--parent <ID>]` | 페이지 생성 (`--parent`로 부모 페이지 아래 중첩) |
+| `update <ID> <TITLE> <CONTENT> [--base-version <N>]` | 페이지 수정. `--base-version`을 주면 그 버전 이후 저장된 변경이 있을 때 덮어쓰지 않고 409로 거부 |
 | `delete <ID> --yes` | 페이지 삭제 (휴지통) |
 | `children <ID>` | 하위 페이지 |
 | `comment list <ID> [--location footer\|inline] [--roots-only]` | 페이지 댓글 — 기본은 footer·inline 두 계열 전부, 대댓글 포함. 항목마다 `location`·`depth`·`parentCommentId` |
 | `comment get <COMMENT_ID> [--location ...]` | 댓글 단건 (기본 `footer`) |
 | `comment replies <COMMENT_ID> [--location ...]` | 한 댓글 아래 전체 스레드 |
-| `comment add <ID> <HTML> [--reply-to <COMMENT_ID>]` | footer 댓글 작성 (page id) |
+| `comment add <ID> <BODY> [--reply-to <COMMENT_ID>]` | footer 댓글 작성 (page id) |
 | `comment update/delete <COMMENT_ID> ...` | 댓글 수정 / 삭제 (comment id) |
 | `label list/add/remove <ID> [LABEL]` | 페이지 라벨 |
 | `property list/set/delete <ID> [KEY] [JSON]` | 콘텐츠 속성 (값은 strict JSON) |
@@ -431,7 +433,8 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 | `--config <PATH>` | 설정 파일 경로 오버라이드 |
 | `--domain` `--email` `--token` `--client-id` `--client-secret` `--cloud-id` | 인증 필드 오버라이드 — 필드별 우선순위(CLI 플래그 > 환경변수 > 설정 파일)의 최상위 |
 | `-v` / `-vv` / `-vvv` (`--verbose`) | 로깅 레벨 (stderr) |
-| `--format markdown` | ADF/HTML content 필드를 Markdown으로 변환 (JSON envelope 유지) |
+| `--format adf\|storage\|markdown` | 본문 형식. 기본은 Jira `adf`, Confluence `storage`. `markdown`은 읽기에서 content 필드를 변환(JSON envelope 유지)하고 쓰기에서 Markdown 본문을 변환 |
+| `-` (본문 인자) | 본문을 표준 입력에서 읽음. 빈 입력은 거부 |
 | `--all` | `search`: 전체 페이지네이션 |
 | `--stream` | `search --all`: JSONL을 stdout으로 |
 | `--fields a,b,c` | `jira search`/`jira get`: 반환 필드 지정 (`get`은 `*all`로 전체 필드) |

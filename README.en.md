@@ -15,7 +15,7 @@
 > - 🚀 **Single binary** (no runtime required)
 > - 🎯 **Response field filtering** (configurable defaults and custom fields)
 > - 📄 **Full pagination** (fetch all results with `--all`)
-> - 📝 **Markdown conversion** (`--format markdown` for HTML→Markdown)
+> - 📝 **Markdown both ways** (`--format markdown` on reads and writes)
 > - 🔧 **Layered config** (CLI → ENV → `--config` → Project → Global)
 
 ---
@@ -60,13 +60,14 @@ atlassian-cli jira search "project = PROJ" --all --stream    # JSONL streaming
 # Get/Create/Update issues
 atlassian-cli jira get PROJ-123
 atlassian-cli jira get PROJ-123 --format markdown  # description as Markdown
-atlassian-cli jira create PROJ "Bug fix" Bug --description "Details"
+atlassian-cli jira create PROJ "Bug fix" Bug --format markdown --description - < report.md
 atlassian-cli jira create PROJ "Sub-task" Sub-task --parent PROJ-123
 atlassian-cli jira create PROJ "Task" Task --fields '{"components":[{"name":"api"}]}'
 atlassian-cli jira update PROJ-123 '{"summary":"New title"}'
 
 # Comment/Transition
-atlassian-cli jira comment add PROJ-123 "Work completed"
+atlassian-cli jira comment add PROJ-123 "Reproduced on **staging**" --format markdown
+atlassian-cli jira user search "Kim"            # accountId for assignee fields, JQL and CQL
 atlassian-cli jira comment update PROJ-123 10042 "Edited comment"
 atlassian-cli jira transition list PROJ-123
 atlassian-cli jira transition apply PROJ-123 31
@@ -95,10 +96,10 @@ atlassian-cli confluence search "type=page" --format markdown  # Markdown conver
 atlassian-cli confluence get 123456 --format markdown
 
 # Get/Create/Update pages
-atlassian-cli confluence get 123456                          # HTML format (default)
+atlassian-cli confluence get 123456                          # storage format (default)
 atlassian-cli confluence get 123456 --format markdown        # Markdown conversion
-atlassian-cli confluence create TEAM "API Docs" "<p>Content</p>"
-atlassian-cli confluence update 123456 "New Title" "<p>New content</p>"
+atlassian-cli confluence create TEAM "API Docs" - --format markdown < page.md   # `-` reads standard input
+atlassian-cli confluence update 123456 "New Title" - --format markdown --base-version 7 < page.md   # 409 if saved after version 7
 
 # Children & comments — every reply, footer and inline
 atlassian-cli confluence children 123456
@@ -109,7 +110,7 @@ atlassian-cli confluence comment get 67890                       # one comment b
 atlassian-cli confluence comment replies 67890                   # one thread
 
 # Comments / labels / properties / spaces / attachments
-atlassian-cli confluence comment add 123456 "<p>Looks good</p>" --reply-to 67890
+atlassian-cli confluence comment add 123456 "Looks **good**" --format markdown --reply-to 67890
 atlassian-cli confluence label add 123456 needs-review
 atlassian-cli confluence property set 123456 review '{"status":"done"}'
 atlassian-cli confluence space list
@@ -431,6 +432,7 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 | `link add/remove/list`, `link types` | Issue links. `remove` takes the issue pair (with `--type`) or `--id <link id>`, never both | `jira link remove --id 10001` |
 | `worklog add/list/update/remove` | Time tracking. `add --started` takes Jira's format alone — milliseconds, colon-less offset | `jira worklog add PROJ-123 "2h" --started 2026-08-22T09:30:00.000+0900` |
 | `watcher add/remove/list <KEY>` | Watchers | `jira watcher add PROJ-123` |
+| `user search <QUERY> [--limit N]` | Users and the `accountId` that assignee fields, JQL and CQL take | `jira user search "Kim"` |
 | `list types/priorities/statuses/labels` | Global metadata | `jira list types` |
 | `board list --project <KEY>` | Agile boards | `jira board list --project PROJ` |
 | `sprint list [--board <ID>] [--state active]`, `sprint move/backlog` | Sprints / backlog | `jira sprint move 55 PROJ-1 PROJ-2` |
@@ -444,8 +446,8 @@ Executed: project IN (PROJ1,PROJ2) AND (status = Open)
 | `search <CQL> --format markdown` | CQL search (Markdown) | `confluence search "type=page" --format markdown` |
 | `get <ID>` | Get page | `confluence get 123456` |
 | `get <ID> --format markdown` | Get page (Markdown) | `confluence get 123456 --format markdown` |
-| `create <SPACE> <TITLE> <CONTENT> [--parent <ID>]` | Create page (nest under a parent with `--parent`) | `confluence create TEAM "Title" "<p>HTML</p>" --parent 12345` |
-| `update <ID> <TITLE> <CONTENT>` | Update page | `confluence update 123456 "Title" "<p>HTML</p>"` |
+| `create <SPACE> <TITLE> <CONTENT> [--parent <ID>]` | Create page (nest under a parent with `--parent`) | `confluence create TEAM "Title" "<p>Body</p>" --parent 12345` |
+| `update <ID> <TITLE> <CONTENT> [--base-version <N>]` | Update page; with `--base-version`, a save made after that version is refused with 409 instead of overwritten | `confluence update 123456 "Title" - --format markdown --base-version 7` |
 | `delete <ID> --yes` | Delete page (to trash) | `confluence delete 123456 --yes` |
 | `children <ID>` | List children | `confluence children 123456` |
 | `comment list <ID> [--location footer\|inline] [--roots-only]` | Every comment on a page — both families, replies included; each entry carries `location`, `depth`, `parentCommentId` | `confluence comment list 123456` |
@@ -485,7 +487,8 @@ Root options must precede the subcommand.
 | `--all` | All results (pagination) | jira search, confluence search |
 | `--stream` | JSONL streaming | jira search, confluence search (requires --all) |
 | `--expand` | Additional expand fields (ancestors, etc.; body.storage included by default) | confluence search |
-| `--format` | Output format (html, markdown) | jira get/search, confluence search/get/comments |
+| `--format` | Rich-text format: `adf` (Jira) or `storage` (Confluence) by default, or `markdown`, which converts read content inside the JSON envelope and write bodies | jira and confluence reads and writes |
+| `-` (body argument) | Read the body from standard input; empty input is refused | jira and confluence writes |
 | `--fields` | Specify fields | jira search, jira get |
 
 ### Errors & exit codes

@@ -1107,6 +1107,39 @@ mod tests {
         );
     }
 
+    /// Scripts written against `--format html` keep working; the value it
+    /// selected was always each product's stored representation.
+    #[test]
+    fn format_html_selects_the_stored_representation() {
+        let jira = Cli::try_parse_from(["atlassian-cli", "jira", "get", "A-1", "--format", "html"]);
+        assert!(matches!(
+            jira.unwrap().command,
+            Command::Jira(JiraCommand {
+                subcommand: JiraSubcommand::Get {
+                    format: JiraFormat::Adf,
+                    ..
+                }
+            })
+        ));
+        let confluence = Cli::try_parse_from([
+            "atlassian-cli",
+            "confluence",
+            "get",
+            "1",
+            "--format",
+            "html",
+        ]);
+        assert!(matches!(
+            confluence.unwrap().command,
+            Command::Confluence(ConfluenceCommand {
+                subcommand: ConfluenceSubcommand::Get {
+                    format: ConfluenceFormat::Storage,
+                    ..
+                }
+            })
+        ));
+    }
+
     /// `link remove` takes the issue pair or one link's id, and the handler's
     /// last arm rests on the parse refusing everything else. An argument
     /// relationship names its counterpart by string, so `debug_assert` is here

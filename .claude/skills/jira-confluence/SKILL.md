@@ -1,7 +1,7 @@
 ---
 name: jira-confluence
 version: 0.13.9
-description: Use atlassian-cli for Atlassian Cloud Jira and Confluence searches, issue and page edits, comments, links, worklogs, agile operations and attachments; also diagnose authentication and manage the CLI installation when requested.
+description: Searches, reads and edits Atlassian Cloud Jira issues and Confluence pages through atlassian-cli, in Markdown both ways, including comments, links, worklogs, sprints, epics, attachments and user lookup. Use when the user mentions Jira, Confluence, an issue key, JQL or CQL, or a wiki page, or asks to diagnose atlassian-cli authentication or manage its installation.
 allowed-tools: Bash
 ---
 
@@ -14,7 +14,17 @@ atlassian-cli --profile work jira get PROJ-123 --format markdown
 atlassian-cli --pretty confluence search "space = TEAM" --limit 5
 ```
 
-`--format` defaults to `html`; pass `--format markdown` for human-readable output (ADF→Markdown for Jira, HTML→Markdown for Confluence). Either way the JSON envelope is preserved — the flag only converts the content fields (description, body) in place, it is not pure-markdown output. Pick markdown when you'll summarise, the JSON default when piping.
+`--format` names how rich text is read and written. The default is each product's stored representation: `adf` (ADF JSON) for Jira and `storage` (XHTML) for Confluence. `--format markdown` converts in both directions. On reads, only the content fields inside the JSON envelope change; on writes, the body you pass is Markdown. Prefer Markdown for both, and use the stored representation only for content Markdown cannot express, such as panels, mentions or Confluence macros.
+
+Write bodies through standard input with `-` whenever they span lines or contain quotes. A quoted heredoc needs no escaping and avoids the operating system's argument-size limit:
+
+```bash
+atlassian-cli jira comment add PROJ-123 - --format markdown <<'EOF'
+Fixed in `parser.rs`; see **Release notes**.
+EOF
+```
+
+`-` with nothing piped in is refused rather than posted as an empty body. Markdown follows CommonMark with GitHub tables and strikethrough: a single newline joins lines, so separate paragraphs with a blank line. Task-list checkboxes stay literal text.
 
 ## Jira
 
@@ -32,12 +42,13 @@ atlassian-cli jira transition list PROJ-123      # discover IDs before applying
 atlassian-cli jira search "project = PROJ" --all --format markdown
 atlassian-cli jira search "project = PROJ" --all --stream > issues.jsonl
 
-# Write — plain text auto-converts to ADF
-atlassian-cli jira create PROJ "Summary" Bug --description "Plain text"
+# Write — `--format markdown` converts the description or comment to ADF
+atlassian-cli jira create PROJ "Summary" Bug --format markdown --description - < report.md
 atlassian-cli jira create PROJ "Summary" Sub-task --parent PROJ-123   # every sub-task type needs a parent
 atlassian-cli jira create PROJ "Summary" Task --fields '{"components":[{"name":"api"}]}'   # anything else the create screen requires
-atlassian-cli jira update PROJ-123 '{"summary": "New title", "description": "Plain text"}'
-atlassian-cli jira comment add PROJ-123 "Comment text"
+atlassian-cli jira update PROJ-123 '{"summary": "New title", "description": "## Cause\n\nA *race*"}' --format markdown
+atlassian-cli jira update PROJ-123 '{"assignee": {"accountId": "5b10a2844c20165700ede21g"}}'
+atlassian-cli jira comment add PROJ-123 "Reproduced on **staging**" --format markdown
 atlassian-cli jira comment update PROJ-123 10042 "Edited comment"
 atlassian-cli jira comment delete PROJ-123 10042
 atlassian-cli jira transition apply PROJ-123 31
@@ -82,7 +93,10 @@ atlassian-cli jira list types        # site-wide; see the note above before usin
 atlassian-cli jira list priorities   # priority names for `update`
 atlassian-cli jira list statuses     # status names for JQL / transitions
 atlassian-cli jira list labels       # existing labels
+atlassian-cli jira user search "Kim" --limit 5   # accountId for assignee fields, JQL and CQL
 ```
+
+An `accountId` identifies the same person in Jira and Confluence. Assignee, reporter and user fields take `{"accountId": "..."}`; JQL and CQL compare against the bare id. Under OAuth, user search needs `read:jira-user`.
 
 ### Agile — boards, sprints, epics
 
@@ -102,26 +116,15 @@ Board/sprint commands use the agile API. Pass `--project` to let the CLI resolve
 
 OAuth agile commands require endpoint-specific grants beyond core Jira scopes. Board discovery needs `read:board-scope:jira-software` and `read:project:jira`; sprint reads need `read:sprint:jira-software`; sprint moves need `write:sprint:jira-software`; moving to backlog needs `write:board-scope:jira-software`; epic assign/unassign needs `write:epic:jira-software`. `sprint list --project` also performs board discovery. Use only the grants needed for the requested operations; see the [Software scope reference](https://developer.atlassian.com/cloud/jira/software/scopes-for-oauth-2-3LO-and-forge-apps/).
 
-### ADF (rich text — only when plain text isn't enough)
+### Rich text
 
-Root: `{"version": 1, "type": "doc", "content": [...]}`
+Markdown becomes ADF headings, lists, quotes, code blocks, tables, rules, links and the strong, emphasis, strike and code marks. ADF lets a list item or quote hold only paragraphs, lists and code blocks, so Markdown nesting a heading, quote, table or rule inside one is refused with its location; move it out. Images become their alt text linked to the image, and raw HTML stays literal text.
 
-| Node | Shape |
-|---|---|
-| paragraph | `{"type":"paragraph","content":[{"type":"text","text":"..."}]}` |
-| heading | `{"type":"heading","attrs":{"level":2},"content":[...]}` |
-| bulletList | `{"type":"bulletList","content":[{"type":"listItem","content":[<paragraph>]}]}` |
-| codeBlock | `{"type":"codeBlock","attrs":{"language":"python"},"content":[<text>]}` |
+Under the default `--format adf`, a string is used as ADF when it parses to an object with `type: "doc"`, `version: 1` and an array `content`. Other strings, including JSON-shaped text like `{"status":"done"}`, are posted as literal text. The CLI checks only this root structure; Jira validates the nested nodes and can reject a document that passes the local check.
 
-Marks on text: `{"type":"text","text":"bold","marks":[{"type":"strong"}]}` — supports `strong`, `em`, `code`, `strike`, and `link` (`attrs.href`).
+An empty string becomes an empty ADF paragraph. Use `jira update KEY '{"description":null}'` to clear a description. Omitting `description` leaves it unchanged.
 
-List nesting is strict: `bulletList → listItem → paragraph → text`.
-
-A string arg is treated as ADF when it parses to an object with `type: "doc"`, `version: 1` and an array `content`. Other strings, including JSON-shaped text like `{"status":"done"}`, are wrapped as literal text. The CLI checks only this root structure; Jira validates the nested nodes and can reject a document that passes the local check.
-
-An empty string becomes an empty ADF paragraph; whitespace is preserved. Use `jira update KEY '{"description":null}'` to clear a description. Omitting `description` leaves it unchanged.
-
-A depth-limit marker in Markdown means content was truncated; inspect unconverted content with `--format html`.
+A depth-limit marker in Markdown means content was truncated; inspect the unconverted document with `--format adf`.
 
 ## Confluence
 
@@ -135,10 +138,10 @@ atlassian-cli confluence comment list 12345 --format markdown   # every reply, f
 # Large reads — cursor pagination (list endpoints auto-follow cursors to completion)
 atlassian-cli confluence search "space = TEAM" --all --stream > pages.jsonl
 
-# Pages — HTML storage format required
-atlassian-cli confluence create SPACE "Title" "<p>Content</p>"
+# Pages — storage format by default, Markdown with --format markdown
+atlassian-cli confluence create SPACE "Title" - --format markdown < page.md
 atlassian-cli confluence create SPACE "Title" "<p>Content</p>" --parent 12345  # nest under a page
-atlassian-cli confluence update 12345 "Title" "<p>Updated</p>"
+atlassian-cli confluence update 12345 "Title" - --format markdown --base-version 7 < page.md
 atlassian-cli confluence update 12345 "Title" "<p>Updated</p>" --parent 67890  # re-parent
 atlassian-cli confluence delete 12345 --yes      # moves to trash (recoverable)
 
@@ -148,7 +151,7 @@ atlassian-cli confluence comment list 12345 --roots-only        # top level only
 atlassian-cli confluence comment get 67890                      # one comment by id
 atlassian-cli confluence comment replies 67890                  # one thread
 atlassian-cli confluence comment get 67890 --location inline
-atlassian-cli confluence comment add 12345 "<p>Looks good</p>"
+atlassian-cli confluence comment add 12345 "Looks **good**" --format markdown
 atlassian-cli confluence comment add 12345 "<p>Reply</p>" --reply-to 67890
 atlassian-cli confluence comment update 67890 "<p>Edited</p>"   # by comment id, not page id
 atlassian-cli confluence comment delete 67890
@@ -171,6 +174,8 @@ atlassian-cli confluence attachment upload 12345 ./diagram.png --comment "v2"
 atlassian-cli confluence attachment upload 12345 ./icon.svg --content-type image/svg+xml
 ```
 
+- To edit a page, read it, change the body, and write it back with `--base-version` set to the `version.number` you read. Without it the update overwrites whatever is current, including a save made while you worked; with it Confluence answers `409` when the page changed, and the fix is to re-read, reapply the edit and retry.
+- Markdown converts to storage format with code blocks as the `code` macro. An image whose source has a scheme (`https://…`) embeds that URL; any other source names an attachment of the page, so upload the file first. Raw HTML passes through, but CommonMark tag names cannot carry `ac:`, so write Confluence macros with `--format storage`.
 - `comment list` returns one flat, depth-first array covering both comment families and every level of every thread. Each entry carries `location` (`footer`/`inline`), `depth`, and `parentCommentId` (`null` at a root), so rebuild the tree from those rather than assuming the array is top-level only.
 - `comment get`/`replies`/`update`/`delete` take the **comment id**; `comment list`/`add` take the **page id**.
 - Inline entries carry `resolutionStatus` (`open`/`reopened`/`resolved`/`dangling`) and `properties.inlineOriginalSelection`, the text they anchor to. Filter on `resolutionStatus` for "unresolved comments"; footer entries have neither field.
@@ -178,7 +183,7 @@ atlassian-cli confluence attachment upload 12345 ./icon.svg --content-type image
 - `property set` values are **strict JSON** — quote bare strings as `'"text"'`, not `text`.
 - `attachment upload` upserts by filename; add `--minor` to suppress watcher notifications on re-upload. The `Content-Type` is mapped from the file extension (so `diagram.png` → `image/png` and renders inline instead of becoming an opaque download); pass `--content-type <mime>` to override. Note: Confluence Cloud often blocks **inline SVG** rendering for security, so embed diagrams as PNG when you need them to display.
 - For OAuth, request the scopes for every endpoint a command calls, including reads before writes. Page-property `set`/`delete` need `read:page:confluence` and `write:page:confluence`; comment `update` needs `read:comment:confluence` and `write:comment:confluence`, while comment `delete` needs `delete:comment:confluence`. Page create also looks up its space; page update reads its current version. Check the [property](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-content-properties/), [comment](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-comment/), and [page](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-page/) endpoint requirements. A `401 "scope does not match"` can indicate missing grants. Enable required scopes on the app, request them in the profile, then reauthorize; changing app permissions alone does not update an existing token.
-- CQL: searching by user requires account IDs or public names — username fields are restricted in Atlassian Cloud.
+- CQL compares user fields against account ids (`creator = "<accountId>"`); find them with `jira user search`.
 
 ## Pagination & output cheatsheet
 
@@ -252,4 +257,3 @@ The skill is compiled into the binary. If `self status` reports `stale`, the dep
 
 - A `projects_filter` or `spaces_filter` on the active profile is auto-injected into bare JQL/CQL. If the user already names a project/space in their query, no second filter is added — write the query the user said.
 - `jira search` uses `POST /rest/api/3/search/jql` under the hood — token-paginated, not offset.
-- `--format markdown` on reads keeps the JSON envelope and converts the content fields in place; it isn't pure markdown output.

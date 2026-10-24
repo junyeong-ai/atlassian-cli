@@ -1,10 +1,25 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
+/// How Jira rich-text fields are written and read on the command line.
 #[derive(Clone, Copy, Default, ValueEnum)]
-pub(crate) enum OutputFormat {
+pub(crate) enum JiraFormat {
+    /// Atlassian Document Format JSON, as Jira stores it; writes also take plain text
     #[default]
-    Html,
+    #[value(alias = "html")]
+    Adf,
+    /// Markdown, converted to and from ADF
+    Markdown,
+}
+
+/// How Confluence page and comment bodies are written and read on the command line.
+#[derive(Clone, Copy, Default, ValueEnum)]
+pub(crate) enum ConfluenceFormat {
+    /// Storage format, the XHTML Confluence stores
+    #[default]
+    #[value(alias = "html")]
+    Storage,
+    /// Markdown, converted to and from storage format
     Markdown,
 }
 
@@ -158,8 +173,9 @@ pub(crate) enum JiraSubcommand {
             help = "Fields to return (default: essential set + configured custom fields; use *all for the full issue)"
         )]
         fields: Option<Vec<String>>,
-        #[arg(long, value_enum, default_value = "html", help = "ADF content format")]
-        format: OutputFormat,
+        /// Format of rich-text fields in the output
+        #[arg(long, value_enum, default_value_t)]
+        format: JiraFormat,
     },
     /// Search issues with JQL; the configured project filter is auto-injected
     Search {
@@ -176,14 +192,16 @@ pub(crate) enum JiraSubcommand {
         stream: bool,
         #[arg(long, value_delimiter = ',', help = "Fields to return")]
         fields: Option<Vec<String>>,
-        #[arg(long, value_enum, default_value = "html", help = "ADF content format")]
-        format: OutputFormat,
+        /// Format of rich-text fields in the output; markdown also returns the description
+        #[arg(long, value_enum, default_value_t)]
+        format: JiraFormat,
     },
-    /// Create an issue (plain-text description auto-converts to ADF)
+    /// Create an issue
     Create {
         project: String,
         summary: String,
         issue_type: String,
+        /// Issue description; `-` reads it from standard input
         #[arg(long)]
         description: Option<String>,
         /// Parent issue key — required by every sub-task type, and how a
@@ -194,9 +212,19 @@ pub(crate) enum JiraSubcommand {
         /// '{"components":[{"name":"api"}],"customfield_10010":"X"}'
         #[arg(long)]
         fields: Option<String>,
+        /// Format of the description, given with --description or in --fields
+        #[arg(long, value_enum, default_value_t)]
+        format: JiraFormat,
     },
     /// Update an issue's fields from a JSON object (e.g. '{"summary":"..."}')
-    Update { issue_key: String, fields: String },
+    Update {
+        issue_key: String,
+        /// Field values as a JSON object; `-` reads it from standard input
+        fields: String,
+        /// Format of a string `description` among the fields
+        #[arg(long, value_enum, default_value_t)]
+        format: JiraFormat,
+    },
     /// Permanently delete an issue (irreversible — requires --yes)
     Delete {
         issue_key: String,
@@ -232,6 +260,11 @@ pub(crate) enum JiraSubcommand {
         #[command(subcommand)]
         action: WatcherAction,
     },
+    /// Find users and the account ids that assignee fields, JQL and CQL take
+    User {
+        #[command(subcommand)]
+        action: UserAction,
+    },
     /// Query global metadata (issue types, priorities, statuses, labels)
     List {
         #[command(subcommand)]
@@ -257,18 +290,30 @@ pub(crate) enum JiraSubcommand {
 #[derive(Subcommand)]
 pub(crate) enum CommentAction {
     /// Add a comment to an issue
-    Add { issue_key: String, text: String },
+    Add {
+        issue_key: String,
+        /// Comment text; `-` reads it from standard input
+        text: String,
+        /// Format of the comment text
+        #[arg(long, value_enum, default_value_t)]
+        format: JiraFormat,
+    },
     /// Update an existing comment
     Update {
         issue_key: String,
         comment_id: String,
+        /// Comment text; `-` reads it from standard input
         text: String,
+        /// Format of the comment text
+        #[arg(long, value_enum, default_value_t)]
+        format: JiraFormat,
     },
     /// List comments on an issue
     List {
         issue_key: String,
-        #[arg(long, value_enum, default_value = "html", help = "ADF content format")]
-        format: OutputFormat,
+        /// Format of comment bodies in the output
+        #[arg(long, value_enum, default_value_t)]
+        format: JiraFormat,
     },
     /// Delete a comment by id
     Delete {
@@ -390,6 +435,17 @@ pub(crate) enum WatcherAction {
 }
 
 #[derive(Subcommand)]
+pub(crate) enum UserAction {
+    /// Search users whose display name or email matches the query
+    Search {
+        query: String,
+        /// Maximum number of users to return
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
+    },
+}
+
+#[derive(Subcommand)]
 pub(crate) enum ListAction {
     /// List available issue types
     Types,
@@ -486,32 +542,46 @@ pub(crate) enum ConfluenceSubcommand {
             help = "Expand fields (e.g., body.storage,ancestors)"
         )]
         expand: Option<Vec<String>>,
-        #[arg(long, value_enum, default_value = "html", help = "Body content format")]
-        format: OutputFormat,
+        /// Format of page bodies in the output
+        #[arg(long, value_enum, default_value_t)]
+        format: ConfluenceFormat,
     },
-    /// Fetch a single page by ID (body rendered as HTML or markdown)
+    /// Fetch a single page by ID
     Get {
         page_id: String,
-        #[arg(long, value_enum, default_value = "html", help = "Body content format")]
-        format: OutputFormat,
+        /// Format of the page body in the output
+        #[arg(long, value_enum, default_value_t)]
+        format: ConfluenceFormat,
     },
-    /// Create a page from storage-format HTML content
+    /// Create a page
     Create {
         space: String,
         title: String,
+        /// Page body; `-` reads it from standard input
         content: String,
         /// Parent page id to nest under (omit to create at the space root)
         #[arg(long)]
         parent: Option<String>,
+        /// Format of the page body
+        #[arg(long, value_enum, default_value_t)]
+        format: ConfluenceFormat,
     },
-    /// Update a page's title and storage-format HTML content
+    /// Replace a page's title and body
     Update {
         page_id: String,
         title: String,
+        /// Page body; `-` reads it from standard input
         content: String,
         /// Parent page id to re-parent under (omit to keep the current parent)
         #[arg(long)]
         parent: Option<String>,
+        /// Format of the page body
+        #[arg(long, value_enum, default_value_t)]
+        format: ConfluenceFormat,
+        /// Version the new body was derived from, as `get` reported it; the
+        /// update is refused when the page has been saved since
+        #[arg(long, value_name = "VERSION")]
+        base_version: Option<u64>,
     },
     /// List the direct child pages of a page (metadata only)
     Children { page_id: String },
@@ -580,8 +650,9 @@ pub(crate) enum ConfluenceCommentAction {
         /// List only top-level comments, leaving their replies unfetched
         #[arg(long)]
         roots_only: bool,
-        #[arg(long, value_enum, default_value = "html", help = "Body content format")]
-        format: OutputFormat,
+        /// Format of comment bodies in the output
+        #[arg(long, value_enum, default_value_t)]
+        format: ConfluenceFormat,
     },
     /// Fetch a single comment by id
     Get {
@@ -593,8 +664,9 @@ pub(crate) enum ConfluenceCommentAction {
             help = "Comment family the id belongs to"
         )]
         location: CommentLocation,
-        #[arg(long, value_enum, default_value = "html", help = "Body content format")]
-        format: OutputFormat,
+        /// Format of the comment body in the output
+        #[arg(long, value_enum, default_value_t)]
+        format: ConfluenceFormat,
     },
     /// List every reply below a comment
     Replies {
@@ -606,23 +678,30 @@ pub(crate) enum ConfluenceCommentAction {
             help = "Comment family the id belongs to"
         )]
         location: CommentLocation,
-        #[arg(long, value_enum, default_value = "html", help = "Body content format")]
-        format: OutputFormat,
+        /// Format of reply bodies in the output
+        #[arg(long, value_enum, default_value_t)]
+        format: ConfluenceFormat,
     },
-    /// Add a footer comment to a page (storage-format HTML body)
+    /// Add a footer comment to a page
     Add {
         page_id: String,
-        /// Comment body (storage-format HTML; plain text is valid too)
+        /// Comment body; `-` reads it from standard input
         body: String,
         /// Reply to an existing comment instead of posting a top-level one
         #[arg(long = "reply-to")]
         reply_to: Option<String>,
+        /// Format of the comment body
+        #[arg(long, value_enum, default_value_t)]
+        format: ConfluenceFormat,
     },
     /// Update a footer comment's body
     Update {
         comment_id: String,
-        /// New comment body (storage-format HTML)
+        /// New comment body; `-` reads it from standard input
         body: String,
+        /// Format of the comment body
+        #[arg(long, value_enum, default_value_t)]
+        format: ConfluenceFormat,
     },
     /// Delete a footer comment by id
     Delete { comment_id: String },
@@ -646,7 +725,8 @@ pub(crate) enum ConfluencePropertyAction {
     Set {
         page_id: String,
         key: String,
-        /// Property value as a JSON literal (e.g. '{"state":"done"}', '42', '"text"')
+        /// Property value as a JSON literal (e.g. '{"state":"done"}', '42', '"text"');
+        /// `-` reads it from standard input
         value: String,
     },
     /// Delete a content property by key

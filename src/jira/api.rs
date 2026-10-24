@@ -312,6 +312,24 @@ pub async fn get_labels(client: &ApiClient) -> Result<Value> {
     Ok(list_envelope(items, client))
 }
 
+/// Users whose display name or email matches `query`. Their `accountId` is
+/// what assignee fields, JQL and CQL take; it identifies the same person in
+/// Jira and Confluence.
+pub async fn search_users(query: &str, limit: u32, client: &ApiClient) -> Result<Value> {
+    let max_results = limit.to_string();
+    let request = client
+        .get(Service::Jira, "/rest/api/3/user/search")
+        .await?
+        .query(&[("query", query), ("maxResults", max_results.as_str())]);
+    let response = client.execute("search users", request).await?;
+
+    let data: Value = response.json().await?;
+    Ok(list_envelope(
+        require_array(&data, WHOLE_BODY, "search users")?,
+        client,
+    ))
+}
+
 #[cfg(test)]
 #[allow(
     clippy::field_reassign_with_default,

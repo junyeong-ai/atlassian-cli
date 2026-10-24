@@ -52,12 +52,14 @@ Comment collections send `limit=250` (`COMMENT_PAGE_SIZE`) — the spec's maximu
 ## Shared helpers (do not re-inline)
 
 - `fetch_space_by_key(space_key)` is the single `/wiki/api/v2/spaces?keys=` lookup. It returns the **unfiltered** space object so callers diverge cleanly: `resolve_space_id` reads the raw `id` (a field filter must never strip it); `get_space` applies `filter::apply` before returning to the user.
-- `fetch_version_number(client, url)` is the single "GET resource → read `version.number`", used by `update_page` and `update_comment`. It sends `include-version=true` (required by the page endpoint; the comment endpoint returns the version regardless).
+- `fetch_version_number(client, url)` is the single "GET resource → read `version.number`", used by `update_comment` and by `update_page` when no base version is given. It sends `include-version=true` (required by the page endpoint; the comment endpoint returns the version regardless).
 - `fetch_all_v2_results` fetches every v2 list (see Pagination), and `v2_list_envelope` wraps the five plain ones. Add new list endpoints on top of them rather than writing a fresh GET/parse/envelope sequence; comments take the same fetch and their own envelope, for the reason under *Comment threads*.
 
 ## Body format
 
-All body-bearing writes (`create_page`, `update_page`, `add_comment`, `update_comment`) send `body.representation = "storage"` with HTML in `body.value`. Storage format is Atlassian's canonical HTML dialect — accept HTML strings from callers and pass them through. Plain text is a valid storage document, so it is **not** auto-wrapped and there is **no** HTML-vs-text detection (unlike Jira ADF); the CLI is documented as HTML-in. This keeps the module heuristic-free.
+All body-bearing writes (`create_page`, `update_page`, `add_comment`, `update_comment`) send `body.representation = "storage"` with the caller's string in `body.value`; this module never inspects it. Plain text is a valid storage document, so it is **not** auto-wrapped and there is **no** HTML-vs-text detection (unlike Jira ADF). `--format markdown` is the caller's explicit statement that the body is Markdown, converted by the command layer through `markdown::markdown_to_confluence` before these functions see it.
+
+`update_page` takes the caller's `base_version` when given and claims the version after it, so a page saved since the caller read it is Confluence's to refuse with a 409. Without it, the update reads the current version and overwrites.
 
 Reads with `--format markdown` convert `body.storage.value` via `markdown::confluence_to_markdown`. The JSON envelope is preserved; only the HTML string field is replaced.
 

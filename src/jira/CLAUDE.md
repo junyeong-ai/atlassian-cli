@@ -19,6 +19,8 @@ Empty strings become empty ADF paragraphs without empty text nodes; whitespace i
 
 When adding a new write endpoint that takes user text, route through these helpers rather than sending the raw string. Do not accept plain strings at the API boundary without conversion — Jira's v3 API rejects them.
 
+Under `--format markdown` the command layer converts a body, or a string `description` among JSON fields, with `markdown::markdown_to_adf` first, so these helpers receive an ADF object and validate its root.
+
 ## Search field selection
 
 `fields::resolve_search_fields` decides the search fields. An explicit `--fields` list is returned unchanged. Otherwise configured `search_default_fields` replace the built-in defaults, and Markdown mode adds `description`. `search_custom_fields` extend only the built-in defaults; they do not extend an explicit or configured replacement list.
@@ -28,7 +30,7 @@ When adding a new write endpoint that takes user text, route through these helpe
 - `search` returns `{"items": [...], "count": N}` — `count` is the size of this page.
 - `search_all` returns `{"items": [...], "total": N}` — `total` is the cumulative size (`/search/jql` doesn't expose a server-side total).
 - `get_issue` returns the raw Jira issue object after `filter::apply`. `--fields` selects the returned fields (default: the essential set plus configured custom fields; `*all` returns the full issue); it is not capped by a hardwired whitelist.
-- All list endpoints (`get_comments`, `get_transitions`, `get_links`, `get_link_types`, `get_worklogs`, `get_watchers`, `get_issue_types`, `get_priorities`, `get_statuses`, `get_labels`, `get_boards`, `get_sprints`) return `{"items": [...]}`.
+- All list endpoints (`get_comments`, `get_transitions`, `get_links`, `get_link_types`, `get_worklogs`, `get_watchers`, `get_issue_types`, `get_priorities`, `get_statuses`, `get_labels`, `search_users`, `get_boards`, `get_sprints`) return `{"items": [...]}`.
 - `create_issue` returns `{"key": ..., "id": ...}` — both fields are stable contract; `key` is the human-readable identifier needed for follow-up commands.
 - Writes that target an identifiable issue sub-resource (`add_comment`, `update_comment`, `add_worklog`, `update_worklog`) return `{"id": ...}` so callers can chain follow-up updates without re-querying.
 - Every id/key/version returned by a write is pulled through `response::require_field`: a 2xx whose body lacks the field bails loudly instead of returning a placeholder `null`, so a caller never chains on a non-existent resource.

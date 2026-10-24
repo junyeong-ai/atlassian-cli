@@ -68,7 +68,7 @@ Usage: atlassian-cli jira <COMMAND>
 Commands:
   get         Fetch a single issue by key (fields filtered, ADF rendered)
   search      Search issues with JQL; the configured project filter is auto-injected
-  create      Create an issue (plain-text description auto-converts to ADF)
+  create      Create an issue
   update      Update an issue's fields from a JSON object (e.g. '{"summary":"..."}')
   delete      Permanently delete an issue (irreversible — requires --yes)
   comment     Add, update, or list comments on an issue
@@ -76,6 +76,7 @@ Commands:
   link        Create, remove, or list issue links (and list link types)
   worklog     Add, update, list, or remove worklog (time-tracking) entries
   watcher     Start watching, stop watching, or list watchers on an issue
+  user        Find users and the account ids that assignee fields, JQL and CQL take
   list        Query global metadata (issue types, priorities, statuses, labels)
   board       List agile boards for a project
   sprint      List sprints, or move issues between a sprint and the backlog
@@ -103,13 +104,16 @@ Options:
           Fields to return (default: essential set + configured custom fields; use *all for the full issue)
 
       --format <FORMAT>
-          ADF content format
+          Format of rich-text fields in the output
 
-          [default: html]
-          [possible values: html, markdown]
+          Possible values:
+          - adf:      Atlassian Document Format JSON, as Jira stores it; writes also take plain text
+          - markdown: Markdown, converted to and from ADF
+
+          [default: adf]
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 ```
 
 ## `atlassian-cli jira search`
@@ -139,19 +143,22 @@ Options:
           Fields to return
 
       --format <FORMAT>
-          ADF content format
+          Format of rich-text fields in the output; markdown also returns the description
 
-          [default: html]
-          [possible values: html, markdown]
+          Possible values:
+          - adf:      Atlassian Document Format JSON, as Jira stores it; writes also take plain text
+          - markdown: Markdown, converted to and from ADF
+
+          [default: adf]
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 ```
 
 ## `atlassian-cli jira create`
 
 ```text
-Create an issue (plain-text description auto-converts to ADF)
+Create an issue
 
 Usage: atlassian-cli jira create [OPTIONS] <PROJECT> <SUMMARY> <ISSUE_TYPE>
 
@@ -167,7 +174,7 @@ Arguments:
 
 Options:
       --description <DESCRIPTION>
-
+          Issue description; `-` reads it from standard input
 
       --parent <PARENT>
           Parent issue key — required by every sub-task type, and how a team-managed project puts an issue under its epic
@@ -175,8 +182,17 @@ Options:
       --fields <FIELDS>
           Any other field the create screen requires, as a JSON object — '{"components":[{"name":"api"}],"customfield_10010":"X"}'
 
+      --format <FORMAT>
+          Format of the description, given with --description or in --fields
+
+          Possible values:
+          - adf:      Atlassian Document Format JSON, as Jira stores it; writes also take plain text
+          - markdown: Markdown, converted to and from ADF
+
+          [default: adf]
+
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 ```
 
 ## `atlassian-cli jira update`
@@ -184,18 +200,27 @@ Options:
 ```text
 Update an issue's fields from a JSON object (e.g. '{"summary":"..."}')
 
-Usage: atlassian-cli jira update <ISSUE_KEY> <FIELDS>
+Usage: atlassian-cli jira update [OPTIONS] <ISSUE_KEY> <FIELDS>
 
 Arguments:
   <ISSUE_KEY>
 
 
   <FIELDS>
-
+          Field values as a JSON object; `-` reads it from standard input
 
 Options:
+      --format <FORMAT>
+          Format of a string `description` among the fields
+
+          Possible values:
+          - adf:      Atlassian Document Format JSON, as Jira stores it; writes also take plain text
+          - markdown: Markdown, converted to and from ADF
+
+          [default: adf]
+
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 ```
 
 ## `atlassian-cli jira delete`
@@ -244,18 +269,27 @@ Options:
 ```text
 Add a comment to an issue
 
-Usage: atlassian-cli jira comment add <ISSUE_KEY> <TEXT>
+Usage: atlassian-cli jira comment add [OPTIONS] <ISSUE_KEY> <TEXT>
 
 Arguments:
   <ISSUE_KEY>
 
 
   <TEXT>
-
+          Comment text; `-` reads it from standard input
 
 Options:
+      --format <FORMAT>
+          Format of the comment text
+
+          Possible values:
+          - adf:      Atlassian Document Format JSON, as Jira stores it; writes also take plain text
+          - markdown: Markdown, converted to and from ADF
+
+          [default: adf]
+
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 ```
 
 ## `atlassian-cli jira comment update`
@@ -263,7 +297,7 @@ Options:
 ```text
 Update an existing comment
 
-Usage: atlassian-cli jira comment update <ISSUE_KEY> <COMMENT_ID> <TEXT>
+Usage: atlassian-cli jira comment update [OPTIONS] <ISSUE_KEY> <COMMENT_ID> <TEXT>
 
 Arguments:
   <ISSUE_KEY>
@@ -273,11 +307,20 @@ Arguments:
 
 
   <TEXT>
-
+          Comment text; `-` reads it from standard input
 
 Options:
+      --format <FORMAT>
+          Format of the comment text
+
+          Possible values:
+          - adf:      Atlassian Document Format JSON, as Jira stores it; writes also take plain text
+          - markdown: Markdown, converted to and from ADF
+
+          [default: adf]
+
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 ```
 
 ## `atlassian-cli jira comment list`
@@ -293,13 +336,16 @@ Arguments:
 
 Options:
       --format <FORMAT>
-          ADF content format
+          Format of comment bodies in the output
 
-          [default: html]
-          [possible values: html, markdown]
+          Possible values:
+          - adf:      Atlassian Document Format JSON, as Jira stores it; writes also take plain text
+          - markdown: Markdown, converted to and from ADF
+
+          [default: adf]
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 ```
 
 ## `atlassian-cli jira comment delete`
@@ -642,6 +688,43 @@ Options:
           Print help
 ```
 
+## `atlassian-cli jira user`
+
+```text
+Find users and the account ids that assignee fields, JQL and CQL take
+
+Usage: atlassian-cli jira user <COMMAND>
+
+Commands:
+  search  Search users whose display name or email matches the query
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+```
+
+## `atlassian-cli jira user search`
+
+```text
+Search users whose display name or email matches the query
+
+Usage: atlassian-cli jira user search [OPTIONS] <QUERY>
+
+Arguments:
+  <QUERY>
+
+
+Options:
+      --limit <LIMIT>
+          Maximum number of users to return
+
+          [default: 50]
+
+  -h, --help
+          Print help
+```
+
 ## `atlassian-cli jira list`
 
 ```text
@@ -877,9 +960,9 @@ Usage: atlassian-cli confluence <COMMAND>
 
 Commands:
   search      Search pages with CQL; the configured space filter is auto-injected
-  get         Fetch a single page by ID (body rendered as HTML or markdown)
-  create      Create a page from storage-format HTML content
-  update      Update a page's title and storage-format HTML content
+  get         Fetch a single page by ID
+  create      Create a page
+  update      Replace a page's title and body
   children    List the direct child pages of a page (metadata only)
   comment     Read a page's comments and threads, or write footer comments
   label       List, add, or remove labels on a page
@@ -921,19 +1004,22 @@ Options:
           Expand fields (e.g., body.storage,ancestors)
 
       --format <FORMAT>
-          Body content format
+          Format of page bodies in the output
 
-          [default: html]
-          [possible values: html, markdown]
+          Possible values:
+          - storage:  Storage format, the XHTML Confluence stores
+          - markdown: Markdown, converted to and from storage format
+
+          [default: storage]
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 ```
 
 ## `atlassian-cli confluence get`
 
 ```text
-Fetch a single page by ID (body rendered as HTML or markdown)
+Fetch a single page by ID
 
 Usage: atlassian-cli confluence get [OPTIONS] <PAGE_ID>
 
@@ -943,19 +1029,22 @@ Arguments:
 
 Options:
       --format <FORMAT>
-          Body content format
+          Format of the page body in the output
 
-          [default: html]
-          [possible values: html, markdown]
+          Possible values:
+          - storage:  Storage format, the XHTML Confluence stores
+          - markdown: Markdown, converted to and from storage format
+
+          [default: storage]
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 ```
 
 ## `atlassian-cli confluence create`
 
 ```text
-Create a page from storage-format HTML content
+Create a page
 
 Usage: atlassian-cli confluence create [OPTIONS] <SPACE> <TITLE> <CONTENT>
 
@@ -967,20 +1056,29 @@ Arguments:
 
 
   <CONTENT>
-
+          Page body; `-` reads it from standard input
 
 Options:
       --parent <PARENT>
           Parent page id to nest under (omit to create at the space root)
 
+      --format <FORMAT>
+          Format of the page body
+
+          Possible values:
+          - storage:  Storage format, the XHTML Confluence stores
+          - markdown: Markdown, converted to and from storage format
+
+          [default: storage]
+
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 ```
 
 ## `atlassian-cli confluence update`
 
 ```text
-Update a page's title and storage-format HTML content
+Replace a page's title and body
 
 Usage: atlassian-cli confluence update [OPTIONS] <PAGE_ID> <TITLE> <CONTENT>
 
@@ -992,14 +1090,26 @@ Arguments:
 
 
   <CONTENT>
-
+          Page body; `-` reads it from standard input
 
 Options:
       --parent <PARENT>
           Parent page id to re-parent under (omit to keep the current parent)
 
+      --format <FORMAT>
+          Format of the page body
+
+          Possible values:
+          - storage:  Storage format, the XHTML Confluence stores
+          - markdown: Markdown, converted to and from storage format
+
+          [default: storage]
+
+      --base-version <VERSION>
+          Version the new body was derived from, as `get` reported it; the update is refused when the page has been saved since
+
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 ```
 
 ## `atlassian-cli confluence children`
@@ -1029,7 +1139,7 @@ Commands:
   list     List comments on a page, replies included
   get      Fetch a single comment by id
   replies  List every reply below a comment
-  add      Add a footer comment to a page (storage-format HTML body)
+  add      Add a footer comment to a page
   update   Update a footer comment's body
   delete   Delete a footer comment by id
   help     Print this message or the help of the given subcommand(s)
@@ -1060,13 +1170,16 @@ Options:
           List only top-level comments, leaving their replies unfetched
 
       --format <FORMAT>
-          Body content format
+          Format of comment bodies in the output
 
-          [default: html]
-          [possible values: html, markdown]
+          Possible values:
+          - storage:  Storage format, the XHTML Confluence stores
+          - markdown: Markdown, converted to and from storage format
+
+          [default: storage]
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 ```
 
 ## `atlassian-cli confluence comment get`
@@ -1088,13 +1201,16 @@ Options:
           [possible values: footer, inline]
 
       --format <FORMAT>
-          Body content format
+          Format of the comment body in the output
 
-          [default: html]
-          [possible values: html, markdown]
+          Possible values:
+          - storage:  Storage format, the XHTML Confluence stores
+          - markdown: Markdown, converted to and from storage format
+
+          [default: storage]
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 ```
 
 ## `atlassian-cli confluence comment replies`
@@ -1116,19 +1232,22 @@ Options:
           [possible values: footer, inline]
 
       --format <FORMAT>
-          Body content format
+          Format of reply bodies in the output
 
-          [default: html]
-          [possible values: html, markdown]
+          Possible values:
+          - storage:  Storage format, the XHTML Confluence stores
+          - markdown: Markdown, converted to and from storage format
+
+          [default: storage]
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 ```
 
 ## `atlassian-cli confluence comment add`
 
 ```text
-Add a footer comment to a page (storage-format HTML body)
+Add a footer comment to a page
 
 Usage: atlassian-cli confluence comment add [OPTIONS] <PAGE_ID> <BODY>
 
@@ -1137,14 +1256,23 @@ Arguments:
 
 
   <BODY>
-          Comment body (storage-format HTML; plain text is valid too)
+          Comment body; `-` reads it from standard input
 
 Options:
       --reply-to <REPLY_TO>
           Reply to an existing comment instead of posting a top-level one
 
+      --format <FORMAT>
+          Format of the comment body
+
+          Possible values:
+          - storage:  Storage format, the XHTML Confluence stores
+          - markdown: Markdown, converted to and from storage format
+
+          [default: storage]
+
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 ```
 
 ## `atlassian-cli confluence comment update`
@@ -1152,18 +1280,27 @@ Options:
 ```text
 Update a footer comment's body
 
-Usage: atlassian-cli confluence comment update <COMMENT_ID> <BODY>
+Usage: atlassian-cli confluence comment update [OPTIONS] <COMMENT_ID> <BODY>
 
 Arguments:
   <COMMENT_ID>
 
 
   <BODY>
-          New comment body (storage-format HTML)
+          New comment body; `-` reads it from standard input
 
 Options:
+      --format <FORMAT>
+          Format of the comment body
+
+          Possible values:
+          - storage:  Storage format, the XHTML Confluence stores
+          - markdown: Markdown, converted to and from storage format
+
+          [default: storage]
+
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 ```
 
 ## `atlassian-cli confluence comment delete`
@@ -1303,7 +1440,7 @@ Arguments:
 
 
   <VALUE>
-          Property value as a JSON literal (e.g. '{"state":"done"}', '42', '"text"')
+          Property value as a JSON literal (e.g. '{"state":"done"}', '42', '"text"'); `-` reads it from standard input
 
 Options:
   -h, --help

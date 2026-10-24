@@ -1,13 +1,33 @@
 use crate::cli::{
-    BoardAction, CommentAction, EpicAction, JiraCommand, JiraSubcommand, LinkAction, ListAction,
-    OutputFormat, SprintAction, TransitionAction, WatcherAction, WorklogAction,
+    BoardAction, CommentAction, EpicAction, JiraCommand, JiraFormat, JiraSubcommand, LinkAction,
+    ListAction, SprintAction, TransitionAction, UserAction, WatcherAction, WorklogAction,
 };
+use crate::commands::read_body;
 use anyhow::Result;
+use atlassian_cli::markdown::markdown_to_adf;
+use serde_json::Value;
 
-pub(crate) async fn run(
-    cmd: JiraCommand,
-    client: &atlassian_cli::ApiClient,
-) -> Result<serde_json::Value> {
+/// A rich-text body as the Jira API layer takes it: a string it normalizes to
+/// ADF itself, or the document Markdown converts to.
+fn rich_text(text: String, format: JiraFormat) -> Result<Value> {
+    match format {
+        JiraFormat::Adf => Ok(Value::String(text)),
+        JiraFormat::Markdown => markdown_to_adf(&text),
+    }
+}
+
+/// Convert a string `description` among JSON fields under Markdown. A JSON
+/// object there is already a document and is left to ADF validation.
+fn convert_description(fields: &mut Value, format: JiraFormat) -> Result<()> {
+    if let JiraFormat::Markdown = format
+        && let Some(Value::String(text)) = fields.get("description")
+    {
+        fields["description"] = markdown_to_adf(text)?;
+    }
+    Ok(())
+}
+
+pub(crate) async fn run(cmd: JiraCommand, client: &atlassian_cli::ApiClient) -> Result<Value> {
     use atlassian_cli::jira;
 
     match cmd.subcommand {
@@ -16,7 +36,7 @@ pub(crate) async fn run(
             fields,
             format,
         } => {
-            let as_markdown = matches!(format, OutputFormat::Markdown);
+            let as_markdown = matches!(format, JiraFormat::Markdown);
             jira::get_issue(&issue_key, fields, as_markdown, client).await
         }
         JiraSubcommand::Search {
@@ -27,7 +47,7 @@ pub(crate) async fn run(
             fields,
             format,
         } => {
-            let as_markdown = matches!(format, OutputFormat::Markdown);
+            let as_markdown = matches!(format, JiraFormat::Markdown);
             if all {
                 jira::search_all(&jql, fields, stream, as_markdown, client).await
             } else {
@@ -41,18 +61,22 @@ pub(crate) async fn run(
             description,
             parent,
             fields,
+            format,
         } => {
-            let desc = description
-                .map(serde_json::Value::String)
-                .unwrap_or(serde_json::Value::Null);
+            let desc = match description {
+                Some(text) => rich_text(read_body(text).await?, format)?,
+                None => Value::Null,
+            };
             let extra = fields
                 .map(|raw| {
-                    serde_json::from_str::<serde_json::Value>(&raw).map_err(|e| {
+                    let mut extra = serde_json::from_str::<Value>(&raw).map_err(|e| {
                         anyhow::anyhow!(
                             "Invalid JSON for --fields: {}. Example: {{\"labels\":[\"api\"]}}",
                             e
                         )
-                    })
+                    })?;
+                    convert_description(&mut extra, format)?;
+                    anyhow::Ok(extra)
                 })
                 .transpose()?;
             jira::create_issue(
@@ -66,13 +90,19 @@ pub(crate) async fn run(
             )
             .await
         }
-        JiraSubcommand::Update { issue_key, fields } => {
-            let fields_value: serde_json::Value = serde_json::from_str(&fields).map_err(|e| {
-                anyhow::anyhow!(
-                    "Invalid JSON for update fields: {}. Example: {{\"summary\":\"New title\"}}",
-                    e
-                )
-            })?;
+        JiraSubcommand::Update {
+            issue_key,
+            fields,
+            format,
+        } => {
+            let mut fields_value: Value =
+                serde_json::from_str(&read_body(fields).await?).map_err(|e| {
+                    anyhow::anyhow!(
+                        "Invalid JSON for update fields: {}. Example: {{\"summary\":\"New title\"}}",
+                        e
+                    )
+                })?;
+            convert_description(&mut fields_value, format)?;
             jira::update_issue(&issue_key, fields_value, client).await
         }
         JiraSubcommand::Delete {
@@ -89,24 +119,25 @@ pub(crate) async fn run(
             jira::delete_issue(&issue_key, delete_subtasks, client).await
         }
         JiraSubcommand::Comment { action } => match action {
-            CommentAction::Add { issue_key, text } => {
-                jira::add_comment(&issue_key, serde_json::Value::String(text), client).await
+            CommentAction::Add {
+                issue_key,
+                text,
+                format,
+            } => {
+                let body = rich_text(read_body(text).await?, format)?;
+                jira::add_comment(&issue_key, body, client).await
             }
             CommentAction::Update {
                 issue_key,
                 comment_id,
                 text,
+                format,
             } => {
-                jira::update_comment(
-                    &issue_key,
-                    &comment_id,
-                    serde_json::Value::String(text),
-                    client,
-                )
-                .await
+                let body = rich_text(read_body(text).await?, format)?;
+                jira::update_comment(&issue_key, &comment_id, body, client).await
             }
             CommentAction::List { issue_key, format } => {
-                let as_markdown = matches!(format, OutputFormat::Markdown);
+                let as_markdown = matches!(format, JiraFormat::Markdown);
                 jira::get_comments(&issue_key, as_markdown, client).await
             }
             CommentAction::Delete {
@@ -129,9 +160,7 @@ pub(crate) async fn run(
                 link_type,
                 comment,
             } => {
-                let comment_val = comment
-                    .map(serde_json::Value::String)
-                    .unwrap_or(serde_json::Value::Null);
+                let comment_val = comment.map(Value::String).unwrap_or(Value::Null);
                 jira::add_link(&source, &target, &link_type, comment_val, client).await
             }
             LinkAction::Remove {
@@ -162,9 +191,7 @@ pub(crate) async fn run(
                 comment,
                 started,
             } => {
-                let comment_val = comment
-                    .map(serde_json::Value::String)
-                    .unwrap_or(serde_json::Value::Null);
+                let comment_val = comment.map(Value::String).unwrap_or(Value::Null);
                 jira::add_worklog(
                     &issue_key,
                     &time_spent,
@@ -181,9 +208,7 @@ pub(crate) async fn run(
                 time_spent,
                 comment,
             } => {
-                let comment_val = comment
-                    .map(serde_json::Value::String)
-                    .unwrap_or(serde_json::Value::Null);
+                let comment_val = comment.map(Value::String).unwrap_or(Value::Null);
                 jira::update_worklog(&issue_key, &worklog_id, &time_spent, comment_val, client)
                     .await
             }
@@ -196,6 +221,9 @@ pub(crate) async fn run(
             WatcherAction::Add { issue_key } => jira::add_watcher(&issue_key, client).await,
             WatcherAction::Remove { issue_key } => jira::remove_watcher(&issue_key, client).await,
             WatcherAction::List { issue_key } => jira::get_watchers(&issue_key, client).await,
+        },
+        JiraSubcommand::User { action } => match action {
+            UserAction::Search { query, limit } => jira::search_users(&query, limit, client).await,
         },
         JiraSubcommand::List { action } => match action {
             ListAction::Types => jira::get_issue_types(client).await,
@@ -236,5 +264,32 @@ pub(crate) async fn run(
                 jira::unassign_issues_from_epic(&issues, client).await
             }
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn markdown_converts_only_a_string_description() {
+        let mut fields = json!({ "summary": "**kept**", "description": "**bold**" });
+        convert_description(&mut fields, JiraFormat::Markdown).unwrap();
+        assert_eq!(fields["summary"], "**kept**");
+        assert_eq!(fields["description"], markdown_to_adf("**bold**").unwrap());
+
+        for untouched in [
+            json!({ "type": "doc", "version": 1, "content": [] }),
+            Value::Null,
+        ] {
+            let mut fields = json!({ "description": untouched.clone() });
+            convert_description(&mut fields, JiraFormat::Markdown).unwrap();
+            assert_eq!(fields["description"], untouched);
+        }
+
+        let mut fields = json!({ "description": "**bold**" });
+        convert_description(&mut fields, JiraFormat::Adf).unwrap();
+        assert_eq!(fields["description"], "**bold**");
     }
 }

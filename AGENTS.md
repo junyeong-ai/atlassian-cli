@@ -39,7 +39,7 @@ contracts and failure paths rather than repeating implementation details.
 - `src/confluence/api/`: page, content and space operations; `api.rs` owns search,
   comment traversal and shared cursor pagination.
 - `src/dist/`: installation lifecycle and GitHub releases, independent of Atlassian.
-- `src/markdown/`: ADF and Confluence storage conversion.
+- `src/markdown/`: Markdown conversion to and from ADF and Confluence storage format.
 
 Read the relevant module guide before changing its contracts:
 [authentication](src/auth/CLAUDE.md), [Jira](src/jira/CLAUDE.md),
@@ -63,8 +63,11 @@ only where their contracts are the same.
   defaults. Omitted fields inherit; explicit empty lists clear earlier lists.
   `EDITOR` uses POSIX quoting on every platform; pass an absolute config path as
   its own argument.
-- Root options precede the subcommand. `--format markdown` converts content
-  inside the JSON envelope. Search streaming emits JSONL without a trailing
+- Root options precede the subcommand. `--format` names the rich-text
+  representation: `adf` or `storage` by default (`html` remains an alias), or
+  `markdown`, which converts read content inside the JSON envelope and write
+  bodies before they are sent. Body arguments take `-` for standard input and
+  refuse it empty. Search streaming emits JSONL without a trailing
   summary; progress and diagnostics use stderr. Retain search results only in
   non-streaming mode; streaming keeps a cumulative count and cursor history.
 - Runtime failures emit one JSON error object to stderr. Clap usage errors use

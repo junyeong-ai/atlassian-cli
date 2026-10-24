@@ -1,8 +1,19 @@
 use crate::cli::{
-    ConfluenceAttachmentAction, ConfluenceCommand, ConfluenceCommentAction, ConfluenceLabelAction,
-    ConfluencePropertyAction, ConfluenceSpaceAction, ConfluenceSubcommand, OutputFormat,
+    ConfluenceAttachmentAction, ConfluenceCommand, ConfluenceCommentAction, ConfluenceFormat,
+    ConfluenceLabelAction, ConfluencePropertyAction, ConfluenceSpaceAction, ConfluenceSubcommand,
 };
+use crate::commands::read_body;
 use anyhow::Result;
+use atlassian_cli::markdown::markdown_to_confluence;
+
+/// A body argument as storage format, the representation every write sends.
+async fn storage_body(argument: String, format: ConfluenceFormat) -> Result<String> {
+    let body = read_body(argument).await?;
+    Ok(match format {
+        ConfluenceFormat::Storage => body,
+        ConfluenceFormat::Markdown => markdown_to_confluence(&body),
+    })
+}
 
 pub(crate) async fn run(
     cmd: ConfluenceCommand,
@@ -19,7 +30,7 @@ pub(crate) async fn run(
             expand,
             format,
         } => {
-            let as_markdown = matches!(format, OutputFormat::Markdown);
+            let as_markdown = matches!(format, ConfluenceFormat::Markdown);
             if all {
                 confluence::search_all(&query, limit, None, expand, stream, as_markdown, client)
                     .await
@@ -28,7 +39,7 @@ pub(crate) async fn run(
             }
         }
         ConfluenceSubcommand::Get { page_id, format } => {
-            let as_markdown = matches!(format, OutputFormat::Markdown);
+            let as_markdown = matches!(format, ConfluenceFormat::Markdown);
             confluence::get_page(&page_id, None, None, as_markdown, client).await
         }
         ConfluenceSubcommand::Create {
@@ -36,31 +47,26 @@ pub(crate) async fn run(
             title,
             content,
             parent,
+            format,
         } => {
-            confluence::create_page(
-                &space,
-                &title,
-                &content,
-                parent.as_deref(),
-                None,
-                None,
-                client,
-            )
-            .await
+            let content = storage_body(content, format).await?;
+            confluence::create_page(&space, &title, &content, parent.as_deref(), client).await
         }
         ConfluenceSubcommand::Update {
             page_id,
             title,
             content,
             parent,
+            format,
+            base_version,
         } => {
+            let content = storage_body(content, format).await?;
             confluence::update_page(
                 &page_id,
                 &title,
                 &content,
                 parent.as_deref(),
-                None,
-                None,
+                base_version,
                 client,
             )
             .await
@@ -83,7 +89,7 @@ pub(crate) async fn run(
                     &page_id,
                     &families,
                     !roots_only,
-                    matches!(format, OutputFormat::Markdown),
+                    matches!(format, ConfluenceFormat::Markdown),
                     client,
                 )
                 .await
@@ -96,7 +102,7 @@ pub(crate) async fn run(
                 confluence::get_comment(
                     &comment_id,
                     location.into(),
-                    matches!(format, OutputFormat::Markdown),
+                    matches!(format, ConfluenceFormat::Markdown),
                     client,
                 )
                 .await
@@ -109,7 +115,7 @@ pub(crate) async fn run(
                 confluence::get_comment_replies(
                     &comment_id,
                     location.into(),
-                    matches!(format, OutputFormat::Markdown),
+                    matches!(format, ConfluenceFormat::Markdown),
                     client,
                 )
                 .await
@@ -118,8 +124,17 @@ pub(crate) async fn run(
                 page_id,
                 body,
                 reply_to,
-            } => confluence::add_comment(&page_id, &body, reply_to.as_deref(), client).await,
-            ConfluenceCommentAction::Update { comment_id, body } => {
+                format,
+            } => {
+                let body = storage_body(body, format).await?;
+                confluence::add_comment(&page_id, &body, reply_to.as_deref(), client).await
+            }
+            ConfluenceCommentAction::Update {
+                comment_id,
+                body,
+                format,
+            } => {
+                let body = storage_body(body, format).await?;
                 confluence::update_comment(&comment_id, &body, client).await
             }
             ConfluenceCommentAction::Delete { comment_id } => {
@@ -146,12 +161,13 @@ pub(crate) async fn run(
                 key,
                 value,
             } => {
-                let parsed: serde_json::Value = serde_json::from_str(&value).map_err(|e| {
-                    anyhow::anyhow!(
-                        "value must be valid JSON (quote strings, e.g. '\"done\"'): {}",
-                        e
-                    )
-                })?;
+                let parsed: serde_json::Value = serde_json::from_str(&read_body(value).await?)
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "value must be valid JSON (quote strings, e.g. '\"done\"'): {}",
+                            e
+                        )
+                    })?;
                 confluence::set_property(&page_id, &key, parsed, client).await
             }
             ConfluencePropertyAction::Delete { page_id, key } => {
