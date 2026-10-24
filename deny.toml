@@ -6,6 +6,14 @@ feature-depth = 1
 
 [advisories]
 yanked = "deny"
+# zvariant and its companions merged into zbus 6. The Linux keyring store reaches
+# them through secret-service, which still requires zbus 5; drop these once
+# https://github.com/hwchen/secret-service-rs/pull/122 ships.
+ignore = [
+  { id = "RUSTSEC-2026-0370", reason = "zvariant merged into zbus 6; secret-service still requires zbus 5" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names merged into zbus 6; secret-service still requires zbus 5" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive merged into zbus 6; secret-service still requires zbus 5" },
+]
 
 [licenses]
 confidence-threshold = 0.95
