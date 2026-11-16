@@ -54,37 +54,18 @@ pub fn resolve_search_fields(
     fields
 }
 
-pub const ESSENTIAL_FIELDS: &[&str] = &[
-    "key",
-    "summary",
-    "description",
-    "issuetype",
-    "status",
-    "priority",
-    "assignee",
-    "reporter",
-    "created",
-    "updated",
-    "project",
-];
-
 /// Resolve which fields a single-issue `get` should request. An explicit
 /// `--fields` list (including `*all` for the full issue) wins; otherwise the
-/// essential set is returned, extended with any configured custom fields so a
-/// single-issue fetch is at least as detailed as a search.
+/// fields a search returns and the description, so a single-issue fetch is at
+/// least as detailed as a search.
 pub fn resolve_get_fields(
     api_fields: Option<Vec<String>>,
     config: &crate::config::Config,
 ) -> Vec<String> {
-    if let Some(fields) = api_fields
-        && !fields.is_empty()
-    {
-        return fields;
+    match api_fields {
+        Some(fields) if !fields.is_empty() => fields,
+        _ => resolve_search_fields(None, true, config),
     }
-
-    let mut fields: Vec<String> = ESSENTIAL_FIELDS.iter().map(|s| s.to_string()).collect();
-    fields.extend_from_slice(&config.jira.search_custom_fields);
-    fields
 }
 
 #[cfg(test)]
@@ -157,13 +138,6 @@ mod tests {
     }
 
     #[test]
-    fn test_essential_fields() {
-        assert_eq!(ESSENTIAL_FIELDS.len(), 11);
-        assert!(ESSENTIAL_FIELDS.contains(&"description"));
-        assert!(ESSENTIAL_FIELDS.contains(&"key"));
-    }
-
-    #[test]
     fn test_resolve_get_fields_explicit_wins() {
         let config = create_test_config_with_fields(None, vec!["customfield_1".to_string()]);
         let result = resolve_get_fields(Some(vec!["*all".to_string()]), &config);
@@ -171,11 +145,11 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_get_fields_defaults_include_custom() {
+    fn test_resolve_get_fields_defaults_cover_a_search_and_the_description() {
         let config = create_test_config_with_fields(None, vec!["customfield_1".to_string()]);
         let result = resolve_get_fields(None, &config);
-        assert_eq!(result.len(), ESSENTIAL_FIELDS.len() + 1);
-        assert!(result.contains(&"customfield_1".to_string()));
+        let searched = resolve_search_fields(None, false, &config);
+        assert!(searched.iter().all(|field| result.contains(field)));
         assert!(result.contains(&"description".to_string()));
     }
 }

@@ -35,7 +35,7 @@ Reads under `--format markdown` convert every value among an issue's `fields` th
 
 - `search` returns `{"items": [...], "count": N}` — `count` is the size of this page.
 - `search_all` returns `{"items": [...], "total": N}` — `total` is the cumulative size (`/search/jql` doesn't expose a server-side total).
-- `get_issue` returns the raw Jira issue object after `filter::apply`. `--fields` selects the returned fields (default: the essential set plus configured custom fields; `*all` returns the full issue); it is not capped by a hardwired whitelist.
+- `get_issue` returns the raw Jira issue object after `filter::apply`. `--fields` selects the returned fields (default: the fields a search returns plus `description`, through `resolve_search_fields`; `*all` returns the full issue); it is not capped by a hardwired whitelist.
 - All list endpoints (`get_comments`, `get_transitions`, `get_links`, `get_link_types`, `get_worklogs`, `get_watchers`, `get_issue_types`, `get_priorities`, `get_statuses`, `get_labels`, `search_users`, `get_boards`, `get_sprints`) return `{"items": [...]}`.
 - `create_issue` returns `{"key": ..., "id": ...}` — both fields are stable contract; `key` is the human-readable identifier needed for follow-up commands.
 - Writes that target an identifiable issue sub-resource (`add_comment`, `update_comment`, `add_worklog`, `update_worklog`) return `{"id": ...}` so callers can chain follow-up updates without re-querying.

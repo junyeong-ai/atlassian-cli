@@ -170,7 +170,7 @@ pub(crate) enum JiraSubcommand {
         #[arg(
             long,
             value_delimiter = ',',
-            help = "Fields to return (default: essential set + configured custom fields; use *all for the full issue)"
+            help = "Fields to return (default: the search fields and the description; use *all for the full issue)"
         )]
         fields: Option<Vec<String>>,
         /// Format of rich-text fields in the output

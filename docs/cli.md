@@ -101,7 +101,7 @@ Arguments:
 
 Options:
       --fields <FIELDS>
-          Fields to return (default: essential set + configured custom fields; use *all for the full issue)
+          Fields to return (default: the search fields and the description; use *all for the full issue)
 
       --format <FORMAT>
           Format of rich-text fields in the output
