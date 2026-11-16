@@ -309,10 +309,10 @@ With `projects_filter`, `status = Open` runs as `project IN ("PROJ1","PROJ2") AN
 A runtime failure prints one JSON object to stderr; stdout carries results only. Usage errors, such as an unknown option, print text and exit with `2`. A command can fail after printing output (`--stream` writes pages as they arrive), so read the exit code rather than the presence of output.
 
 ```json
-{"error":{"message":"Failed to get issue (404 Not Found): ...","operation":"get issue","status":404}}
+{"error":{"message":"Failed to get issue (404 Not Found)","status":404,"operation":"get issue","details":{"errorMessages":["Issue does not exist or you do not have permission to see it."],"errors":{}}}}
 ```
 
-API failures carry `status` and `operation`, and a `hint` when a remediation is known; a 429 also carries `retryAfterSeconds` and `rateLimitReason` when Atlassian sends them. Reads and idempotent requests retry a 429 up to three times, waiting at least as long as the server asks, and a wait longer than 60 seconds is returned to the caller rather than slept through. Any other write may already have been applied, so it returns at once; check whether it took effect before sending it again. An upload is not retried because its body cannot be resent, and running it again adds a new version of the same file. The policies are in Atlassian's rate limiting guides for [Jira](https://developer.atlassian.com/cloud/jira/platform/rate-limiting/) and [Confluence](https://developer.atlassian.com/cloud/confluence/rate-limiting/).
+API failures carry `status` and `operation`, Atlassian's JSON error body as `details` (on Jira, `details.errors` names each refused field and why), and a `hint` when a remediation is known; a 429 also carries `retryAfterSeconds` and `rateLimitReason` when Atlassian sends them. Reads and idempotent requests retry a 429 up to three times, waiting the longer of what the server asks and a backoff that starts at two seconds and doubles, and a wait longer than 60 seconds is returned to the caller rather than slept through. Any other write may already have been applied, so it returns at once; check whether it took effect before sending it again. An upload is not retried because its body cannot be resent, and running it again adds a new version of the same file. The policies are in Atlassian's rate limiting guides for [Jira](https://developer.atlassian.com/cloud/jira/platform/rate-limiting/) and [Confluence](https://developer.atlassian.com/cloud/confluence/rate-limiting/).
 
 | Exit code | Meaning |
 |---|---|

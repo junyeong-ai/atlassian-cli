@@ -658,7 +658,14 @@ async fn integ_update_page_on_a_base_version_claims_its_successor_without_reread
 
     let api = err.downcast_ref::<crate::ApiError>().expect("an API error");
     assert_eq!(api.status.as_u16(), 409);
-    assert!(err.to_string().contains("Current Version: [5]"), "{err}");
+    let details = api.details().expect("the conflict's JSON body");
+    assert!(
+        details["errors"][0]["title"]
+            .as_str()
+            .unwrap()
+            .contains("Current Version: [5]"),
+        "{details}"
+    );
 }
 
 // --- Footer comment write -------------------------------------------

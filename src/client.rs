@@ -52,13 +52,34 @@ pub struct ApiError {
     pub rate_limit_reason: Option<String>,
 }
 
+/// The most of a non-JSON error body a message carries: enough for any error
+/// Atlassian words in text, short of a whole HTML error page.
+const ERROR_TEXT_LIMIT: usize = 1000;
+
+impl ApiError {
+    /// The error body when Atlassian answered with JSON, which the CLI reports
+    /// as structured `details` rather than inside the message.
+    pub fn details(&self) -> Option<serde_json::Value> {
+        serde_json::from_str::<serde_json::Value>(&self.body)
+            .ok()
+            .filter(|details| details.is_object() || details.is_array())
+    }
+}
+
 impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Failed to {} ({}): {}",
-            self.operation, self.status, self.body
-        )
+        write!(f, "Failed to {} ({})", self.operation, self.status)?;
+        let text = self.body.trim();
+        if text.is_empty() || self.details().is_some() {
+            return Ok(());
+        }
+        match text.char_indices().nth(ERROR_TEXT_LIMIT) {
+            Some((cut, _)) => {
+                let omitted = text[cut..].chars().count();
+                write!(f, ": {}… ({omitted} more characters)", &text[..cut])
+            }
+            None => write!(f, ": {text}"),
+        }
     }
 }
 

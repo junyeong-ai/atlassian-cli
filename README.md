@@ -309,10 +309,10 @@ response_exclude_fields = ["self", "avatarUrls", "iconUrl"]
 실행 중 실패하면 stderr에 JSON 객체 하나를 출력하고, stdout에는 결과만 나옵니다. 알 수 없는 옵션 같은 사용법 오류는 텍스트를 출력하고 `2`로 끝납니다. 명령은 출력한 뒤에도 실패할 수 있으므로(`--stream`은 페이지가 도착하는 대로 씁니다), 출력이 있는지가 아니라 종료 코드를 확인합니다.
 
 ```json
-{"error":{"message":"Failed to get issue (404 Not Found): ...","operation":"get issue","status":404}}
+{"error":{"message":"Failed to get issue (404 Not Found)","status":404,"operation":"get issue","details":{"errorMessages":["Issue does not exist or you do not have permission to see it."],"errors":{}}}}
 ```
 
-API 실패에는 `status`와 `operation`이 있고, 알려진 해결책이 있으면 `hint`가 붙습니다. 429에는 Atlassian이 보낸 경우 `retryAfterSeconds`와 `rateLimitReason`도 붙습니다. 읽기와 멱등 요청은 서버가 요청한 시간 이상 기다린 뒤 429를 최대 3번 재시도하며, 60초를 넘는 대기는 기다리지 않고 호출자에게 돌려줍니다. 그 밖의 쓰기는 이미 적용되었을 수 있으므로 바로 반환합니다. 다시 보내기 전에 적용되었는지 확인합니다. 첨부 업로드는 본문을 다시 보낼 수 없어 재시도하지 않으며, 다시 실행하면 같은 파일의 새 버전이 됩니다. 정책은 Atlassian의 [Jira](https://developer.atlassian.com/cloud/jira/platform/rate-limiting/)와 [Confluence](https://developer.atlassian.com/cloud/confluence/rate-limiting/) 속도 제한 문서에 있습니다.
+API 실패에는 `status`와 `operation`이 있고, Atlassian이 JSON으로 답한 오류 본문이 `details`로 붙습니다(Jira에서는 `details.errors`가 거부된 필드와 이유를 담습니다). 알려진 해결책이 있으면 `hint`가 붙습니다. 429에는 Atlassian이 보낸 경우 `retryAfterSeconds`와 `rateLimitReason`도 붙습니다. 읽기와 멱등 요청은 서버가 요청한 시간과 2초에서 시작해 두 배씩 늘어나는 대기 중 긴 쪽만큼 기다린 뒤 429를 최대 3번 재시도하며, 60초를 넘는 대기는 기다리지 않고 호출자에게 돌려줍니다. 그 밖의 쓰기는 이미 적용되었을 수 있으므로 바로 반환합니다. 다시 보내기 전에 적용되었는지 확인합니다. 첨부 업로드는 본문을 다시 보낼 수 없어 재시도하지 않으며, 다시 실행하면 같은 파일의 새 버전이 됩니다. 정책은 Atlassian의 [Jira](https://developer.atlassian.com/cloud/jira/platform/rate-limiting/)와 [Confluence](https://developer.atlassian.com/cloud/confluence/rate-limiting/) 속도 제한 문서에 있습니다.
 
 | 종료 코드 | 의미 |
 |---|---|

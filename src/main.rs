@@ -676,8 +676,9 @@ fn keyring_report(outcome: &atlassian_cli::auth::KeyringEnumeration) -> serde_js
 ///
 /// Exit codes, stable for scripted callers: 1 generic, 2 CLI usage (clap),
 /// 3 auth (401/403, or no usable credential), 4 not found (404), 5 rate limited (429),
-/// 6 server error (5xx). API failures carry `status`/`operation` (and
-/// `hint` when remediation is known) alongside `message`; a 429 adds
+/// 6 server error (5xx). API failures carry `status`/`operation`, `details`
+/// when Atlassian answered with a JSON body, and `hint` when remediation is
+/// known, alongside `message`; a 429 adds
 /// `retryAfterSeconds` and `rateLimitReason` when the server sent them.
 fn render_error(err: &anyhow::Error) -> (i32, String) {
     let mut error = serde_json::json!({ "message": format!("{err:#}") });
@@ -685,6 +686,9 @@ fn render_error(err: &anyhow::Error) -> (i32, String) {
     if let Some(api) = err.downcast_ref::<atlassian_cli::ApiError>() {
         error["status"] = api.status.as_u16().into();
         error["operation"] = api.operation.clone().into();
+        if let Some(details) = api.details() {
+            error["details"] = details;
+        }
         if let Some(hint) = api.hint {
             error["hint"] = hint.into();
         }
@@ -1142,6 +1146,41 @@ mod tests {
             assert_eq!(payload["error"]["retryAfterSeconds"], seconds);
             assert_eq!(payload["error"]["rateLimitReason"], "jira-burst-based");
         }
+    }
+
+    /// Atlassian's JSON error body is reported as structured `details` — a
+    /// refused create names each field and why — while a text body, such as a
+    /// gateway's HTML page, stays in the message and is cut short there.
+    #[test]
+    fn an_api_error_reports_its_json_body_as_details_and_bounds_text() {
+        let api_error = |body: String| {
+            anyhow::Error::from(atlassian_cli::ApiError {
+                operation: "create issue".into(),
+                status: reqwest::StatusCode::BAD_REQUEST,
+                body,
+                hint: None,
+                retry_after: None,
+                rate_limit_reason: None,
+            })
+        };
+        let (_, payload) = render_error(&api_error(
+            r#"{"errorMessages":[],"errors":{"customfield_10010":"Severity is required."}}"#.into(),
+        ));
+        let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(
+            payload["error"]["details"]["errors"]["customfield_10010"],
+            "Severity is required."
+        );
+        assert_eq!(
+            payload["error"]["message"],
+            "Failed to create issue (400 Bad Request)"
+        );
+
+        let (_, payload) = render_error(&api_error(format!("<html>{}</html>", "x".repeat(5000))));
+        let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        let message = payload["error"]["message"].as_str().unwrap();
+        assert!(message.ends_with("… (4013 more characters)"), "{message}");
+        assert!(payload["error"].get("details").is_none());
     }
 
     /// A credential that is missing locally is an authentication failure for

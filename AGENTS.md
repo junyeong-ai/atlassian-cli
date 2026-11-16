@@ -70,8 +70,9 @@ only where their contracts are the same.
   refuse it empty. Search streaming emits JSONL without a trailing
   summary; progress and diagnostics use stderr. Retain search results only in
   non-streaming mode; streaming keeps a cumulative count and cursor history.
-- Runtime failures emit one JSON error object to stderr. Clap usage errors use
-  text and exit 2. Exit codes: 1 generic, 3 auth/permission or no usable
+- Runtime failures emit one JSON error object to stderr; an API failure
+  carries Atlassian's JSON error body as `details`, and a text body stays in
+  the message, cut at 1000 characters. Clap usage errors use text and exit 2. Exit codes: 1 generic, 3 auth/permission or no usable
   credential, 4 missing resource, 5 rate limit, 6 server error. Output may
   precede a later failure.
 - Lists use an `items` envelope. Creating writes return the identifiers callers
