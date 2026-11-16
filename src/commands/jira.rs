@@ -16,6 +16,19 @@ fn rich_text(text: String, format: JiraFormat) -> Result<Value> {
     }
 }
 
+/// The JSON object a `--fields` option holds, its string `description`
+/// converted under Markdown.
+fn parse_fields(raw: &str, format: JiraFormat) -> Result<Value> {
+    let mut fields = serde_json::from_str::<Value>(raw).map_err(|e| {
+        anyhow::anyhow!(
+            "Invalid JSON for --fields: {}. Example: {{\"labels\":[\"api\"]}}",
+            e
+        )
+    })?;
+    convert_description(&mut fields, format)?;
+    Ok(fields)
+}
+
 /// Convert a string `description` among JSON fields under Markdown. A JSON
 /// object there is already a document and is left to ADF validation.
 fn convert_description(fields: &mut Value, format: JiraFormat) -> Result<()> {
@@ -67,18 +80,7 @@ pub(crate) async fn run(cmd: JiraCommand, client: &atlassian_cli::ApiClient) -> 
                 Some(text) => rich_text(read_body(text).await?, format)?,
                 None => Value::Null,
             };
-            let extra = fields
-                .map(|raw| {
-                    let mut extra = serde_json::from_str::<Value>(&raw).map_err(|e| {
-                        anyhow::anyhow!(
-                            "Invalid JSON for --fields: {}. Example: {{\"labels\":[\"api\"]}}",
-                            e
-                        )
-                    })?;
-                    convert_description(&mut extra, format)?;
-                    anyhow::Ok(extra)
-                })
-                .transpose()?;
+            let extra = fields.map(|raw| parse_fields(&raw, format)).transpose()?;
             jira::create_issue(
                 &project,
                 &summary,
@@ -149,7 +151,17 @@ pub(crate) async fn run(cmd: JiraCommand, client: &atlassian_cli::ApiClient) -> 
             TransitionAction::Apply {
                 issue_key,
                 transition_id,
-            } => jira::transition_issue(&issue_key, &transition_id, client).await,
+                fields,
+                comment,
+                format,
+            } => {
+                let fields = fields.map(|raw| parse_fields(&raw, format)).transpose()?;
+                let comment = match comment {
+                    Some(text) => Some(rich_text(read_body(text).await?, format)?),
+                    None => None,
+                };
+                jira::transition_issue(&issue_key, &transition_id, fields, comment, client).await
+            }
             TransitionAction::List { issue_key } => jira::get_transitions(&issue_key, client).await,
         },
         JiraSubcommand::Link { action } => match action {

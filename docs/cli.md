@@ -376,7 +376,7 @@ Usage: atlassian-cli jira transition <COMMAND>
 
 Commands:
   apply  Apply a transition to an issue
-  list   List available transitions for an issue
+  list   List the transitions available now, with the fields each one takes
   help   Print this message or the help of the given subcommand(s)
 
 Options:
@@ -389,7 +389,7 @@ Options:
 ```text
 Apply a transition to an issue
 
-Usage: atlassian-cli jira transition apply <ISSUE_KEY> <TRANSITION_ID>
+Usage: atlassian-cli jira transition apply [OPTIONS] <ISSUE_KEY> <TRANSITION_ID>
 
 Arguments:
   <ISSUE_KEY>
@@ -399,14 +399,29 @@ Arguments:
 
 
 Options:
+      --fields <FIELDS>
+          Fields the transition screen requires, as a JSON object — '{"resolution":{"name":"Fixed"}}'; `transition list` names them
+
+      --comment <COMMENT>
+          Comment added with the transition; `-` reads it from standard input
+
+      --format <FORMAT>
+          Format of the comment and of a string `description` in --fields
+
+          Possible values:
+          - adf:      Atlassian Document Format JSON, as Jira stores it; writes also take plain text
+          - markdown: Markdown, converted to and from ADF
+
+          [default: adf]
+
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 ```
 
 ## `atlassian-cli jira transition list`
 
 ```text
-List available transitions for an issue
+List the transitions available now, with the fields each one takes
 
 Usage: atlassian-cli jira transition list <ISSUE_KEY>
 

@@ -330,8 +330,18 @@ pub(crate) enum TransitionAction {
     Apply {
         issue_key: String,
         transition_id: String,
+        /// Fields the transition screen requires, as a JSON object —
+        /// '{"resolution":{"name":"Fixed"}}'; `transition list` names them
+        #[arg(long)]
+        fields: Option<String>,
+        /// Comment added with the transition; `-` reads it from standard input
+        #[arg(long, allow_hyphen_values = true)]
+        comment: Option<String>,
+        /// Format of the comment and of a string `description` in --fields
+        #[arg(long, value_enum, default_value_t)]
+        format: JiraFormat,
     },
-    /// List available transitions for an issue
+    /// List the transitions available now, with the fields each one takes
     List { issue_key: String },
 }
 

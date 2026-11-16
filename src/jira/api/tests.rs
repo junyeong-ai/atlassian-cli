@@ -2701,8 +2701,69 @@ async fn integ_transition_issue_sends_transition_id() {
         .await;
 
     let client = mock_client(server.uri());
-    let result = transition_issue("MDW-1", "31", &client).await.unwrap();
+    let result = transition_issue("MDW-1", "31", None, None, &client)
+        .await
+        .unwrap();
     assert_eq!(result, json!({}));
+}
+
+#[tokio::test]
+async fn integ_transition_issue_sets_screen_fields_and_comments_in_one_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/MDW-1/transitions"))
+        .and(body_json(json!({
+            "transition": { "id": "31" },
+            "fields": { "resolution": { "name": "Fixed" } },
+            "update": { "comment": [{ "add": { "body": adf::text_to_adf("Shipped in 1.2") } }] }
+        })))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = mock_client(server.uri());
+    transition_issue(
+        "MDW-1",
+        "31",
+        Some(json!({ "resolution": { "name": "Fixed" } })),
+        Some(json!("Shipped in 1.2")),
+        &client,
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn integ_transition_fields_must_be_an_object() {
+    let client = mock_client("http://127.0.0.1:9");
+    let err = transition_issue("MDW-1", "31", Some(json!(["resolution"])), None, &client)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("--fields takes a JSON object"), "{err}");
+}
+
+#[tokio::test]
+async fn integ_transition_list_asks_for_each_screen_field() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/MDW-1/transitions"))
+        .and(query_param("expand", "transitions.fields"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "transitions": [{ "id": "31", "name": "Done",
+                "fields": { "resolution": { "required": true, "name": "Resolution" } } }]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = mock_client(server.uri());
+    let result = get_transitions("MDW-1", &client).await.unwrap();
+    assert_eq!(
+        result["items"][0]["fields"]["resolution"]["required"],
+        json!(true)
+    );
 }
 
 #[tokio::test]

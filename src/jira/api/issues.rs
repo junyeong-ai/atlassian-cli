@@ -476,9 +476,13 @@ pub async fn delete_issue(
     Ok(json!({}))
 }
 
+/// Apply a transition, setting the fields its screen asks for and adding a
+/// comment in the same request, as Jira's transition endpoint takes them.
 pub async fn transition_issue(
     issue_key: &str,
     transition_id: &str,
+    fields: Option<Value>,
+    comment: Option<Value>,
     client: &ApiClient,
 ) -> Result<Value> {
     let url = format!(
@@ -486,11 +490,16 @@ pub async fn transition_issue(
         encode_path_segment(issue_key)
     );
 
-    let body = json!({
-        "transition": {
-            "id": transition_id
-        }
-    });
+    let mut body = json!({ "transition": { "id": transition_id } });
+    if let Some(extra) = fields {
+        let mut screen = json!({});
+        merge_extra_fields(&mut screen, extra)?;
+        body["fields"] = screen;
+    }
+    if let Some(comment) = comment {
+        let comment = adf::process_comment_input(comment)?;
+        body["update"] = json!({ "comment": [{ "add": { "body": comment } }] });
+    }
 
     let request = client
         .post(Service::Jira, &url)
@@ -502,6 +511,8 @@ pub async fn transition_issue(
     Ok(json!({}))
 }
 
+/// The transitions available now, each with the fields its screen takes and
+/// whether they are required, so a transition can be applied in one attempt.
 pub async fn get_transitions(issue_key: &str, client: &ApiClient) -> Result<Value> {
     let url = format!(
         "/rest/api/3/issue/{}/transitions",
@@ -511,6 +522,7 @@ pub async fn get_transitions(issue_key: &str, client: &ApiClient) -> Result<Valu
     let request = client
         .get(Service::Jira, &url)
         .await?
+        .query(&[("expand", "transitions.fields")])
         .header("Accept", "application/json");
     let response = client.execute("get transitions", request).await?;
 

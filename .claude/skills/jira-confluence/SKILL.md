@@ -36,7 +36,7 @@ atlassian-cli jira get PROJ-123 --fields summary,status,customfield_10020
 atlassian-cli jira search "assignee = currentUser() AND statusCategory != Done" --format markdown --limit 20
 atlassian-cli jira search "project = PROJ" --fields key,summary,status --limit 50
 atlassian-cli jira comment list PROJ-123 --format markdown
-atlassian-cli jira transition list PROJ-123      # discover IDs before applying
+atlassian-cli jira transition list PROJ-123      # ids, and the fields each one's screen requires
 
 # Large reads — token pagination
 atlassian-cli jira search "project = PROJ" --all --format markdown
@@ -52,6 +52,7 @@ atlassian-cli jira comment add PROJ-123 "Reproduced on **staging**" --format mar
 atlassian-cli jira comment update PROJ-123 10042 "Edited comment"
 atlassian-cli jira comment delete PROJ-123 10042
 atlassian-cli jira transition apply PROJ-123 31
+atlassian-cli jira transition apply PROJ-123 31 --fields '{"resolution":{"name":"Fixed"}}' --comment "Fixed in **1.2**" --format markdown
 
 # Delete — irreversible (no recycle bin); --yes is mandatory
 atlassian-cli jira delete PROJ-123 --yes
