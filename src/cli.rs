@@ -463,10 +463,23 @@ pub(crate) enum UserAction {
 #[derive(Subcommand)]
 pub(crate) enum ListAction {
     /// List fields with the ids `--fields`, `create` and `update` take
-    /// (custom fields as customfield_NNNNN) and their JQL names
-    Fields,
-    /// List available issue types
-    Types,
+    /// (custom fields as customfield_NNNNN); with --project and --type, the
+    /// fields that type's create screen takes, whether each is required and
+    /// the values it allows
+    Fields {
+        /// Project whose create screen to read
+        #[arg(long, requires = "issue_type")]
+        project: Option<String>,
+        /// Issue type, by name or id
+        #[arg(long = "type", requires = "project")]
+        issue_type: Option<String>,
+    },
+    /// List issue types: site-wide, or with --project the ones that project can create
+    Types {
+        /// Project whose creatable issue types to list
+        #[arg(long)]
+        project: Option<String>,
+    },
     /// List available priorities
     Priorities,
     /// List available statuses

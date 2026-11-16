@@ -155,6 +155,18 @@ const WORKLOG_PAGE: PageContract = PageContract {
     end: PageEnd::Total,
 };
 
+/// `/rest/api/3/issue/createmeta/{project}/issuetypes`.
+const CREATE_META_TYPES_PAGE: PageContract = PageContract {
+    items: "issueTypes",
+    end: PageEnd::Total,
+};
+
+/// `/rest/api/3/issue/createmeta/{project}/issuetypes/{issueTypeId}`.
+const CREATE_META_FIELDS_PAGE: PageContract = PageContract {
+    items: "fields",
+    end: PageEnd::Total,
+};
+
 /// Loop through a paginated `startAt`/`maxResults` endpoint and accumulate every
 /// item, following `contract` to know where the items are and when to stop.
 ///
@@ -295,6 +307,82 @@ pub async fn get_fields(client: &ApiClient) -> Result<Value> {
         require_array(&data, WHOLE_BODY, "get fields")?,
         client,
     ))
+}
+
+/// The issue types `project` can create, from its create metadata — unlike the
+/// site-wide `get_issue_types`, every one of these `create` accepts there.
+pub async fn get_project_issue_types(project: &str, client: &ApiClient) -> Result<Value> {
+    let items = project_issue_types(project, client).await?;
+    Ok(list_envelope(items, client))
+}
+
+async fn project_issue_types(project: &str, client: &ApiClient) -> Result<Vec<Value>> {
+    let path = format!(
+        "/rest/api/3/issue/createmeta/{}/issuetypes",
+        encode_path_segment(project)
+    );
+    paginate(
+        &path,
+        &[],
+        "get project issue types",
+        CREATE_META_TYPES_PAGE,
+        client,
+    )
+    .await
+}
+
+/// The fields the create screen of `issue_type` in `project` takes, each with
+/// whether it is required and the values it allows. `issue_type` is the type's
+/// id, or its name in any letter case.
+pub async fn get_create_fields(
+    project: &str,
+    issue_type: &str,
+    client: &ApiClient,
+) -> Result<Value> {
+    let types = project_issue_types(project, client).await?;
+    let matches: Vec<&Value> = types
+        .iter()
+        .filter(|t| {
+            t["id"].as_str() == Some(issue_type)
+                || t["name"]
+                    .as_str()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(issue_type))
+        })
+        .collect();
+    let names = || {
+        types
+            .iter()
+            .filter_map(|t| Some(format!("{} ({})", t["name"].as_str()?, t["id"].as_str()?)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let id = match matches.as_slice() {
+        [only] => only["id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("issue type '{issue_type}' in {project} has no id"))?,
+        [] => anyhow::bail!(
+            "{project} has no issue type '{issue_type}' it can create; it has: {}",
+            names()
+        ),
+        _ => anyhow::bail!(
+            "'{issue_type}' names more than one issue type in {project}; pass its id: {}",
+            names()
+        ),
+    };
+    let path = format!(
+        "/rest/api/3/issue/createmeta/{}/issuetypes/{}",
+        encode_path_segment(project),
+        encode_path_segment(id)
+    );
+    let items = paginate(
+        &path,
+        &[],
+        "get create fields",
+        CREATE_META_FIELDS_PAGE,
+        client,
+    )
+    .await?;
+    Ok(list_envelope(items, client))
 }
 
 /// `/priority` is deprecated in favour of the paginated `/priority/search`, but

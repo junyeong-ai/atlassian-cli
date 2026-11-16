@@ -2065,6 +2065,42 @@ async fn integ_get_fields_lists_each_field_with_its_id() {
     assert_eq!(result["items"][1]["name"], "Sprint");
 }
 
+/// The create screen is read for the type the caller named, found among the
+/// project's own creatable types by name in any case or by id.
+#[tokio::test]
+async fn integ_create_fields_resolve_the_named_type_within_the_project() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/createmeta/OPS/issuetypes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issueTypes": [{ "id": "10001", "name": "Task" }, { "id": "10004", "name": "Bug" }],
+            "startAt": 0, "maxResults": 50, "total": 2
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/createmeta/OPS/issuetypes/10004"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "fields": [{ "fieldId": "customfield_10010", "name": "Severity", "required": true,
+                         "allowedValues": [{ "id": "1", "value": "High" }] }],
+            "startAt": 0, "maxResults": 50, "total": 1
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = mock_client(server.uri());
+    let result = get_create_fields("OPS", "bug", &client).await.unwrap();
+    assert_eq!(result["items"][0]["fieldId"], "customfield_10010");
+    assert_eq!(result["items"][0]["required"], true);
+
+    let err = get_create_fields("OPS", "Story", &client)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("Task (10001), Bug (10004)"), "{err}");
+}
+
 #[tokio::test]
 async fn integ_get_statuses_hits_public_endpoint() {
     let server = MockServer::start().await;

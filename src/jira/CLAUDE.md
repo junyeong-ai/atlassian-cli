@@ -36,7 +36,7 @@ Reads under `--format markdown` convert every value among an issue's `fields` th
 - `search` returns `{"items": [...], "count": N}` — `count` is the size of this page.
 - `search_all` returns `{"items": [...], "total": N}` — `total` is the cumulative size (`/search/jql` doesn't expose a server-side total).
 - `get_issue` returns the raw Jira issue object after `filter::apply`. `--fields` selects the returned fields (default: the fields a search returns plus `description`, through `resolve_search_fields`; `*all` returns the full issue); it is not capped by a hardwired whitelist.
-- All list endpoints (`get_comments`, `get_transitions`, `get_links`, `get_link_types`, `get_worklogs`, `get_watchers`, `get_fields`, `get_issue_types`, `get_priorities`, `get_statuses`, `get_labels`, `search_users`, `get_boards`, `get_sprints`) return `{"items": [...]}`.
+- All list endpoints (`get_comments`, `get_transitions`, `get_links`, `get_link_types`, `get_worklogs`, `get_watchers`, `get_fields`, `get_create_fields`, `get_issue_types`, `get_project_issue_types`, `get_priorities`, `get_statuses`, `get_labels`, `search_users`, `get_boards`, `get_sprints`) return `{"items": [...]}`.
 - `create_issue` returns `{"key": ..., "id": ...}` — both fields are stable contract; `key` is the human-readable identifier needed for follow-up commands.
 - Writes that target an identifiable issue sub-resource (`add_comment`, `update_comment`, `add_worklog`, `update_worklog`) return `{"id": ...}` so callers can chain follow-up updates without re-querying.
 - Every id/key/version returned by a write is pulled through `response::require_field`: a 2xx whose body lacks the field bails loudly instead of returning a placeholder `null`, so a caller never chains on a non-existent resource.
@@ -51,6 +51,7 @@ Keep these shapes stable — downstream tooling (skill, scripts) depends on them
 - `AGILE_PAGE` — `values` + `isLast`. `/rest/api/3/label`, `/rest/agile/1.0/board`, sprints.
 - `COMMENT_PAGE` — `comments` + `total`. `/rest/api/3/issue/{key}/comment`, which reports how many comments exist rather than flagging the last page.
 - `WORKLOG_PAGE` — `worklogs` + `total`. `/rest/api/3/issue/{key}/worklog`, on the same contract.
+- `CREATE_META_TYPES_PAGE` / `CREATE_META_FIELDS_PAGE` — `issueTypes` / `fields` + `total`. A project's create metadata: the types it can create, then one type's create-screen fields. `get_create_fields` resolves the caller's type among the project's own types (id, or name in any case) and refuses an ambiguous name.
 
 Under `Total` the count is the whole contract, so a page that adds nothing while items remain is the server declining to hand them over — that bails, where the `IsLast` arm's empty page is a legitimate skip-ahead. A response missing its items array, its `isLast`, or its `total` bails too: a truncated collection returned as a complete one is the failure this helper exists to prevent.
 

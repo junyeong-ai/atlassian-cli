@@ -751,8 +751,8 @@ Query global metadata (issue types, priorities, statuses, labels)
 Usage: atlassian-cli jira list <COMMAND>
 
 Commands:
-  fields      List fields with the ids `--fields`, `create` and `update` take (custom fields as customfield_NNNNN) and their JQL names
-  types       List available issue types
+  fields      List fields with the ids `--fields`, `create` and `update` take (custom fields as customfield_NNNNN); with --project and --type, the fields that type's create screen takes, whether each is required and the values it allows
+  types       List issue types: site-wide, or with --project the ones that project can create
   priorities  List available priorities
   statuses    List available statuses
   labels      List available labels
@@ -766,11 +766,17 @@ Options:
 ## `atlassian-cli jira list fields`
 
 ```text
-List fields with the ids `--fields`, `create` and `update` take (custom fields as customfield_NNNNN) and their JQL names
+List fields with the ids `--fields`, `create` and `update` take (custom fields as customfield_NNNNN); with --project and --type, the fields that type's create screen takes, whether each is required and the values it allows
 
-Usage: atlassian-cli jira list fields
+Usage: atlassian-cli jira list fields [OPTIONS]
 
 Options:
+      --project <PROJECT>
+          Project whose create screen to read
+
+      --type <ISSUE_TYPE>
+          Issue type, by name or id
+
   -h, --help
           Print help
 ```
@@ -778,11 +784,14 @@ Options:
 ## `atlassian-cli jira list types`
 
 ```text
-List available issue types
+List issue types: site-wide, or with --project the ones that project can create
 
-Usage: atlassian-cli jira list types
+Usage: atlassian-cli jira list types [OPTIONS]
 
 Options:
+      --project <PROJECT>
+          Project whose creatable issue types to list
+
   -h, --help
           Print help
 ```

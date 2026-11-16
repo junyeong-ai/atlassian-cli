@@ -85,13 +85,14 @@ atlassian-cli jira watcher list PROJ-123
 atlassian-cli jira watcher remove PROJ-123
 ```
 
-### Discovery (global metadata)
+### Discovery (metadata)
 
-`list types` answers site-wide, not per project: for an ordinary user it is the union over projects they can browse, and for a Jira admin it is every type on the site including ones no project uses. Either way a name it returns may be refused by `create` in the project you are creating in. `jira get KEY --fields issuetype` on an issue already in that project gives a name that project uses — which is a better starting point than this list, though it is not proof the type can still be created there.
+Before `create`, ask the project what it accepts: `list types --project` names the types it can create, and `list fields --project --type` the fields that type's create screen takes, which are required, and their allowed values. Plain `list types` is site-wide and can name types the project refuses.
 
 ```bash
-atlassian-cli jira list fields       # field ids (customfield_NNNNN) by name, for --fields, create and update
-atlassian-cli jira list types        # site-wide; see the note above before using one with `create`
+atlassian-cli jira list types --project PROJ                 # issue types PROJ can create
+atlassian-cli jira list fields --project PROJ --type Bug    # its create screen: required fields, allowed values
+atlassian-cli jira list fields       # every field id (customfield_NNNNN) by name, for --fields and update
 atlassian-cli jira list priorities   # priority names for `update`
 atlassian-cli jira list statuses     # status names for JQL / transitions
 atlassian-cli jira list labels       # existing labels

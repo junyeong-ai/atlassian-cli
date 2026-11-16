@@ -240,8 +240,15 @@ pub(crate) async fn run(cmd: JiraCommand, client: &atlassian_cli::ApiClient) -> 
             UserAction::Search { query, limit } => jira::search_users(&query, limit, client).await,
         },
         JiraSubcommand::List { action } => match action {
-            ListAction::Fields => jira::get_fields(client).await,
-            ListAction::Types => jira::get_issue_types(client).await,
+            ListAction::Fields {
+                project: Some(project),
+                issue_type: Some(issue_type),
+            } => jira::get_create_fields(&project, &issue_type, client).await,
+            ListAction::Fields { .. } => jira::get_fields(client).await,
+            ListAction::Types {
+                project: Some(project),
+            } => jira::get_project_issue_types(&project, client).await,
+            ListAction::Types { project: None } => jira::get_issue_types(client).await,
             ListAction::Priorities => jira::get_priorities(client).await,
             ListAction::Statuses => jira::get_statuses(client).await,
             ListAction::Labels => jira::get_labels(client).await,
