@@ -13,9 +13,10 @@ const MAX_RATE_LIMIT_RETRIES: u32 = 3;
 /// Longer server-requested waits are returned to the caller as rate limits.
 const RATE_LIMIT_DELAY_CAP: Duration = Duration::from_secs(60);
 
-/// Base delay for the exponential backoff used when a 429 carries no
-/// parseable `Retry-After` (doubles per attempt: 500ms, 1s, 2s).
-const RATE_LIMIT_BACKOFF_BASE: Duration = Duration::from_millis(500);
+/// Base delay of the exponential backoff after a 429, doubling per attempt
+/// (2s, 4s, 8s) as Atlassian's rate-limiting guidance describes. That
+/// guidance treats `Retry-After` as the minimum, so a longer one prevails.
+const RATE_LIMIT_BACKOFF_BASE: Duration = Duration::from_secs(2);
 
 /// Up to this fraction of each wait is added at random, so clients limited
 /// together do not retry together.
@@ -84,14 +85,16 @@ fn retry_after(headers: &reqwest::header::HeaderMap, now: SystemTime) -> Option<
     }
 }
 
+/// The longer of `Retry-After` and the exponential backoff for this attempt.
 /// `None` means the server requires a longer wait than automatic retries allow.
 fn rate_limit_delay(
     headers: &reqwest::header::HeaderMap,
     attempt: u32,
+    backoff_base: Duration,
     now: SystemTime,
 ) -> Option<Duration> {
-    let delay = retry_after(headers, now)
-        .unwrap_or_else(|| RATE_LIMIT_BACKOFF_BASE * 2u32.saturating_pow(attempt));
+    let backoff = backoff_base * 2u32.saturating_pow(attempt);
+    let delay = retry_after(headers, now).map_or(backoff, |requested| requested.max(backoff));
     (delay <= RATE_LIMIT_DELAY_CAP).then_some(delay)
 }
 
@@ -164,6 +167,7 @@ pub struct ApiClient {
     http: reqwest::Client,
     strategy: Arc<dyn AuthStrategy>,
     config: Config,
+    rate_limit_backoff: Duration,
 }
 
 impl ApiClient {
@@ -192,6 +196,7 @@ impl ApiClient {
             http,
             strategy,
             config,
+            rate_limit_backoff: RATE_LIMIT_BACKOFF_BASE,
         })
     }
 
@@ -199,10 +204,13 @@ impl ApiClient {
     pub(crate) fn new_with_strategy(strategy: Arc<dyn AuthStrategy>, config: Config) -> Self {
         let http = http_client(Duration::from_millis(config.performance.request_timeout_ms))
             .expect("test HTTP client builds");
+        // The retry path runs without waiting; `rate_limit_delay`'s own tests
+        // hold the delays a real client takes.
         Self {
             http,
             strategy,
             config,
+            rate_limit_backoff: Duration::ZERO,
         }
     }
 
@@ -257,10 +265,10 @@ impl ApiClient {
     /// rate-limited request went unprocessed, so repeating a POST could apply
     /// it twice. Idempotent POSTs go through
     /// [`execute_idempotent`](Self::execute_idempotent).
-    /// Other failures, 5xx included, are never retried. Each wait honors
-    /// `Retry-After` with jitter added, and each retry re-derives the
-    /// `Authorization` header because the wait can cross a token's refresh
-    /// threshold. Streaming bodies (multipart uploads) cannot be cloned and are
+    /// Other failures, 5xx included, are never retried. Each wait is the
+    /// longer of `Retry-After` and the backoff, with jitter added, and each
+    /// retry re-derives the `Authorization` header because the wait can cross
+    /// a token's refresh threshold. Streaming bodies (multipart uploads) cannot be cloned and are
     /// sent once.
     pub async fn execute(
         &self,
@@ -303,7 +311,12 @@ impl ApiClient {
                 return Ok(response);
             }
             let rate_limited = status == StatusCode::TOO_MANY_REQUESTS;
-            let delay = rate_limit_delay(response.headers(), attempt, SystemTime::now());
+            let delay = rate_limit_delay(
+                response.headers(),
+                attempt,
+                self.rate_limit_backoff,
+                SystemTime::now(),
+            );
             if rate_limited
                 && attempt < MAX_RATE_LIMIT_RETRIES
                 && let Some(delay) = delay
@@ -460,12 +473,17 @@ mod tests {
     }
 
     #[test]
-    fn rate_limit_delay_honors_retry_after_seconds() {
+    fn rate_limit_delay_waits_the_longer_of_retry_after_and_the_backoff() {
         let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(reqwest::header::RETRY_AFTER, "2".parse().unwrap());
+        headers.insert(reqwest::header::RETRY_AFTER, "5".parse().unwrap());
         assert_eq!(
-            rate_limit_delay(&headers, 0, SystemTime::UNIX_EPOCH),
-            Some(Duration::from_secs(2))
+            rate_limit_delay(&headers, 0, RATE_LIMIT_BACKOFF_BASE, SystemTime::UNIX_EPOCH),
+            Some(Duration::from_secs(5))
+        );
+        headers.insert(reqwest::header::RETRY_AFTER, "1".parse().unwrap());
+        assert_eq!(
+            rate_limit_delay(&headers, 2, RATE_LIMIT_BACKOFF_BASE, SystemTime::UNIX_EPOCH),
+            Some(RATE_LIMIT_BACKOFF_BASE * 4)
         );
     }
 
@@ -473,27 +491,33 @@ mod tests {
     fn rate_limit_delay_refuses_excessive_retry_after() {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(reqwest::header::RETRY_AFTER, "3600".parse().unwrap());
-        assert_eq!(rate_limit_delay(&headers, 0, SystemTime::UNIX_EPOCH), None);
+        assert_eq!(
+            rate_limit_delay(&headers, 0, RATE_LIMIT_BACKOFF_BASE, SystemTime::UNIX_EPOCH),
+            None
+        );
         headers.insert(
             reqwest::header::RETRY_AFTER,
             "18446744073709551616".parse().unwrap(),
         );
-        assert_eq!(rate_limit_delay(&headers, 0, SystemTime::UNIX_EPOCH), None);
+        assert_eq!(
+            rate_limit_delay(&headers, 0, RATE_LIMIT_BACKOFF_BASE, SystemTime::UNIX_EPOCH),
+            None
+        );
     }
 
     #[test]
     fn rate_limit_delay_backs_off_exponentially_without_header() {
         let headers = reqwest::header::HeaderMap::new();
         assert_eq!(
-            rate_limit_delay(&headers, 0, SystemTime::UNIX_EPOCH),
+            rate_limit_delay(&headers, 0, RATE_LIMIT_BACKOFF_BASE, SystemTime::UNIX_EPOCH),
             Some(RATE_LIMIT_BACKOFF_BASE)
         );
         assert_eq!(
-            rate_limit_delay(&headers, 1, SystemTime::UNIX_EPOCH),
+            rate_limit_delay(&headers, 1, RATE_LIMIT_BACKOFF_BASE, SystemTime::UNIX_EPOCH),
             Some(RATE_LIMIT_BACKOFF_BASE * 2)
         );
         assert_eq!(
-            rate_limit_delay(&headers, 2, SystemTime::UNIX_EPOCH),
+            rate_limit_delay(&headers, 2, RATE_LIMIT_BACKOFF_BASE, SystemTime::UNIX_EPOCH),
             Some(RATE_LIMIT_BACKOFF_BASE * 4)
         );
     }
@@ -507,15 +531,30 @@ mod tests {
             httpdate::fmt_http_date(deadline).parse().unwrap(),
         );
         assert_eq!(
-            rate_limit_delay(&headers, 0, deadline - Duration::from_secs(30)),
+            rate_limit_delay(
+                &headers,
+                0,
+                RATE_LIMIT_BACKOFF_BASE,
+                deadline - Duration::from_secs(30)
+            ),
             Some(Duration::from_secs(30))
         );
         assert_eq!(
-            rate_limit_delay(&headers, 0, deadline + Duration::from_secs(30)),
-            Some(Duration::ZERO)
+            rate_limit_delay(
+                &headers,
+                0,
+                RATE_LIMIT_BACKOFF_BASE,
+                deadline + Duration::from_secs(30)
+            ),
+            Some(RATE_LIMIT_BACKOFF_BASE)
         );
         assert_eq!(
-            rate_limit_delay(&headers, 0, deadline - Duration::from_secs(3600)),
+            rate_limit_delay(
+                &headers,
+                0,
+                RATE_LIMIT_BACKOFF_BASE,
+                deadline - Duration::from_secs(3600)
+            ),
             None
         );
     }
@@ -525,7 +564,7 @@ mod tests {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(reqwest::header::RETRY_AFTER, "invalid".parse().unwrap());
         assert_eq!(
-            rate_limit_delay(&headers, 1, SystemTime::UNIX_EPOCH),
+            rate_limit_delay(&headers, 1, RATE_LIMIT_BACKOFF_BASE, SystemTime::UNIX_EPOCH),
             Some(RATE_LIMIT_BACKOFF_BASE * 2)
         );
     }

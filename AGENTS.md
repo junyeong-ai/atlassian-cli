@@ -92,8 +92,9 @@ only where their contracts are the same.
   writes return the 429 at once. A 429 error carries `retryAfterSeconds` and
   `rateLimitReason` when the server sent them. Retry at most three times with
   jitter, refreshing authorization before each retry.
-  Respect both forms of `Retry-After`; surface waits over 60 seconds to the
-  caller instead of retrying early. Multipart bodies are not replayed, and no
+  Wait the longer of `Retry-After` (either form) and an exponential backoff
+  from two seconds; surface waits over 60 seconds to the caller instead of
+  retrying early. Multipart bodies are not replayed, and no
   other failure is retried.
 - Pagination validates the raw collection and end signal before filtering each
   result. Use the existing Jira page contracts and Confluence cursor walker.
