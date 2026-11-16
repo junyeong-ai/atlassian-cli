@@ -116,6 +116,16 @@ fn v1_next_link(links: &Value, next: &str) -> String {
     }
 }
 
+/// Content's address in the browser: a web-UI path, which both API
+/// generations root at `_links.base` (`…/wiki`), joined to that base. `None`
+/// where the response gives no base or no rooted path, rather than a link a
+/// browser could not open.
+pub(super) fn web_url(links: &Value, path: &Value) -> Option<String> {
+    let base = links["base"].as_str()?;
+    let path = path.as_str().filter(|path| path.starts_with('/'))?;
+    Some(format!("{base}{path}"))
+}
+
 /// The `expand` a search sends: the version every result carries, the body
 /// when Markdown is asked for (as a Jira search adds the description), then the
 /// caller's additions, each under `content.` as the v1 search expands content.
@@ -850,6 +860,7 @@ pub async fn delete_comment(comment_id: &str, client: &ApiClient) -> Result<Valu
 }
 
 fn extract_content_from_results(data: &mut Value, as_markdown: bool) -> Result<Vec<Value>> {
+    let links = data["_links"].clone();
     // A present-but-empty `results` is a legitimate zero-match search; a
     // *missing* `results` on a 2xx is schema drift, so bail rather than report
     // an empty page (the same distinction `fetch_all_v2_results` enforces).
@@ -867,12 +878,15 @@ fn extract_content_from_results(data: &mut Value, as_markdown: bool) -> Result<V
                 return item.take();
             };
             let mut content = content.take();
-            // What the match adds to the content: where the query matched, the
-            // page's address under the site's `/wiki`, and when it changed.
-            for field in ["excerpt", "url", "lastModified"] {
+            // What the match adds to the content: where the query matched,
+            // when it changed, and its address.
+            for field in ["excerpt", "lastModified"] {
                 if let Some(value) = item.get(field) {
                     content[field] = value.clone();
                 }
+            }
+            if let Some(url) = web_url(&links, &item["url"]) {
+                content["url"] = url.into();
             }
 
             if as_markdown

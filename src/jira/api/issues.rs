@@ -348,6 +348,9 @@ pub async fn create_issue(
         merge_extra_fields(&mut fields, extra)?;
     }
     let body = json!({ "fields": fields });
+    // Read before the write, so a create that went through never reports a
+    // failure afterwards.
+    let site = display_url(client).await?;
 
     let request = client
         .post(Service::Jira, "/rest/api/3/issue")
@@ -357,10 +360,34 @@ pub async fn create_issue(
     let response = client.execute("create issue", request).await?;
 
     let data: Value = response.json().await?;
+    let key = require_field(&data, "/key", "create issue")?;
+    let Some(browse_key) = key.as_str() else {
+        anyhow::bail!("create issue succeeded but its 'key' was not a string: {key}");
+    };
+    let url = format!("{site}/browse/{}", encode_path_segment(browse_key));
     Ok(json!({
-        "key": require_field(&data, "/key", "create issue")?,
+        "key": key,
         "id": require_field(&data, "/id", "create issue")?,
+        "url": url,
     }))
+}
+
+/// The address people open the site at: the `displayUrl` Jira publishes for
+/// showing itself. The read is anonymous and needs no scope, so it answers
+/// under every auth method, including those routed through the gateway that
+/// never name the site.
+async fn display_url(client: &ApiClient) -> Result<String> {
+    let request = client.get(Service::Jira, "/rest/api/3/serverInfo").await?;
+    let response = client.execute("read server info", request).await?;
+    let data: Value = response.json().await?;
+    match require_field(&data, "/displayUrl", "read server info")? {
+        Value::String(url) => Ok(url),
+        other => {
+            anyhow::bail!(
+                "read server info succeeded but its 'displayUrl' was not a string: {other}"
+            )
+        }
+    }
 }
 
 pub async fn update_issue(

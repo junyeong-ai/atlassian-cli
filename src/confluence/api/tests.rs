@@ -93,7 +93,10 @@ async fn integ_search_returns_matches_and_the_token_that_continues_them() {
         .unwrap();
     let item = &result["items"][0];
     assert_eq!(item["excerpt"], "the @@@hl@@@deploy@@@endhl@@@ steps");
-    assert_eq!(item["url"], "/spaces/OPS/pages/1/Runbook");
+    assert_eq!(
+        item["url"],
+        "https://example.atlassian.net/wiki/spaces/OPS/pages/1/Runbook"
+    );
     assert_eq!(item["lastModified"], "2026-11-01T09:00:00.000Z");
     assert_eq!(result["nextPageToken"], "C2");
 }
@@ -479,7 +482,12 @@ async fn integ_create_page_resolves_space_then_posts_storage_body() {
             "body": { "representation": "storage", "value": "<p>x</p>" }
         })))
         .respond_with(ResponseTemplate::new(201).set_body_json(json!({
-            "id": "pid", "title": "Spec"
+            "id": "pid",
+            "title": "Spec",
+            "_links": {
+                "base": "https://example.atlassian.net/wiki",
+                "webui": "/spaces/ENG/pages/pid/Spec"
+            }
         })))
         .expect(1)
         .mount(&server)
@@ -489,14 +497,22 @@ async fn integ_create_page_resolves_space_then_posts_storage_body() {
     let result = create_page("ENG", "Spec", "<p>x</p>", None, &client)
         .await
         .unwrap();
-    assert_eq!(result, json!({ "id": "pid", "title": "Spec" }));
+    assert_eq!(
+        result,
+        json!({
+            "id": "pid",
+            "title": "Spec",
+            "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/pid/Spec"
+        })
+    );
 }
 
 /// A `"title": null` beside the id would report a page named nothing. The
 /// create landed and the id is there, so the write is not a failure — the
-/// title is simply not among what came back, and is not reported.
+/// title and the address are simply not among what came back, and are not
+/// reported.
 #[tokio::test]
-async fn integ_create_page_reports_no_title_where_the_response_carried_none() {
+async fn integ_create_page_reports_no_title_or_url_where_the_response_carried_none() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/wiki/api/v2/spaces"))

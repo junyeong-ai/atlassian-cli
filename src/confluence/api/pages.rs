@@ -1,4 +1,6 @@
-use super::{fetch_all_v2_results, fetch_version_number, resolve_space_id, v2_list_envelope};
+use super::{
+    fetch_all_v2_results, fetch_version_number, resolve_space_id, v2_list_envelope, web_url,
+};
 use crate::client::{ApiClient, Service};
 use crate::filter;
 use crate::http_utils::encode_path_segment;
@@ -76,14 +78,17 @@ pub async fn create_page(
 
     let data: Value = response.json().await?;
     // `id` is the part the contract promises and the only one a follow-up
-    // command needs, so it is the only one required. `title` rides along
-    // because a create is where a caller learns what the page was actually
-    // named — and only where the response named it: reporting `null` would
-    // say the page has no title, which a body that carried no title never
-    // said.
+    // command needs, so it is the only one required. `title` and `url` ride
+    // along because a create is where a caller learns what the page was
+    // actually named and where people open it — and only where the response
+    // said so: reporting `null` would say the page has no title, which a body
+    // that carried no title never said.
     let mut created = json!({ "id": require_field(&data, "/id", "create page")? });
     if let Some(title) = data.get("title").filter(|t| !t.is_null()) {
         created["title"] = title.clone();
+    }
+    if let Some(url) = web_url(&data["_links"], &data["_links"]["webui"]) {
+        created["url"] = url.into();
     }
     Ok(created)
 }

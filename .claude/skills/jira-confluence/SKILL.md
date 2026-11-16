@@ -187,7 +187,7 @@ atlassian-cli confluence attachment upload 12345 ./icon.svg --content-type image
 - `property set` values are **strict JSON** — quote bare strings as `'"text"'`, not `text`.
 - `attachment upload` upserts by filename; add `--minor` to suppress watcher notifications on re-upload. The `Content-Type` is mapped from the file extension (so `diagram.png` → `image/png` and renders inline instead of becoming an opaque download); pass `--content-type <mime>` to override. Note: Confluence Cloud often blocks **inline SVG** rendering for security, so embed diagrams as PNG when you need them to display.
 - For OAuth, request the scopes for every endpoint a command calls, including reads before writes. CQL `search` needs `search:confluence`, the scope its specification lists; if expanding bodies (`--format markdown`, `--expand body.storage`) is refused for scope, add `read:confluence-content.all`. Page-property `set`/`delete` need `read:page:confluence` and `write:page:confluence`; comment `update` needs `read:comment:confluence` and `write:comment:confluence`, while comment `delete` needs `delete:comment:confluence`. Page create also looks up its space; page update reads its current version unless `--base-version` is given; `children` needs `read:hierarchical-content:confluence`. Check the [property](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-content-properties/), [comment](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-comment/), and [page](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-page/) endpoint requirements. A `401 "scope does not match"` can indicate missing grants. Enable required scopes on the app, request them in the profile, then reauthorize; changing app permissions alone does not update an existing token.
-- A Confluence search result is the matched content with an `excerpt` of its text, `url` under the site's `/wiki` and `lastModified`. Read a body with `confluence get`, or add `--expand body.storage` to the search.
+- A Confluence search result is the matched content with an `excerpt` of its text, its `url` and `lastModified`. Read a body with `confluence get`, or add `--expand body.storage` to the search.
 - CQL compares user fields against account ids (`creator = "<accountId>"`); find them with `jira user search`.
 
 ## Pagination & output cheatsheet
@@ -203,6 +203,8 @@ atlassian-cli confluence attachment upload 12345 ./icon.svg --content-type image
 A search page without `--all` carries `nextPageToken`: `null` when it ends the results, otherwise the value to pass as `--page-token` for the next page. Jira can return fewer issues than `--limit` while more remain, so read the token, not the count. Jira `--all` requests 100 issues per page and ignores `--limit`. Confluence `--all` uses `--limit` for the first page only, capped at 50; subsequent requests follow the server's cursor links.
 
 `--stream` writes one compact JSON object per line to stdout and progress to stderr; `--pretty` does not apply to it.
+
+`jira create` and `confluence create` return the new resource's identifiers and its `url`, the address people open it at. Give the user that link rather than building one.
 
 ## Errors & exit codes
 

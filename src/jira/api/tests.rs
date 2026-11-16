@@ -891,12 +891,25 @@ async fn integ_comments_are_filtered_before_the_body_becomes_a_string() {
     );
 }
 
+/// The site address a create reports its issue under.
+async fn mount_display_url(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/serverInfo"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({ "displayUrl": "https://example.atlassian.net" })),
+        )
+        .mount(server)
+        .await;
+}
+
 /// A plain-text description becomes ADF on the way out, and the envelope a
 /// caller chains on is required rather than passed through — a 2xx that
 /// lost `key` would otherwise hand back `null` and fail somewhere later.
 #[tokio::test]
 async fn integ_create_issue_converts_the_description_and_requires_its_envelope() {
     let server = MockServer::start().await;
+    mount_display_url(&server).await;
     Mock::given(method("POST"))
         .and(path("/rest/api/3/issue"))
         .and(body_string_contains("\"type\":\"doc\""))
@@ -925,7 +938,14 @@ async fn integ_create_issue_converts_the_description_and_requires_its_envelope()
     )
     .await
     .unwrap();
-    assert_eq!(created, json!({ "key": "PROJ-1", "id": "10001" }));
+    assert_eq!(
+        created,
+        json!({
+            "key": "PROJ-1",
+            "id": "10001",
+            "url": "https://example.atlassian.net/browse/PROJ-1"
+        })
+    );
 }
 
 /// A sub-task's parent is what makes it a sub-task, and Jira takes it on
@@ -935,6 +955,7 @@ async fn integ_create_issue_converts_the_description_and_requires_its_envelope()
 #[tokio::test]
 async fn integ_create_issue_sends_the_parent_it_was_given() {
     let server = MockServer::start().await;
+    mount_display_url(&server).await;
     Mock::given(method("POST"))
         .and(path("/rest/api/3/issue"))
         .and(body_string_contains("\"parent\":{\"key\":\"PROJ-1\"}"))
@@ -958,7 +979,7 @@ async fn integ_create_issue_sends_the_parent_it_was_given() {
     )
     .await
     .unwrap();
-    assert_eq!(created, json!({ "key": "PROJ-2", "id": "10002" }));
+    assert_eq!(created["key"], "PROJ-2");
 }
 
 /// Without one the field is absent, not null: a type that takes no parent
@@ -967,6 +988,7 @@ async fn integ_create_issue_sends_the_parent_it_was_given() {
 #[tokio::test]
 async fn integ_create_issue_omits_the_parent_field_when_it_has_none() {
     let server = MockServer::start().await;
+    mount_display_url(&server).await;
     Mock::given(method("POST"))
         .and(path("/rest/api/3/issue"))
         .and(|request: &wiremock::Request| {
@@ -992,6 +1014,7 @@ async fn integ_create_issue_omits_the_parent_field_when_it_has_none() {
 #[tokio::test]
 async fn integ_create_issue_omits_every_field_it_was_not_given() {
     let server = MockServer::start().await;
+    mount_display_url(&server).await;
     Mock::given(method("POST"))
         .and(path("/rest/api/3/issue"))
         .and(|request: &wiremock::Request| {
@@ -1019,6 +1042,7 @@ async fn integ_create_issue_omits_every_field_it_was_not_given() {
 #[tokio::test]
 async fn integ_create_issue_carries_fields_it_has_no_argument_for() {
     let server = MockServer::start().await;
+    mount_display_url(&server).await;
     Mock::given(method("POST"))
         .and(path("/rest/api/3/issue"))
         .and(|request: &wiremock::Request| {
@@ -1114,9 +1138,37 @@ async fn integ_create_issue_refuses_a_field_given_twice() {
     assert!(err.contains("JSON object of Jira field names"), "{err}");
 }
 
+/// The address is read before the write: a create that went through must
+/// never be reported as failed, or a retry makes a second issue.
+#[tokio::test]
+async fn integ_create_issue_writes_nothing_when_the_site_address_is_unreadable() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/serverInfo"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue"))
+        .respond_with(
+            ResponseTemplate::new(201).set_body_json(json!({ "id": "10007", "key": "PROJ-7" })),
+        )
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let client = mock_client(server.uri());
+    let err = create_issue("PROJ", "S", "Task", json!("x"), None, None, &client)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("read server info"), "{err}");
+}
+
 #[tokio::test]
 async fn integ_create_issue_bails_when_the_envelope_lost_its_key() {
     let server = MockServer::start().await;
+    mount_display_url(&server).await;
     Mock::given(method("POST"))
         .and(path("/rest/api/3/issue"))
         .respond_with(ResponseTemplate::new(201).set_body_json(json!({ "id": "10001" })))
