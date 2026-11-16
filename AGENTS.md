@@ -1,9 +1,9 @@
 # atlassian-cli
 
-Rust 2024 library and single binary for Atlassian Cloud. `rust-toolchain.toml`
-pins the development compiler; `Cargo.toml` declares the minimum supported Rust
-version. Keep the minimum version unless a dependency or language feature
-requires raising it.
+Rust 2024 library and single binary for Atlassian Cloud. The project supports
+only the latest stable Rust: `rust-toolchain.toml` pins it and `Cargo.toml`'s
+`rust-version` names the same release, so raise both together; a test holds
+them and the READMEs to one version.
 
 ## Development
 

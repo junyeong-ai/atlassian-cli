@@ -1185,6 +1185,26 @@ mod tests {
         assert!(payload["error"].get("details").is_none());
     }
 
+    /// The project supports only the latest stable Rust, so the declared
+    /// `rust-version` is the release `rust-toolchain.toml` pins, and both
+    /// readmes name it.
+    #[test]
+    fn the_declared_rust_version_is_the_pinned_toolchain() {
+        const RUST: &str = env!("CARGO_PKG_RUST_VERSION");
+        assert!(
+            include_str!("../rust-toolchain.toml").contains(&format!("channel = \"{RUST}\"")),
+            "rust-toolchain.toml and Cargo.toml's rust-version name different releases — raise them together"
+        );
+        for (name, readme) in [
+            ("README.md", include_str!("../README.md")),
+            ("README.en.md", include_str!("../README.en.md")),
+        ] {
+            for shape in [format!("rust-{RUST}%2B"), format!("Rust {RUST}")] {
+                assert!(readme.contains(&shape), "{name} does not carry `{shape}`");
+            }
+        }
+    }
+
     /// A credential that is missing locally is an authentication failure for
     /// the caller, through whatever context it was reported under.
     #[test]

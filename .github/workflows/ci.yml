@@ -40,23 +40,6 @@ jobs:
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - run: cargo doc --workspace --all-features --no-deps --locked
 
-  msrv:
-    name: Minimum Rust version
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install the declared rust-version
-        run: |
-          msrv=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["rust-version"])')
-          rustup toolchain install "$msrv" --profile minimal
-          echo "RUSTUP_TOOLCHAIN=$msrv" >> "$GITHUB_ENV"
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo check --workspace --all-targets --all-features --locked
-
   test:
     name: Test (${{ matrix.os }})
     needs: [lint]
@@ -103,7 +86,7 @@ jobs:
   success:
     name: Success
     if: always()
-    needs: [lint, msrv, test]
+    needs: [lint, test]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs
