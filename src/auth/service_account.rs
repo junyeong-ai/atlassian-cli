@@ -134,7 +134,11 @@ impl ServiceAccountTokenManager {
             .context("Failed to parse accessible-resources response")?;
 
         match resources.len() {
-            0 => bail!("No accessible Atlassian sites found for this service account credential"),
+            0 => bail!(
+                "No accessible Atlassian sites found for this service account credential. Set \
+                 the site's cloud_id in the profile (or ATLASSIAN_CLOUD_ID); \
+                 https://<site>.atlassian.net/_edge/tenant_info answers with it"
+            ),
             1 => Ok(resources.into_iter().next().unwrap().id),
             n => {
                 let sites: Vec<String> = resources
