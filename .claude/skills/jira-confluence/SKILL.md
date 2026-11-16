@@ -233,7 +233,7 @@ The active profile dictates what identity the call runs as:
 
 `basic` and `scoped_token` differ only in which host the token goes to, and each host accepts exactly one token shape. A 401 can mean an expired credential, a routing mismatch or insufficient scopes. Relay the `hint` and verify the relevant cause before changing configuration or asking the user to log in again.
 
-Use `config validate` to diagnose Jira credentials. Its identity probe calls Jira, so a Confluence-only profile can fail that probe while remaining valid for Confluence. Diagnose that profile with a small Confluence read such as `confluence space list`. Do not replace credentials solely because an unrelated endpoint returned 401.
+Use `config validate` to diagnose Jira credentials; it returns the `user` they act as, `null` for a service account. Its identity probe calls Jira, so a Confluence-only profile can fail that probe while remaining valid for Confluence. Diagnose that profile with a small Confluence read such as `confluence space list`. Do not replace credentials solely because an unrelated endpoint returned 401.
 
 When the user reports auth trouble or asks to switch accounts:
 
@@ -243,11 +243,13 @@ atlassian-cli auth refresh               # force token refresh (debugging)
 atlassian-cli auth logout                # clears the stored session, whatever method the profile is on
 ```
 
+`auth status` reports the configured `method` beside the stored `session`. A `session` under another method is left from an earlier OAuth login; `auth logout` clears it.
+
 `auth login` waits up to five minutes for a person to finish signing in through a browser, so ask the user to run `atlassian-cli auth login` in their own terminal rather than running it yourself. Without a browser on that machine they add `--no-browser` and open the printed URL in a browser that can reach the callback port; over SSH that means forwarding it first with `ssh -L 8976:127.0.0.1:8976 <host>`, with the profile's `redirect_port` in place of 8976 when one is set.
 
 Switch profiles with `--profile <name>`; never invent profile names — list them via `atlassian-cli config list`. With an explicit `--config <file>`, `config list` includes that file and `config path/edit/init` target it. `--global` on path, edit or init selects the global file instead. `config show` emits the resolved profile as TOML with masked secrets; replace redactions before using it for authentication.
 
-`config edit` opens an interactive editor and waits for it; edit the file `config path` prints instead. Operational settings omitted from a file inherit from earlier files; `[]` explicitly clears a list.
+`config edit` opens an interactive editor and waits for it; edit the file at the `path` that `config path` returns instead. Operational settings omitted from a file inherit from earlier files; `[]` explicitly clears a list.
 
 For the selected profile, the highest-priority file defining an `[auth]` section replaces that section entirely. Omit the section to preserve authentication from earlier files; credentials omitted inside it do not inherit from those files. Each credential then resolves as CLI flag > environment variable > selected file auth. When `ATLASSIAN_AUTH_METHOD` selects a different method, supply its credentials through CLI flags or environment variables.
 

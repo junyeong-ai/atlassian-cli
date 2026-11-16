@@ -56,9 +56,6 @@ pub trait AuthStrategy: Send + Sync + std::fmt::Debug {
     async fn probe_identity(&self, _client: &crate::ApiClient) -> Result<Option<Identity>> {
         Ok(None)
     }
-
-    /// Human-readable identity label for diagnostics that don't perform a probe.
-    fn identity_label(&self) -> String;
 }
 
 /// Encode an `email:api_token` pair into the credential half of a `Basic`

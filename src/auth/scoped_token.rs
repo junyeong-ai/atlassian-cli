@@ -144,13 +144,6 @@ impl AuthStrategy for ScopedTokenStrategy {
     async fn probe_identity(&self, client: &crate::ApiClient) -> Result<Option<Identity>> {
         Ok(Some(probe_myself(client).await?))
     }
-
-    fn identity_label(&self) -> String {
-        format!(
-            "Scoped API token ({}, cloud: {})",
-            self.email, self.cloud_id
-        )
-    }
 }
 
 #[cfg(test)]

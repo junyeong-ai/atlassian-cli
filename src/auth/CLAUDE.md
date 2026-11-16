@@ -13,13 +13,12 @@ trait AuthStrategy {
     fn build_url(&self, service: Service, path: &str) -> String;
     fn cloud_id(&self) -> Option<&str>;
     async fn probe_identity(&self, &ApiClient) -> Result<Option<Identity>>;
-    fn identity_label(&self) -> String;
 }
 ```
 
 `probe_identity` returning `Ok(None)` means "this principal has no human
 identity to probe" (service_account) — it is **not** a credential failure.
-`config validate` renders the label instead of bailing.
+`config validate` reports `"user": null` instead of bailing.
 
 Every user-delegated method (basic, scoped_token, oauth) probes and reports
 the failure as-is. Do not add a status-based escape hatch for a token scoped

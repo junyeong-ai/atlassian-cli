@@ -59,23 +59,27 @@ fn config_management_uses_the_explicit_file() {
             .output()
             .unwrap()
     };
-    let output = run(&["config", "init"]);
-    assert!(output.status.success(), "{:?}", output.stderr);
+    let path_of = |output: std::process::Output| {
+        assert!(output.status.success(), "{:?}", output.stderr);
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["path"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(path_of(run(&["config", "init"])), custom.to_str().unwrap());
     assert!(custom.is_file());
     assert_eq!(std::fs::read_to_string(&project).unwrap(), "[default]\n");
     let original = std::fs::read(&custom).unwrap();
     assert!(!run(&["config", "init"]).status.success());
     assert_eq!(std::fs::read(&custom).unwrap(), original);
-    let output = run(&["config", "path"]);
-    assert!(output.status.success());
+    assert_eq!(path_of(run(&["config", "path"])), custom.to_str().unwrap());
+    let listed: serde_json::Value =
+        serde_json::from_slice(&run(&["config", "list"]).stdout).unwrap();
+    assert_eq!(listed["files"][0]["source"], "custom");
+    assert_eq!(listed["files"][0]["path"], custom.to_str().unwrap());
+    assert_eq!(listed["files"][1]["source"], "project");
     assert_eq!(
-        String::from_utf8(output.stdout).unwrap().trim(),
-        custom.to_str().unwrap()
-    );
-    let output = run(&["config", "path", "--global"]);
-    assert!(output.status.success());
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap().trim(),
+        path_of(run(&["config", "path", "--global"])),
         atlassian_cli::Config::global_config_path()
             .unwrap()
             .to_str()
@@ -90,6 +94,48 @@ fn config_management_uses_the_explicit_file() {
     let output = run(&["config", "list"]);
     assert_eq!(output.status.code(), Some(1));
     assert!(serde_json::from_slice::<serde_json::Value>(&output.stderr).is_ok());
+}
+
+/// `auth status` states what is configured and what is stored as JSON, and a
+/// store it cannot read is one of those facts rather than a failure.
+#[cfg(unix)]
+#[test]
+fn auth_status_reports_an_unreadable_session_as_data() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = tempfile::tempdir().unwrap();
+    let store = home.path().join(".config").join("atlassian-cli");
+    std::fs::create_dir_all(&store).unwrap();
+    let credentials = store.join("credentials.json");
+    std::fs::write(&credentials, "not a token document").unwrap();
+    let config = home.path().join("config.toml");
+    std::fs::write(
+        &config,
+        "[default]\ndomain = \"example.atlassian.net\"\n\n[default.auth]\nmethod = \"basic\"\n\
+         email = \"user@example.com\"\ntoken = \"token\"\n",
+    )
+    .unwrap();
+    for path in [&credentials, &config] {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_atlassian-cli"))
+        .current_dir(home.path())
+        .env_clear()
+        .env("HOME", home.path())
+        .env("ATLASSIAN_NO_KEYCHAIN", "1")
+        .args(["--config", config.to_str().unwrap(), "auth", "status"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let status: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(status["method"], "basic");
+    assert_eq!(status["keychain"], "forbidden");
+    assert_eq!(status["session"], serde_json::Value::Null);
+    assert!(status["sessionError"].is_string(), "{status}");
 }
 
 #[cfg(unix)]

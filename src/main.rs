@@ -68,9 +68,16 @@ async fn run(cli: Cli) -> Result<()> {
 
     match cli.command {
         Command::Config(cmd) => {
-            handle_config(cmd, config_path.as_ref(), profile.as_ref(), overrides).await
+            let result =
+                handle_config(cmd, config_path.as_ref(), profile.as_ref(), overrides).await?;
+            output_json(&result, cli.pretty);
+            Ok(())
         }
-        Command::Auth(cmd) => handle_auth(cmd, config_path, profile, overrides).await,
+        Command::Auth(cmd) => {
+            let result = handle_auth(cmd, config_path, profile, overrides).await?;
+            output_json(&result, cli.pretty);
+            Ok(())
+        }
         Command::Jira(cmd) => {
             let config =
                 atlassian_cli::Config::load(config_path.as_ref(), profile.as_ref(), overrides)?;
@@ -621,26 +628,22 @@ fn token_store(
 /// so finding nothing there says nothing about what the keychain still holds —
 /// and an entry that will not parse is still an entry to remove. `delete`
 /// clears both backends and reports one that refused.
-async fn clear_session(store: &atlassian_cli::auth::TokenStore, profile: &str) -> Result<()> {
+async fn clear_session(
+    store: &atlassian_cli::auth::TokenStore,
+    profile: &str,
+) -> Result<serde_json::Value> {
     let found = store.load().await;
     store.delete().await?;
-    match found {
-        Ok(Some(loaded)) => println!(
-            "✓ OAuth session cleared for profile '{profile}' ({})",
-            loaded.backend
-        ),
-        Ok(None) => println!("No readable session for profile '{profile}'."),
-        Err(e) => {
-            println!("Cleared profile '{profile}'; what was stored could not be read ({e:#}).")
-        }
-    }
-    if store.keychain() == atlassian_cli::auth::KeychainAccess::Forbidden {
-        println!(
-            "  ATLASSIAN_NO_KEYCHAIN is set, so the keychain was not touched. Unset it and \
-             re-run to clear a session stored there before the flag."
-        );
-    }
-    Ok(())
+    let (cleared, read_error) = match found {
+        Ok(session) => (session.map(|loaded| loaded.backend.as_str()), None),
+        Err(e) => (None, Some(format!("{e:#}"))),
+    };
+    Ok(serde_json::json!({
+        "profile": profile,
+        "cleared": cleared,
+        "readError": read_error,
+        "keychain": store.keychain().as_str(),
+    }))
 }
 
 /// A path as JSON. `Path` serializes only when it is UTF-8 and `json!` panics
@@ -724,95 +727,30 @@ async fn handle_config(
     config_path: Option<&PathBuf>,
     profile: Option<&String>,
     overrides: atlassian_cli::CliOverrides,
-) -> Result<()> {
+) -> Result<serde_json::Value> {
     match cmd.subcommand {
         ConfigSubcommand::Init { global } => {
             let path = match config_path.filter(|_| !global) {
                 Some(path) => atlassian_cli::Config::init_config_at(path)?,
                 None => atlassian_cli::Config::init_config(global)?,
             };
-            println!("Created config file: {:?}", path);
-            println!("Edit it and add your credentials.");
-            Ok(())
+            Ok(serde_json::json!({ "path": display_path(&path) }))
         }
         ConfigSubcommand::Show => {
             // Respect --config, --profile, and CLI overrides for accurate "resolved" view.
             let config =
                 atlassian_cli::Config::load_without_validation(config_path, profile, overrides)?;
+            // In the syntax the profile is written in, so it reads as the file would.
             print!("{}", config.redacted_toml()?);
-            Ok(())
+            Ok(serde_json::Value::Null)
         }
-        ConfigSubcommand::List => {
-            println!("Configuration files (in precedence order):\n");
-
-            let mut profiles: Vec<String> = Vec::new();
-            // Raised, not warned: a file that will not parse still names
-            // profiles, and printing the list without them says those profiles
-            // do not exist. The header is already out by then — the exit code
-            // is what says the listing is incomplete.
-            let mut collect = |path: &std::path::Path| -> Result<()> {
-                for name in atlassian_cli::Config::profile_names(path)? {
-                    if !profiles.contains(&name) {
-                        profiles.push(name);
-                    }
-                }
-                Ok(())
-            };
-
-            if let Some(custom) = config_path {
-                let there = atlassian_cli::path_present(custom)?;
-                println!("Custom:  {:?} {}", custom, if there { "✓" } else { "✗" });
-                collect(custom)?;
-            }
-            if let Some(project) = atlassian_cli::Config::project_config_path()? {
-                println!("Project: {:?} ✓", project);
-                collect(&project)?;
-            } else {
-                println!("Project: (none)");
-            }
-            if let Some(global) = atlassian_cli::Config::global_config_path() {
-                let there = atlassian_cli::path_present(&global)?;
-                println!("Global:  {:?} {}", global, if there { "✓" } else { "✗" });
-                if there {
-                    collect(&global)?;
-                }
-            }
-
-            println!("\nProfiles (use --profile <name>):");
-            for name in &profiles {
-                println!("  {name}");
-            }
-
-            println!("\nEnvironment variables:");
-            let env_vars = [
-                ("ATLASSIAN_DOMAIN", false),
-                ("ATLASSIAN_AUTH_METHOD", false),
-                ("ATLASSIAN_EMAIL", false),
-                ("ATLASSIAN_API_TOKEN", true),
-                ("ATLASSIAN_CLIENT_ID", false),
-                ("ATLASSIAN_CLIENT_SECRET", true),
-                ("ATLASSIAN_CLOUD_ID", false),
-            ];
-            for (key, mask) in env_vars {
-                let value = std::env::var(key)
-                    .ok()
-                    .map(|v| if mask { "***".to_string() } else { v });
-                println!(
-                    "  {}: {}",
-                    key,
-                    value.unwrap_or_else(|| "(not set)".to_string())
-                );
-            }
-
-            Ok(())
-        }
+        ConfigSubcommand::List => config_list(config_path.map(PathBuf::as_path)),
         ConfigSubcommand::Path { global } => {
             let path = atlassian_cli::Config::active_config_path(
                 config_path.map(PathBuf::as_path),
                 global,
             )?;
-            println!("{}", path.display());
-            Ok(())
+            Ok(serde_json::json!({ "path": display_path(&path) }))
         }
         ConfigSubcommand::Edit { global } => {
             let path = atlassian_cli::Config::active_config_path(
@@ -850,8 +788,7 @@ async fn handle_config(
                 anyhow::bail!("Failed to open editor");
             }
 
-            println!("Config file edited: {:?}", path);
-            Ok(())
+            Ok(serde_json::json!({ "path": display_path(&path) }))
         }
         ConfigSubcommand::Validate => {
             let config = atlassian_cli::Config::load(config_path, profile, overrides)?;
@@ -860,40 +797,90 @@ async fn handle_config(
             // (token fetch, cloud_id discovery, stored-token load). Any
             // failure here means credentials are invalid.
             let client = atlassian_cli::ApiClient::new(config).await?;
-            let method = client.strategy().method();
-            let identity = client.strategy().probe_identity(&client).await?;
-
-            println!("✓ {} credentials valid", method);
-            if let Some(domain) = client.config().domain.as_ref() {
-                println!("  Domain: {}", domain);
-            }
-            if let Some(cid) = client.cloud_id() {
-                println!("  Cloud ID: {}", cid);
-            }
-            match identity {
-                Some(id) => {
-                    println!("  User: {}", id.display_name);
-                    if let Some(email) = id.email {
-                        println!("  Email: {}", email);
-                    }
-                }
-                None => {
-                    // Non-probing principal (e.g. service_account) — credentials
-                    // are already verified via the strategy's own check.
-                    println!("  Identity: {}", client.strategy().identity_label());
-                    println!(
-                        "  Note: individual operations still require matching OAuth scopes and product permissions."
-                    );
-                }
-            }
-            Ok(())
+            // `None` is a principal with no human identity, such as a service
+            // account, whose credentials the client check has already proven.
+            let user = client.strategy().probe_identity(&client).await?;
+            Ok(serde_json::json!({
+                "profile": client.config().profile,
+                "method": client.strategy().method().as_str(),
+                "domain": client.config().domain,
+                "cloudId": client.cloud_id(),
+                "user": user.map(|user| serde_json::json!({
+                    "displayName": user.display_name,
+                    "email": user.email,
+                })),
+            }))
         }
     }
 }
 
+/// The files a load reads, highest precedence first, the profiles they
+/// define, and the environment variables that override them.
+fn config_list(custom: Option<&std::path::Path>) -> Result<serde_json::Value> {
+    let mut files: Vec<(&str, PathBuf, bool)> = Vec::new();
+    // Named explicitly, so a file that is not there fails the listing below,
+    // as it fails every command that loads it.
+    if let Some(path) = custom {
+        files.push(("custom", path.to_path_buf(), true));
+    }
+    if let Some(project) = atlassian_cli::Config::project_config_path()? {
+        files.push(("project", project, true));
+    }
+    if let Some(global) = atlassian_cli::Config::global_config_path() {
+        let exists = atlassian_cli::path_present(&global)?;
+        files.push(("global", global, exists));
+    }
+
+    // Raised, not skipped: a file that will not parse still names profiles,
+    // and a list without them says those profiles do not exist.
+    let mut profiles: Vec<String> = Vec::new();
+    for (_, path, exists) in &files {
+        if !exists {
+            continue;
+        }
+        for name in atlassian_cli::Config::profile_names(path)? {
+            if !profiles.contains(&name) {
+                profiles.push(name);
+            }
+        }
+    }
+
+    let environment: serde_json::Map<String, serde_json::Value> = [
+        ("ATLASSIAN_DOMAIN", false),
+        ("ATLASSIAN_AUTH_METHOD", false),
+        ("ATLASSIAN_EMAIL", false),
+        ("ATLASSIAN_API_TOKEN", true),
+        ("ATLASSIAN_CLIENT_ID", false),
+        ("ATLASSIAN_CLIENT_SECRET", true),
+        ("ATLASSIAN_CLOUD_ID", false),
+    ]
+    .into_iter()
+    .map(|(name, secret)| {
+        let value = std::env::var(name)
+            .ok()
+            .map(|value| if secret { "<redacted>".into() } else { value });
+        (name.to_string(), value.into())
+    })
+    .collect();
+
+    Ok(serde_json::json!({
+        "files": files
+            .iter()
+            .map(|(source, path, exists)| serde_json::json!({
+                "source": source,
+                "path": display_path(path),
+                "exists": exists,
+            }))
+            .collect::<Vec<_>>(),
+        "profiles": profiles,
+        "environment": environment,
+    }))
+}
+
 fn output_json(value: &serde_json::Value, pretty: bool) {
-    // Null is a sentinel used by streaming commands that have already
-    // written to stdout — emitting "null" would corrupt that output.
+    // Null is the sentinel of a command that has already written its result
+    // to stdout, a stream or `config show`'s TOML; emitting "null" would
+    // corrupt that output.
     if value.is_null() {
         return;
     }
@@ -909,8 +896,8 @@ async fn handle_auth(
     config_path: Option<PathBuf>,
     profile: Option<String>,
     overrides: atlassian_cli::CliOverrides,
-) -> Result<()> {
-    use atlassian_cli::auth::{AuthMethod, OAuthStrategy, TokenStore};
+) -> Result<serde_json::Value> {
+    use atlassian_cli::auth::{OAuthStrategy, TokenStore};
 
     match cmd.subcommand {
         AuthSubcommand::Login { no_browser } => {
@@ -936,19 +923,20 @@ async fn handle_auth(
             )
             .await?;
 
-            println!("✓ Logged in (profile: {})", config.profile);
-            if let Some(cid) = outcome.tokens.cloud_id.as_deref() {
-                println!("  Cloud ID: {}", cid);
-            }
-            if !outcome.authorized_sites.is_empty() {
-                println!("  Accessible sites:");
-                for site in &outcome.authorized_sites {
-                    let name = site.name.as_deref().unwrap_or("");
-                    println!("    - {} ({}) {}", site.url, site.id, name);
-                }
-            }
-            println!("  Scopes: {}", outcome.tokens.scopes.join(", "));
-            Ok(())
+            Ok(serde_json::json!({
+                "profile": config.profile,
+                "cloudId": outcome.tokens.cloud_id,
+                "sites": outcome
+                    .authorized_sites
+                    .iter()
+                    .map(|site| serde_json::json!({
+                        "id": site.id,
+                        "url": site.url,
+                        "name": site.name,
+                    }))
+                    .collect::<Vec<_>>(),
+                "scopes": outcome.tokens.scopes,
+            }))
         }
         AuthSubcommand::Logout => {
             // Clearing is driven by what is stored, not by the configured
@@ -959,8 +947,7 @@ async fn handle_auth(
                 profile.as_ref(),
                 overrides,
             )?;
-            clear_session(&TokenStore::new(&config.profile)?, &config.profile).await?;
-            Ok(())
+            clear_session(&TokenStore::new(&config.profile)?, &config.profile).await
         }
         AuthSubcommand::Status => {
             // The configured method and the stored session are independent
@@ -972,107 +959,21 @@ async fn handle_auth(
                 profile.as_ref(),
                 overrides,
             )?;
-            let method = config.auth.as_ref().map(|a| a.method());
-            // Reported, not raised, and not in place of the rest: saying what
-            // is configured and what is stored is this command's whole job, and
-            // a store that would not answer is one of those answers — for a
-            // profile whose credentials come from config it is not even the
-            // interesting one. `self status` carries the same fact as data.
             let store = TokenStore::new(&config.profile)?;
-            let keychain_unread =
-                store.keychain() == atlassian_cli::auth::KeychainAccess::Forbidden;
-            let (session, unreadable) = match store.load().await {
+            // Reported, not raised, as `self status` reports what it cannot
+            // read: a store that would not answer is one of the facts this
+            // command exists to state.
+            let (session, session_error) = match store.load().await {
                 Ok(session) => (session, None),
-                Err(e) => (None, Some(e)),
+                Err(e) => (None, Some(format!("{e:#}"))),
             };
-
-            // Above the match, so it holds for every arm: under the opt-out the
-            // keychain was not consulted, and a session stored there before the
-            // flag is one this report neither read nor cleared — including
-            // where a file-backed session is found and printed below.
-            if keychain_unread {
-                println!(
-                    "ATLASSIAN_NO_KEYCHAIN is set, so the keychain was not consulted; a session \
-                     stored there before the flag is untouched — unset it for one run to see or \
-                     clear what it holds."
-                );
-            }
-
-            match (method, &session) {
-                (Some(AuthMethod::OAuth), Some(loaded)) => {
-                    let t = &loaded.tokens;
-                    println!("✓ Logged in (profile: {})", config.profile);
-                    println!("  Storage: {}", loaded.backend);
-                    if let Some(cid) = &t.cloud_id {
-                        println!("  Cloud ID: {}", cid);
-                    }
-                    println!("  Scopes: {}", t.scopes.join(", "));
-                    let delta = t.seconds_until_expiry();
-                    if delta > 0 {
-                        println!("  Access token expires in: {}s ({}m)", delta, delta / 60);
-                    } else {
-                        println!("  Access token: EXPIRED ({}s ago)", -delta);
-                    }
-                    println!(
-                        "  Refresh token: {}",
-                        if t.refresh_token.is_some() {
-                            "present"
-                        } else {
-                            "(none — re-login on expiry)"
-                        }
-                    );
-                }
-                (Some(AuthMethod::OAuth), None) => match &unreadable {
-                    Some(e) => println!("Session unknown (profile: {}): {e}", config.profile),
-                    // Not "not logged in" under the opt-out: the note above has
-                    // already said the keychain went unread, and a session there
-                    // is what `auth login` would shadow rather than reach.
-                    None if keychain_unread => println!(
-                        "No session in the file store (profile: {}).",
-                        config.profile
-                    ),
-                    None => println!(
-                        "Not logged in (profile: {}). Run `atlassian-cli auth login`.",
-                        config.profile
-                    ),
-                },
-                (Some(method), _) => {
-                    println!(
-                        "Profile '{}' uses '{}' auth — credentials are read from config/env, \
-                         not a stored session.",
-                        config.profile, method
-                    );
-                }
-                (None, _) => println!("Profile '{}' has no auth configured.", config.profile),
-            }
-
-            // A session left behind by a previous OAuth configuration is a live
-            // credential the current method never consults. Surface it so it can
-            // be cleared rather than lingering unnoticed in the keychain — and
-            // say when that could not be checked at all, because "no stale
-            // session" is the reading a store nothing read must not produce.
-            if !matches!(method, Some(AuthMethod::OAuth)) {
-                if let Some(loaded) = &session {
-                    println!(
-                        "  Stale OAuth session present ({}) from an earlier configuration — \
-                         run `atlassian-cli auth logout` to clear it.",
-                        loaded.backend
-                    );
-                } else if unreadable.is_some() {
-                    println!(
-                        "  Whether a session is stored could not be read — see the error below."
-                    );
-                }
-            }
-
-            // The report prints first and in full: what could be established is
-            // still the answer to what was asked, and it says on stdout where
-            // it stops. What could not is the error — and the exit code, which
-            // is the only part of a prose report a script can read.
-            match unreadable {
-                Some(e) => Err(e),
-                None => Ok(()),
-            }
+            Ok(serde_json::json!({
+                "profile": config.profile,
+                "method": config.auth.as_ref().map(|auth| auth.method().as_str()),
+                "keychain": store.keychain().as_str(),
+                "session": session.as_ref().map(session_report),
+                "sessionError": session_error,
+            }))
         }
         AuthSubcommand::Refresh => {
             let config =
@@ -1086,14 +987,24 @@ async fn handle_auth(
             )
             .await?;
             let refreshed = strategy.force_refresh().await?;
-            println!("✓ Token refreshed (profile: {})", config.profile);
-            println!(
-                "  Access token now expires in: {}s",
-                refreshed.seconds_until_expiry()
-            );
-            Ok(())
+            Ok(serde_json::json!({
+                "profile": config.profile,
+                "expiresInSeconds": refreshed.seconds_until_expiry(),
+            }))
         }
     }
+}
+
+/// A stored OAuth session, its secrets aside.
+fn session_report(loaded: &atlassian_cli::auth::LoadedTokens) -> serde_json::Value {
+    let tokens = &loaded.tokens;
+    serde_json::json!({
+        "storage": loaded.backend.as_str(),
+        "cloudId": tokens.cloud_id,
+        "scopes": tokens.scopes,
+        "expiresInSeconds": tokens.seconds_until_expiry(),
+        "refreshToken": tokens.refresh_token.is_some(),
+    })
 }
 
 #[cfg(test)]
@@ -1756,7 +1667,7 @@ mod tests {
         assert!(
             left.is_none(),
             "reported cleared, still readable from {}",
-            left.unwrap().backend
+            left.unwrap().backend.as_str()
         );
     }
 
@@ -1931,7 +1842,9 @@ mod tests {
             .set_password("not a token document")
             .unwrap();
 
-        clear_session(&store, "logout-corrupt").await.unwrap();
+        let report = clear_session(&store, "logout-corrupt").await.unwrap();
+        assert_eq!(report["cleared"], serde_json::Value::Null);
+        assert!(report["readError"].is_string(), "{report}");
 
         assert!(matches!(
             keyring_core::Entry::new("atlassian-cli", "logout-corrupt")

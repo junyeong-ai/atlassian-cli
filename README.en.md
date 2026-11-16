@@ -85,7 +85,7 @@ atlassian-cli confluence delete 123456 --yes           # moves the page to the t
 
 ### Output for scripts and agents
 
-- Results of `jira`, `confluence` and `self` go to stdout as JSON, and lists use an `items` envelope. Root options such as `--pretty`, `--profile` and `--config` precede the subcommand.
+- Every command's result goes to stdout as JSON, except `config show` (TOML) and `completions` (a shell script), and lists use an `items` envelope. Root options such as `--pretty`, `--profile` and `--config` precede the subcommand.
 - `--format` names the rich-text representation: `adf` for Jira or `storage` for Confluence by default, or `markdown`, which converts read content inside the JSON envelope and write bodies before they are sent. `html` remains an alias of the default.
 - Body arguments take `-` to read standard input, and refuse it empty. A heredoc with a quoted delimiter (`<<'EOF'`) needs no escaping and has no argument-size limit.
 - A search page carries `nextPageToken`, `null` on the last page, which `--page-token` continues from. `--all` follows every page; `--all --stream` writes JSONL as pages arrive and reports progress on stderr. A Confluence search returns matches with their excerpt and URL; bodies come with `--format markdown` or `--expand body.storage`.
@@ -181,6 +181,8 @@ atlassian-cli auth status      # expiry, scopes, storage backend
 atlassian-cli auth refresh     # force a refresh
 atlassian-cli auth logout      # clear the stored session
 ```
+
+`auth status` reports the configured `method` and the stored `session` side by side. A session beside another method is left from an earlier OAuth login, and `auth logout` clears it.
 
 `auth login` waits up to five minutes for the browser sign-in. `--no-browser` only prints the URL: the browser that signs in must still reach `127.0.0.1:8976` (the profile's `redirect_port`) on the machine running the CLI. On a remote host reached over SSH, forward the port with `ssh -L 8976:127.0.0.1:8976 <host>` before signing in.
 
@@ -278,7 +280,7 @@ For the selected profile, the highest-priority file that defines an `[auth]` sec
 
 - `config path` and `config edit` target the `--config` file when given, and the global file with `--global`.
 - `atlassian-cli --config <file> config init` writes a starter there and never overwrites an existing file.
-- `config list` shows the files read, including an explicit one, and which environment variables are set.
+- `config list` returns the files read in precedence order, including an explicit one, the profiles they define and the authentication environment variables that are set.
 - `config show` prints the resolved profile as TOML with secrets masked.
 - `EDITOR` is an executable followed by arguments in POSIX quoting on every platform, for example `code --wait`. Quote a path containing spaces or backslashes inside the value: `'C:\Program Files\Microsoft VS Code\Code.exe' --wait`.
 

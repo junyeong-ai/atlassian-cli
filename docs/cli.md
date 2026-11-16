@@ -1643,8 +1643,8 @@ Usage: atlassian-cli config <COMMAND>
 
 Commands:
   init      Create a starter config at --config, the global or project location
-  show      Print the resolved config (secrets masked)
-  list      List config file paths and environment variable status
+  show      Print the resolved profile as TOML (secrets masked)
+  list      List the config files in precedence order, their profiles and the auth environment variables
   edit      Open the active config file in $EDITOR
   path      Print the path of the active config file
   validate  Validate configured credentials against Atlassian auth/API endpoints
@@ -1673,7 +1673,7 @@ Options:
 ## `atlassian-cli config show`
 
 ```text
-Print the resolved config (secrets masked)
+Print the resolved profile as TOML (secrets masked)
 
 Usage: atlassian-cli config show
 
@@ -1685,7 +1685,7 @@ Options:
 ## `atlassian-cli config list`
 
 ```text
-List config file paths and environment variable status
+List the config files in precedence order, their profiles and the auth environment variables
 
 Usage: atlassian-cli config list
 
@@ -1746,7 +1746,7 @@ Usage: atlassian-cli auth <COMMAND>
 Commands:
   login    Start the OAuth 3LO flow and persist tokens for the active profile
   logout   Discard stored OAuth tokens for the active profile
-  status   Show the active profile's stored token status (identity, expiry, scopes)
+  status   Report the configured auth method and the stored OAuth session (storage, expiry, scopes)
   refresh  Force-refresh the access_token using the stored refresh_token
   help     Print this message or the help of the given subcommand(s)
 
@@ -1785,7 +1785,7 @@ Options:
 ## `atlassian-cli auth status`
 
 ```text
-Show the active profile's stored token status (identity, expiry, scopes)
+Report the configured auth method and the stored OAuth session (storage, expiry, scopes)
 
 Usage: atlassian-cli auth status
 

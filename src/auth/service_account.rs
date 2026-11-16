@@ -159,7 +159,6 @@ impl ServiceAccountTokenManager {
 #[derive(Debug)]
 pub struct ServiceAccountStrategy {
     cloud_id: String,
-    client_id: String,
     token_manager: ServiceAccountTokenManager,
 }
 
@@ -170,7 +169,7 @@ impl ServiceAccountStrategy {
         cloud_id: Option<String>,
         http: &reqwest::Client,
     ) -> Result<Self> {
-        let token_manager = ServiceAccountTokenManager::new(client_id.clone(), client_secret);
+        let token_manager = ServiceAccountTokenManager::new(client_id, client_secret);
         // Fail fast on bad credentials; the manager caches the token for reuse.
         let access_token = token_manager.access_token(http).await?;
         let resolved_cloud_id = match cloud_id {
@@ -183,7 +182,6 @@ impl ServiceAccountStrategy {
         crate::config::validate_cloud_id(&resolved_cloud_id)?;
         Ok(Self {
             cloud_id: resolved_cloud_id,
-            client_id,
             token_manager,
         })
     }
@@ -211,14 +209,6 @@ impl AuthStrategy for ServiceAccountStrategy {
     // probe_identity intentionally falls back to the default impl: service
     // accounts do not have a /myself identity and typically lack the
     // read:jira-user scope.
-
-    fn identity_label(&self) -> String {
-        let preview: String = self.client_id.chars().take(8).collect();
-        format!(
-            "Service Account (client_id: {}…, cloud: {})",
-            preview, self.cloud_id
-        )
-    }
 }
 
 #[cfg(test)]
@@ -228,7 +218,6 @@ mod tests {
     fn fixture() -> ServiceAccountStrategy {
         ServiceAccountStrategy {
             cloud_id: "cloud-abc-123".into(),
-            client_id: "cid".into(),
             token_manager: ServiceAccountTokenManager::new("cid".into(), "secret".into()),
         }
     }

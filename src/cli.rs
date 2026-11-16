@@ -150,7 +150,7 @@ pub(crate) enum AuthSubcommand {
     },
     /// Discard stored OAuth tokens for the active profile.
     Logout,
-    /// Show the active profile's stored token status (identity, expiry, scopes).
+    /// Report the configured auth method and the stored OAuth session (storage, expiry, scopes).
     Status,
     /// Force-refresh the access_token using the stored refresh_token.
     Refresh,
@@ -813,9 +813,9 @@ pub(crate) enum ConfigSubcommand {
         )]
         global: bool,
     },
-    /// Print the resolved config (secrets masked).
+    /// Print the resolved profile as TOML (secrets masked).
     Show,
-    /// List config file paths and environment variable status.
+    /// List the config files in precedence order, their profiles and the auth environment variables.
     List,
     /// Open the active config file in $EDITOR.
     Edit {

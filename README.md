@@ -85,7 +85,7 @@ atlassian-cli confluence delete 123456 --yes           # 페이지를 휴지통�
 
 ### 스크립트와 에이전트를 위한 출력
 
-- `jira`, `confluence`, `self` 명령의 결과는 stdout에 JSON으로 출력되고, 목록은 `items`로 감쌉니다. `--pretty`, `--profile`, `--config` 같은 루트 옵션은 하위 명령 앞에 둡니다.
+- 모든 명령의 결과는 stdout에 JSON으로 출력되며, `config show`(TOML)와 `completions`(셸 스크립트)만 예외입니다. 목록은 `items`로 감쌉니다. `--pretty`, `--profile`, `--config` 같은 루트 옵션은 하위 명령 앞에 둡니다.
 - `--format`은 서식 있는 본문의 표현을 정합니다. 기본값은 Jira `adf`, Confluence `storage`이며, `markdown`은 읽을 때 JSON 출력 안의 본문 필드를 변환하고 쓸 때 본문을 변환해 보냅니다. `html`은 기본값의 별칭으로 남아 있습니다.
 - 본문 인자에 `-`를 주면 표준 입력에서 읽으며, 빈 입력은 거부합니다. 구분자를 따옴표로 감싼 heredoc(`<<'EOF'`)은 이스케이프가 필요 없고 인자 크기 제한도 받지 않습니다.
 - 검색 결과 페이지에는 `nextPageToken`이 있으며 마지막 페이지에서는 `null`입니다. 이 값을 `--page-token`으로 넘기면 다음 페이지를 이어 받습니다. `--all`은 모든 페이지를 가져오고, `--all --stream`은 페이지가 도착하는 대로 JSONL을 쓰며 진행 상황을 stderr에 보고합니다. Confluence 검색은 일치한 문서를 발췌와 URL과 함께 반환하며, 본문은 `--format markdown`이나 `--expand body.storage`를 줄 때 포함됩니다.
@@ -181,6 +181,8 @@ atlassian-cli auth status      # 만료·scope·저장소
 atlassian-cli auth refresh     # 강제 갱신
 atlassian-cli auth logout      # 저장된 세션 삭제
 ```
+
+`auth status`는 설정된 인증 방식(`method`)과 저장된 세션(`session`)을 나란히 보고합니다. 다른 방식 옆에 남아 있는 세션은 이전 OAuth 로그인이 남긴 것이며, `auth logout`으로 지웁니다.
 
 `auth login`은 브라우저 로그인을 최대 5분 기다립니다. `--no-browser`는 URL을 출력할 뿐이며, 로그인을 마친 브라우저는 CLI가 실행되는 기기의 `127.0.0.1:8976`(프로파일의 `redirect_port`)에 접속할 수 있어야 합니다. SSH로 접속한 원격 기기에서는 `ssh -L 8976:127.0.0.1:8976 <host>`로 포트를 전달한 뒤 로그인합니다.
 
@@ -278,7 +280,7 @@ token = "..."
 
 - `config path`와 `config edit`는 `--config`가 있으면 그 파일을, `--global`이 있으면 전역 파일을 대상으로 합니다.
 - `atlassian-cli --config <파일> config init`은 그 경로에 시작 파일을 쓰며 기존 파일을 덮어쓰지 않습니다.
-- `config list`는 읽은 파일(명시한 파일 포함)과 설정된 환경 변수를 보여 줍니다.
+- `config list`는 읽은 파일(명시한 파일 포함)을 우선순위 순서로, 그 파일들이 정의한 프로파일, 설정된 인증 환경 변수와 함께 반환합니다.
 - `config show`는 해석된 프로파일을 비밀 값을 가린 TOML로 출력합니다.
 - `EDITOR`는 모든 플랫폼에서 POSIX 인용 규칙을 따르는 실행 파일과 인자입니다(예: `code --wait`). 공백이나 역슬래시가 있는 경로는 값 안에서 따옴표로 감쌉니다: `'C:\Program Files\Microsoft VS Code\Code.exe' --wait`.
 

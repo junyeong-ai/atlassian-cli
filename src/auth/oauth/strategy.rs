@@ -51,7 +51,6 @@ impl OAuthParams {
 #[derive(Debug)]
 pub struct OAuthStrategy {
     params: OAuthParams,
-    profile: String,
     /// Cached at construction. Atlassian does not rotate cloud_id; even on
     /// refresh we keep the original site so `build_url` (sync method) can
     /// read it without locking the token mutex.
@@ -122,7 +121,7 @@ impl OAuthStrategy {
         tracing::debug!(
             "Saved OAuth tokens for profile '{}' via {}",
             store.profile(),
-            backend
+            backend.as_str()
         );
         Ok(outcome)
     }
@@ -178,7 +177,6 @@ impl OAuthStrategy {
         }
         Ok(Self {
             params,
-            profile,
             cloud_id,
             store,
             oauth_http: crate::client::http_client(timeout)?,
@@ -254,13 +252,6 @@ impl AuthStrategy for OAuthStrategy {
 
     async fn probe_identity(&self, client: &crate::ApiClient) -> Result<Option<Identity>> {
         Ok(Some(probe_myself(client).await?))
-    }
-
-    fn identity_label(&self) -> String {
-        format!(
-            "OAuth user (profile: {}, cloud: {})",
-            self.profile, self.cloud_id
-        )
     }
 }
 

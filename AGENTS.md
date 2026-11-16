@@ -71,6 +71,8 @@ only where their contracts are the same.
   refuse it empty. Search streaming emits JSONL without a trailing
   summary; progress and diagnostics use stderr. Retain search results only in
   non-streaming mode; streaming keeps a cumulative count and cursor history.
+- Every command writes its result to stdout as JSON, except `config show`
+  (the resolved profile as TOML) and `completions` (a shell script).
 - Runtime failures emit one JSON error object to stderr; an API failure
   carries Atlassian's JSON error body as `details`, and a text body stays in
   the message, cut at 1000 characters. Clap usage errors use text and exit 2. Exit codes: 1 generic, 3 auth/permission or no usable

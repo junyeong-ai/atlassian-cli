@@ -778,10 +778,6 @@ mod tests {
             fn build_url(&self, _service: Service, path: &str) -> String {
                 format!("{}{}", self.base_url, path)
             }
-
-            fn identity_label(&self) -> String {
-                "counting".to_string()
-            }
         }
 
         let server = MockServer::start().await;

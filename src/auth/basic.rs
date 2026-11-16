@@ -68,10 +68,6 @@ impl AuthStrategy for BasicStrategy {
     async fn probe_identity(&self, client: &crate::ApiClient) -> Result<Option<Identity>> {
         Ok(Some(probe_myself(client).await?))
     }
-
-    fn identity_label(&self) -> String {
-        format!("Basic auth ({})", self.email)
-    }
 }
 
 #[cfg(test)]

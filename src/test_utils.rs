@@ -109,10 +109,6 @@ impl AuthStrategy for MockAuthStrategy {
     fn build_url(&self, _service: Service, path: &str) -> String {
         format!("{}{}", self.base_url, path)
     }
-
-    fn identity_label(&self) -> String {
-        "mock".to_string()
-    }
 }
 
 /// The production HTTP client, for a test that hands one to a strategy.

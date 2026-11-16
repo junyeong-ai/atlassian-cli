@@ -38,6 +38,13 @@ pub enum KeychainAccess {
 }
 
 impl KeychainAccess {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            KeychainAccess::Allowed => "allowed",
+            KeychainAccess::Forbidden => "forbidden",
+        }
+    }
+
     /// What this machine allows.
     ///
     /// On a desktop OS the keychain prompts with a GUI dialog that blocks
@@ -149,11 +156,11 @@ pub enum TokenStorageBackend {
     File,
 }
 
-impl std::fmt::Display for TokenStorageBackend {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl TokenStorageBackend {
+    pub fn as_str(self) -> &'static str {
         match self {
-            TokenStorageBackend::Keyring => f.write_str("OS keychain"),
-            TokenStorageBackend::File => f.write_str("file"),
+            TokenStorageBackend::Keyring => "keyring",
+            TokenStorageBackend::File => "file",
         }
     }
 }
@@ -941,12 +948,6 @@ mod tests {
         t.expires_at_unix = now + 500;
         let delta = t.seconds_until_expiry();
         assert!((498..=500).contains(&delta), "got {}", delta);
-    }
-
-    #[test]
-    fn backend_display_is_human() {
-        assert_eq!(format!("{}", TokenStorageBackend::Keyring), "OS keychain");
-        assert_eq!(format!("{}", TokenStorageBackend::File), "file");
     }
 
     #[test]
