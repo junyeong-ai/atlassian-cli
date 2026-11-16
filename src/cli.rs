@@ -462,6 +462,9 @@ pub(crate) enum UserAction {
 
 #[derive(Subcommand)]
 pub(crate) enum ListAction {
+    /// List fields with the ids `--fields`, `create` and `update` take
+    /// (custom fields as customfield_NNNNN) and their JQL names
+    Fields,
     /// List available issue types
     Types,
     /// List available priorities

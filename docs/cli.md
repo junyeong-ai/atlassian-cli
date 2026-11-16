@@ -751,11 +751,24 @@ Query global metadata (issue types, priorities, statuses, labels)
 Usage: atlassian-cli jira list <COMMAND>
 
 Commands:
+  fields      List fields with the ids `--fields`, `create` and `update` take (custom fields as customfield_NNNNN) and their JQL names
   types       List available issue types
   priorities  List available priorities
   statuses    List available statuses
   labels      List available labels
   help        Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+```
+
+## `atlassian-cli jira list fields`
+
+```text
+List fields with the ids `--fields`, `create` and `update` take (custom fields as customfield_NNNNN) and their JQL names
+
+Usage: atlassian-cli jira list fields
 
 Options:
   -h, --help

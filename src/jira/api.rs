@@ -284,6 +284,19 @@ pub async fn get_issue_types(client: &ApiClient) -> Result<Value> {
     ))
 }
 
+/// Every field the caller can see, system and custom, with the id that
+/// `--fields`, `create` and `update` take and the names JQL accepts for it.
+pub async fn get_fields(client: &ApiClient) -> Result<Value> {
+    let request = client.get(Service::Jira, "/rest/api/3/field").await?;
+    let response = client.execute("get fields", request).await?;
+
+    let data: Value = response.json().await?;
+    Ok(list_envelope(
+        require_array(&data, WHOLE_BODY, "get fields")?,
+        client,
+    ))
+}
+
 /// `/priority` is deprecated in favour of the paginated `/priority/search`, but
 /// that endpoint requires the admin scope `manage:jira-configuration` under
 /// OAuth where this one takes `read:jira-work`, so moving would cost OAuth users

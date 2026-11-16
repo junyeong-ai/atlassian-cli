@@ -2046,6 +2046,26 @@ async fn integ_remove_watcher_passes_account_id_as_query() {
 }
 
 #[tokio::test]
+async fn integ_get_fields_lists_each_field_with_its_id() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            { "id": "summary", "name": "Summary", "custom": false },
+            { "id": "customfield_10020", "name": "Sprint", "custom": true,
+              "clauseNames": ["cf[10020]", "Sprint"] }
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = mock_client(server.uri());
+    let result = get_fields(&client).await.unwrap();
+    assert_eq!(result["items"][1]["id"], "customfield_10020");
+    assert_eq!(result["items"][1]["name"], "Sprint");
+}
+
+#[tokio::test]
 async fn integ_get_statuses_hits_public_endpoint() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
