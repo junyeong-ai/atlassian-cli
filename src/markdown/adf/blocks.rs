@@ -1,8 +1,9 @@
 use super::MAX_DEPTH;
-use super::inline::convert_inline_nodes;
+use super::inline::{convert_inline_node, convert_inline_nodes};
+use crate::markdown::common::fenced_code_block;
 use serde_json::Value;
 
-pub fn convert_block_node(node: &Value, depth: usize, list_depth: usize) -> Option<String> {
+pub fn convert_block_node(node: &Value, depth: usize) -> Option<String> {
     if depth > MAX_DEPTH {
         return Some("[Content truncated: max depth exceeded]".into());
     }
@@ -12,25 +13,25 @@ pub fn convert_block_node(node: &Value, depth: usize, list_depth: usize) -> Opti
     match node_type {
         "paragraph" => convert_paragraph(node),
         "heading" => convert_heading(node),
-        "bulletList" => convert_bullet_list(node, depth, list_depth),
-        "orderedList" => convert_ordered_list(node, depth, list_depth),
-        "listItem" => convert_list_item(node, depth, list_depth),
+        "bulletList" => convert_bullet_list(node, depth),
+        "orderedList" => convert_ordered_list(node, depth),
+        "listItem" => convert_list_item(node, depth),
         "codeBlock" => convert_code_block(node),
-        "blockquote" => convert_blockquote(node, depth),
+        "blockquote" => non_empty(quote(&convert_children(node, depth))),
         "rule" => Some("---".into()),
         "panel" => convert_panel(node, depth),
         "table" => convert_table(node, depth),
         "mediaSingle" | "mediaGroup" => convert_media(node),
         "expand" | "nestedExpand" => convert_expand(node, depth),
         "taskList" => convert_task_list(node, depth),
-        "taskItem" => convert_task_item(node, depth),
-        "decisionList" => convert_decision_list(node, depth),
-        "decisionItem" => convert_decision_item(node, depth),
-        "layoutSection" => convert_layout_section(node, depth),
-        "layoutColumn" => convert_layout_column(node, depth),
+        "taskItem" => convert_checked_item(node, depth, "state", "DONE"),
+        "decisionList" => non_empty(child_blocks(node, depth).join("\n")),
+        "decisionItem" => convert_checked_item(node, depth, "state", "DECIDED"),
+        "layoutSection" => non_empty(child_blocks(node, depth).join("\n\n---\n\n")),
+        "layoutColumn" => non_empty(convert_children(node, depth)),
         "embedCard" => convert_embed_card(node),
         "bodiedExtension" | "multiBodiedExtension" => convert_extension(node, depth),
-        "extensionFrame" => convert_extension_frame(node, depth),
+        "extensionFrame" => Some(convert_children(node, depth)),
         unknown => {
             let content = convert_children(node, depth);
             if content.is_empty() {
@@ -42,16 +43,26 @@ pub fn convert_block_node(node: &Value, depth: usize, list_depth: usize) -> Opti
     }
 }
 
-fn convert_children(node: &Value, depth: usize) -> String {
+/// The converted child blocks of `node`, empty ones left out.
+fn child_blocks(node: &Value, depth: usize) -> Vec<String> {
     node.get("content")
         .and_then(|c| c.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|n| convert_block_node(n, depth + 1, 0))
-                .collect::<Vec<_>>()
-                .join("\n\n")
+        .map(|children| {
+            children
+                .iter()
+                .filter_map(|child| convert_block_node(child, depth + 1))
+                .collect()
         })
         .unwrap_or_default()
+}
+
+/// Child blocks separated as Markdown separates blocks: by a blank line.
+fn convert_children(node: &Value, depth: usize) -> String {
+    child_blocks(node, depth).join("\n\n")
+}
+
+fn non_empty(content: String) -> Option<String> {
+    (!content.is_empty()).then_some(content)
 }
 
 fn convert_paragraph(node: &Value) -> Option<String> {
@@ -81,61 +92,77 @@ fn convert_heading(node: &Value) -> Option<String> {
     }
 }
 
-fn convert_bullet_list(node: &Value, depth: usize, list_depth: usize) -> Option<String> {
-    let items = node.get("content")?.as_array()?;
-    let lines: Vec<String> = items
+fn convert_bullet_list(node: &Value, depth: usize) -> Option<String> {
+    let items: Vec<String> = child_blocks(node, depth)
         .iter()
-        .filter_map(|item| {
-            let content = convert_block_node(item, depth + 1, list_depth)?;
-            Some(format!("{}- {}", "  ".repeat(list_depth), content))
-        })
+        .map(|item| list_item("- ", item))
         .collect();
-
-    if lines.is_empty() {
-        None
-    } else {
-        Some(lines.join("\n"))
-    }
+    non_empty(items.join("\n"))
 }
 
-fn convert_ordered_list(node: &Value, depth: usize, list_depth: usize) -> Option<String> {
-    let items = node.get("content")?.as_array()?;
-    let lines: Vec<String> = items
+fn convert_ordered_list(node: &Value, depth: usize) -> Option<String> {
+    let start = node
+        .get("attrs")
+        .and_then(|a| a.get("order"))
+        .and_then(|o| o.as_u64())
+        .unwrap_or(1);
+    let items: Vec<String> = child_blocks(node, depth)
         .iter()
-        .enumerate()
-        .filter_map(|(i, item)| {
-            let content = convert_block_node(item, depth + 1, list_depth)?;
-            Some(format!("{}{}. {}", "  ".repeat(list_depth), i + 1, content))
-        })
+        .zip(start..)
+        .map(|(item, number)| list_item(&format!("{number}. "), item))
         .collect();
-
-    if lines.is_empty() {
-        None
-    } else {
-        Some(lines.join("\n"))
-    }
+    non_empty(items.join("\n"))
 }
 
-fn convert_list_item(node: &Value, depth: usize, list_depth: usize) -> Option<String> {
-    let content = node.get("content")?.as_array()?;
-    let mut parts: Vec<String> = Vec::new();
+/// A list item's blocks: a nested list follows its paragraph directly, which
+/// keeps a list tight; other blocks are separated by a blank line.
+fn convert_list_item(node: &Value, depth: usize) -> Option<String> {
+    let children = node.get("content")?.as_array()?;
+    let mut content = String::new();
+    for child in children {
+        let Some(block) = convert_block_node(child, depth + 1) else {
+            continue;
+        };
+        if !content.is_empty() {
+            let is_list = matches!(
+                child.get("type").and_then(|t| t.as_str()),
+                Some("bulletList" | "orderedList")
+            );
+            content.push_str(if is_list { "\n" } else { "\n\n" });
+        }
+        content.push_str(&block);
+    }
+    non_empty(content)
+}
 
-    for child in content {
-        let child_type = child.get("type").and_then(|t| t.as_str()).unwrap_or("");
-        if matches!(child_type, "bulletList" | "orderedList") {
-            if let Some(list) = convert_block_node(child, depth + 1, list_depth + 1) {
-                parts.push(format!("\n{}", list));
-            }
-        } else if let Some(text) = convert_block_node(child, depth + 1, 0) {
-            parts.push(text);
+/// `content` under a list marker, its later lines indented to the marker's
+/// width so they stay inside the item.
+fn list_item(marker: &str, content: &str) -> String {
+    let indent = " ".repeat(marker.len());
+    let mut lines = content.lines();
+    let mut item = format!("{marker}{}", lines.next().unwrap_or_default());
+    for line in lines {
+        item.push('\n');
+        if !line.is_empty() {
+            item.push_str(&indent);
+            item.push_str(line);
         }
     }
+    item
+}
 
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join(" "))
-    }
+fn quote(content: &str) -> String {
+    content
+        .lines()
+        .map(|line| {
+            if line.is_empty() {
+                ">".to_string()
+            } else {
+                format!("> {line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn convert_code_block(node: &Value) -> Option<String> {
@@ -145,34 +172,18 @@ fn convert_code_block(node: &Value) -> Option<String> {
         .and_then(|l| l.as_str())
         .unwrap_or("");
 
-    let code = node
+    let code: String = node
         .get("content")
         .and_then(|c| c.as_array())
         .map(|nodes| {
             nodes
                 .iter()
                 .filter_map(|n| n.get("text").and_then(|t| t.as_str()))
-                .collect::<Vec<_>>()
-                .join("")
+                .collect()
         })
         .unwrap_or_default();
 
-    Some(format!("```{}\n{}\n```", language, code))
-}
-
-fn convert_blockquote(node: &Value, depth: usize) -> Option<String> {
-    let content = node.get("content")?.as_array()?;
-    let lines: Vec<String> = content
-        .iter()
-        .filter_map(|child| convert_block_node(child, depth + 1, 0))
-        .flat_map(|text| text.lines().map(|l| format!("> {}", l)).collect::<Vec<_>>())
-        .collect();
-
-    if lines.is_empty() {
-        None
-    } else {
-        Some(lines.join("\n"))
-    }
+    Some(fenced_code_block(language, &code))
 }
 
 fn convert_panel(node: &Value, depth: usize) -> Option<String> {
@@ -183,16 +194,11 @@ fn convert_panel(node: &Value, depth: usize) -> Option<String> {
         .unwrap_or("info")
         .to_uppercase();
 
-    let content = node.get("content")?.as_array()?;
-    let text: Vec<String> = content
-        .iter()
-        .filter_map(|child| convert_block_node(child, depth + 1, 0))
-        .collect();
-
-    if text.is_empty() {
+    let content = convert_children(node, depth);
+    if content.is_empty() {
         None
     } else {
-        Some(format!("> **{}**: {}", panel_type, text.join(" ")))
+        Some(quote(&format!("**{panel_type}**\n\n{content}")))
     }
 }
 
@@ -244,21 +250,14 @@ fn convert_table(node: &Value, depth: usize) -> Option<String> {
     Some(result.join("\n"))
 }
 
+/// A table row is one line, so a cell's blocks and line breaks become spaces
+/// and its pipes are escaped.
 fn convert_cell_content(cell: &Value, depth: usize) -> String {
-    let content = cell
-        .get("content")
-        .and_then(|c| c.as_array())
-        .map(|content| {
-            content
-                .iter()
-                .filter_map(|n| convert_block_node(n, depth + 1, 0))
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .unwrap_or_default();
-
-    // Escape pipe characters to prevent breaking table structure
-    content.replace('|', "\\|")
+    child_blocks(cell, depth)
+        .join(" ")
+        .replace("\\\n", " ")
+        .replace('\n', " ")
+        .replace('|', "\\|")
 }
 
 fn convert_media(node: &Value) -> Option<String> {
@@ -284,119 +283,73 @@ fn convert_expand(node: &Value, depth: usize) -> Option<String> {
         .and_then(|t| t.as_str())
         .unwrap_or("Details");
 
-    let content = node.get("content")?.as_array()?;
-    let text: Vec<String> = content
-        .iter()
-        .filter_map(|child| convert_block_node(child, depth + 1, 0))
-        .collect();
-
-    if text.is_empty() {
+    let content = convert_children(node, depth);
+    if content.is_empty() {
         None
     } else {
-        Some(format!("**{}**\n\n{}", title, text.join("\n\n")))
+        Some(format!("**{title}**\n\n{content}"))
     }
 }
 
+/// Task items, with a nested task list placed under the item before it.
 fn convert_task_list(node: &Value, depth: usize) -> Option<String> {
-    let items = node.get("content")?.as_array()?;
-    let lines: Vec<String> = items
-        .iter()
-        .filter_map(|item| convert_block_node(item, depth + 1, 0))
-        .collect();
-
-    if lines.is_empty() {
-        None
-    } else {
-        Some(lines.join("\n"))
+    let children = node.get("content")?.as_array()?;
+    let mut items: Vec<String> = Vec::new();
+    for child in children {
+        let Some(block) = convert_block_node(child, depth + 1) else {
+            continue;
+        };
+        let nested = child.get("type").and_then(|t| t.as_str()) == Some("taskList");
+        match items.last_mut() {
+            Some(previous) if nested => {
+                previous.push('\n');
+                previous.push_str(&list_item("  ", &block));
+            }
+            _ => items.push(block),
+        }
     }
+    non_empty(items.join("\n"))
 }
 
-fn convert_task_item(node: &Value, depth: usize) -> Option<String> {
-    let attrs = node.get("attrs");
-    let state = attrs
-        .and_then(|a| a.get("state"))
-        .and_then(|s| s.as_str())
-        .unwrap_or("TODO");
+/// A task or decision item: checked when its `key` attribute is `checked`.
+fn convert_checked_item(node: &Value, depth: usize, key: &str, checked: &str) -> Option<String> {
+    let state = node
+        .get("attrs")
+        .and_then(|a| a.get(key))
+        .and_then(|s| s.as_str());
+    let marker = if state == Some(checked) {
+        "- [x] "
+    } else {
+        "- [ ] "
+    };
+    Some(list_item(marker, &convert_mixed_content(node, depth)))
+}
 
-    let checkbox = if state == "DONE" { "[x]" } else { "[ ]" };
-
-    let content = node
+/// Content that ADF allows to be inline nodes, blocks or both: each run of
+/// inline nodes reads as one paragraph among the blocks.
+fn convert_mixed_content(node: &Value, depth: usize) -> String {
+    let mut blocks: Vec<String> = Vec::new();
+    let mut paragraph = String::new();
+    for child in node
         .get("content")
         .and_then(|c| c.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|n| convert_block_node(n, depth + 1, 0))
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .unwrap_or_default();
-
-    Some(format!("- {} {}", checkbox, content))
-}
-
-fn convert_decision_list(node: &Value, depth: usize) -> Option<String> {
-    let items = node.get("content")?.as_array()?;
-    let lines: Vec<String> = items
-        .iter()
-        .filter_map(|item| convert_block_node(item, depth + 1, 0))
-        .collect();
-
-    if lines.is_empty() {
-        None
-    } else {
-        Some(lines.join("\n"))
+        .into_iter()
+        .flatten()
+    {
+        if let Some(text) = convert_inline_node(child) {
+            paragraph.push_str(&text);
+            continue;
+        }
+        if !paragraph.trim().is_empty() {
+            blocks.push(std::mem::take(&mut paragraph));
+        }
+        paragraph.clear();
+        blocks.extend(convert_block_node(child, depth + 1));
     }
-}
-
-fn convert_decision_item(node: &Value, depth: usize) -> Option<String> {
-    let attrs = node.get("attrs");
-    let state = attrs
-        .and_then(|a| a.get("state"))
-        .and_then(|s| s.as_str())
-        .unwrap_or("DECIDED");
-
-    let icon = if state == "DECIDED" { "[x]" } else { "[ ]" };
-
-    let content = node
-        .get("content")
-        .and_then(|c| c.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|n| convert_block_node(n, depth + 1, 0))
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .unwrap_or_default();
-
-    Some(format!("- {} {}", icon, content))
-}
-
-fn convert_layout_section(node: &Value, depth: usize) -> Option<String> {
-    let content = node.get("content")?.as_array()?;
-    let columns: Vec<String> = content
-        .iter()
-        .filter_map(|column| convert_block_node(column, depth + 1, 0))
-        .collect();
-
-    if columns.is_empty() {
-        None
-    } else {
-        Some(columns.join("\n\n---\n\n"))
+    if !paragraph.trim().is_empty() {
+        blocks.push(paragraph);
     }
-}
-
-fn convert_layout_column(node: &Value, depth: usize) -> Option<String> {
-    let content = node.get("content")?.as_array()?;
-    let text: Vec<String> = content
-        .iter()
-        .filter_map(|n| convert_block_node(n, depth + 1, 0))
-        .collect();
-
-    if text.is_empty() {
-        None
-    } else {
-        Some(text.join("\n\n"))
-    }
+    blocks.join("\n\n")
 }
 
 fn convert_embed_card(node: &Value) -> Option<String> {
@@ -425,10 +378,6 @@ fn convert_extension(node: &Value, depth: usize) -> Option<String> {
     }
 }
 
-fn convert_extension_frame(node: &Value, depth: usize) -> Option<String> {
-    convert_children(node, depth).into()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -440,7 +389,7 @@ mod tests {
             "type": "paragraph",
             "content": [{"type": "text", "text": "Hello world"}]
         });
-        assert_eq!(convert_block_node(&node, 0, 0), Some("Hello world".into()));
+        assert_eq!(convert_block_node(&node, 0), Some("Hello world".into()));
     }
 
     #[test]
@@ -450,7 +399,7 @@ mod tests {
             "attrs": {"level": 2},
             "content": [{"type": "text", "text": "Title"}]
         });
-        assert_eq!(convert_block_node(&node, 0, 0), Some("## Title".into()));
+        assert_eq!(convert_block_node(&node, 0), Some("## Title".into()));
     }
 
     #[test]
@@ -462,7 +411,7 @@ mod tests {
                 {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Item 2"}]}]}
             ]
         });
-        let result = convert_block_node(&node, 0, 0).unwrap();
+        let result = convert_block_node(&node, 0).unwrap();
         assert!(result.contains("- Item 1"));
         assert!(result.contains("- Item 2"));
     }
@@ -476,7 +425,7 @@ mod tests {
                 {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Second"}]}]}
             ]
         });
-        let result = convert_block_node(&node, 0, 0).unwrap();
+        let result = convert_block_node(&node, 0).unwrap();
         assert!(result.contains("1. First"));
         assert!(result.contains("2. Second"));
     }
@@ -488,7 +437,7 @@ mod tests {
             "attrs": {"language": "rust"},
             "content": [{"type": "text", "text": "fn main() {}"}]
         });
-        let result = convert_block_node(&node, 0, 0).unwrap();
+        let result = convert_block_node(&node, 0).unwrap();
         assert!(result.contains("```rust"));
         assert!(result.contains("fn main() {}"));
     }
@@ -499,14 +448,14 @@ mod tests {
             "type": "blockquote",
             "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Quote"}]}]
         });
-        let result = convert_block_node(&node, 0, 0).unwrap();
+        let result = convert_block_node(&node, 0).unwrap();
         assert!(result.contains("> Quote"));
     }
 
     #[test]
     fn test_rule() {
         let node = json!({"type": "rule"});
-        assert_eq!(convert_block_node(&node, 0, 0), Some("---".into()));
+        assert_eq!(convert_block_node(&node, 0), Some("---".into()));
     }
 
     #[test]
@@ -516,7 +465,7 @@ mod tests {
             "attrs": {"panelType": "info"},
             "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Note"}]}]
         });
-        let result = convert_block_node(&node, 0, 0).unwrap();
+        let result = convert_block_node(&node, 0).unwrap();
         assert!(result.contains("> **INFO**"));
         assert!(result.contains("Note"));
     }
@@ -536,7 +485,7 @@ mod tests {
                 ]}
             ]
         });
-        let result = convert_block_node(&node, 0, 0).unwrap();
+        let result = convert_block_node(&node, 0).unwrap();
         assert!(result.contains("| A | B |"));
         assert!(result.contains("| --- | --- |"));
         assert!(result.contains("| 1 | 2 |"));
@@ -551,7 +500,7 @@ mod tests {
                 {"type": "taskItem", "attrs": {"state": "DONE"}, "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Done"}]}]}
             ]
         });
-        let result = convert_block_node(&node, 0, 0).unwrap();
+        let result = convert_block_node(&node, 0).unwrap();
         assert!(result.contains("- [ ] Todo"));
         assert!(result.contains("- [x] Done"));
     }
@@ -563,7 +512,7 @@ mod tests {
             "attrs": {"title": "Click to expand"},
             "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Hidden content"}]}]
         });
-        let result = convert_block_node(&node, 0, 0).unwrap();
+        let result = convert_block_node(&node, 0).unwrap();
         assert!(result.contains("**Click to expand**"));
         assert!(result.contains("Hidden content"));
     }
@@ -574,7 +523,7 @@ mod tests {
             "type": "embedCard",
             "attrs": {"url": "https://example.com"}
         });
-        let result = convert_block_node(&node, 0, 0).unwrap();
+        let result = convert_block_node(&node, 0).unwrap();
         assert_eq!(result, "[https://example.com](https://example.com)");
     }
 }

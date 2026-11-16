@@ -2,15 +2,16 @@ use super::marks::apply_marks;
 use serde_json::Value;
 
 pub fn convert_inline_nodes(nodes: &[Value]) -> String {
-    nodes.iter().map(convert_inline_node).collect()
+    nodes.iter().filter_map(convert_inline_node).collect()
 }
 
-fn convert_inline_node(node: &Value) -> String {
+/// The Markdown for an inline node, or `None` for a node that is not inline.
+pub fn convert_inline_node(node: &Value) -> Option<String> {
     let node_type = node.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
-    match node_type {
+    Some(match node_type {
         "text" => convert_text(node),
-        "hardBreak" => "\n".into(),
+        "hardBreak" => "\\\n".into(),
         "mention" => convert_mention(node),
         "emoji" => convert_emoji(node),
         "inlineCard" => convert_inline_card(node),
@@ -18,8 +19,8 @@ fn convert_inline_node(node: &Value) -> String {
         "status" => convert_status(node),
         "mediaInline" => convert_media_inline(node),
         "placeholder" => convert_placeholder(node),
-        _ => String::new(),
-    }
+        _ => return None,
+    })
 }
 
 fn convert_text(node: &Value) -> String {
@@ -192,7 +193,7 @@ mod tests {
     #[test]
     fn test_text() {
         let node = json!({"type": "text", "text": "hello"});
-        assert_eq!(convert_inline_node(&node), "hello");
+        assert_eq!(convert_inline_node(&node).unwrap(), "hello");
     }
 
     #[test]
@@ -202,38 +203,38 @@ mod tests {
             "text": "bold",
             "marks": [{"type": "strong"}]
         });
-        assert_eq!(convert_inline_node(&node), "**bold**");
+        assert_eq!(convert_inline_node(&node).unwrap(), "**bold**");
     }
 
     #[test]
     fn test_hard_break() {
         let node = json!({"type": "hardBreak"});
-        assert_eq!(convert_inline_node(&node), "\n");
+        assert_eq!(convert_inline_node(&node).unwrap(), "\\\n");
     }
 
     #[test]
     fn test_mention() {
         let node = json!({"type": "mention", "attrs": {"text": "@john"}});
-        assert_eq!(convert_inline_node(&node), "@john");
+        assert_eq!(convert_inline_node(&node).unwrap(), "@john");
     }
 
     #[test]
     fn test_mention_with_id() {
         let node = json!({"type": "mention", "attrs": {"id": "user123"}});
-        assert_eq!(convert_inline_node(&node), "@user123");
+        assert_eq!(convert_inline_node(&node).unwrap(), "@user123");
     }
 
     #[test]
     fn test_emoji() {
         let node = json!({"type": "emoji", "attrs": {"shortName": ":smile:", "text": "😄"}});
-        assert_eq!(convert_inline_node(&node), "😄");
+        assert_eq!(convert_inline_node(&node).unwrap(), "😄");
     }
 
     #[test]
     fn test_inline_card() {
         let node = json!({"type": "inlineCard", "attrs": {"url": "https://example.com"}});
         assert_eq!(
-            convert_inline_node(&node),
+            convert_inline_node(&node).unwrap(),
             "[https://example.com](https://example.com)"
         );
     }
@@ -241,31 +242,34 @@ mod tests {
     #[test]
     fn test_date() {
         let node = json!({"type": "date", "attrs": {"timestamp": "1704067200000"}}); // 2024-01-01
-        assert_eq!(convert_inline_node(&node), "2024-01-01");
+        assert_eq!(convert_inline_node(&node).unwrap(), "2024-01-01");
     }
 
     #[test]
     fn test_status_green() {
         let node = json!({"type": "status", "attrs": {"text": "done", "color": "green"}});
-        assert_eq!(convert_inline_node(&node), "[OK] DONE");
+        assert_eq!(convert_inline_node(&node).unwrap(), "[OK] DONE");
     }
 
     #[test]
     fn test_status_red() {
         let node = json!({"type": "status", "attrs": {"text": "failed", "color": "red"}});
-        assert_eq!(convert_inline_node(&node), "[ERR] FAILED");
+        assert_eq!(convert_inline_node(&node).unwrap(), "[ERR] FAILED");
     }
 
     #[test]
     fn test_media_inline() {
         let node = json!({"type": "mediaInline", "attrs": {"alt": "screenshot.png"}});
-        assert_eq!(convert_inline_node(&node), "[Media: screenshot.png]");
+        assert_eq!(
+            convert_inline_node(&node).unwrap(),
+            "[Media: screenshot.png]"
+        );
     }
 
     #[test]
     fn test_placeholder() {
         let node = json!({"type": "placeholder", "attrs": {"text": "Enter name"}});
-        assert_eq!(convert_inline_node(&node), "{Enter name}");
+        assert_eq!(convert_inline_node(&node).unwrap(), "{Enter name}");
     }
 
     #[test]

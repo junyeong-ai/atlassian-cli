@@ -9,7 +9,6 @@ pub use from_markdown::markdown_to_adf;
 /// it, and the writer refuses to produce what the reader would truncate.
 const MAX_DEPTH: usize = 50;
 
-use crate::markdown::common::normalize_whitespace;
 use serde_json::Value;
 
 /// Convert ADF to Markdown, replacing excessively nested blocks with a visible
@@ -19,18 +18,48 @@ pub fn adf_to_markdown(adf: &Value) -> String {
         return String::new();
     };
 
-    let blocks: Vec<String> = content
+    content
         .iter()
-        .filter_map(|node| blocks::convert_block_node(node, 0, 0))
-        .collect();
-
-    normalize_whitespace(&blocks.join("\n\n"))
+        .filter_map(|node| blocks::convert_block_node(node, 0))
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn markdown_the_writer_accepts_reads_back_unchanged() {
+        let documents = [
+            "```python\ndef f():\n    return 1\n\n\nx = 2\n```",
+            "````\n```\nfenced inside\n```\n````",
+            "1. Install\n\n   ```bash\n   cargo install x\n   ```\n2. Run",
+            "- one\n  - nested\n- two\n\n  second paragraph",
+            "3. three\n4. four\n   1. nested under a wider marker",
+            "> first\n>\n> second\n>\n> ```\n> code\n> ```",
+            "line one\\\nline two",
+        ];
+        for markdown in documents {
+            let adf = markdown_to_adf(markdown).unwrap();
+            assert_eq!(adf_to_markdown(&adf), markdown, "{adf:#}");
+        }
+    }
+
+    #[test]
+    fn a_panel_quotes_every_block_under_its_type() {
+        let adf = json!({"type": "doc", "version": 1, "content": [{
+            "type": "panel", "attrs": {"panelType": "warning"},
+            "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "one"}]},
+                {"type": "bulletList", "content": [{"type": "listItem", "content": [
+                    {"type": "paragraph", "content": [{"type": "text", "text": "two"}]}
+                ]}]}
+            ]
+        }]});
+        assert_eq!(adf_to_markdown(&adf), "> **WARNING**\n>\n> one\n>\n> - two");
+    }
 
     #[test]
     fn test_empty_doc() {
@@ -256,7 +285,7 @@ mod tests {
 
         assert_eq!(
             adf_to_markdown(&document),
-            "> Quote\n> - Outer \n>   1. Inner\n\n| Column |\n| --- |\n| - Cell item |\n\nAfter"
+            "> Quote\n>\n> - Outer\n>   1. Inner\n\n| Column |\n| --- |\n| - Cell item |\n\nAfter"
         );
     }
 }

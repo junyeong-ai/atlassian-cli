@@ -10,49 +10,12 @@ pub fn parse_markdown(markdown: &str) -> Parser<'_> {
     )
 }
 
-pub fn normalize_whitespace(text: &str) -> String {
-    let mut lines: Vec<&str> = Vec::new();
-    let mut prev_empty = false;
-
-    for line in text.lines() {
-        let is_empty = line.trim().is_empty();
-        if is_empty {
-            if !prev_empty {
-                lines.push("");
-            }
-            prev_empty = true;
-        } else {
-            lines.push(line);
-            prev_empty = false;
-        }
-    }
-
-    // Trim leading empty lines - O(1) slice instead of O(n) remove
-    let start = lines
-        .iter()
-        .position(|l| !l.is_empty())
-        .unwrap_or(lines.len());
-    let end = lines
-        .iter()
-        .rposition(|l| !l.is_empty())
-        .map(|i| i + 1)
-        .unwrap_or(0);
-
-    if start >= end {
-        return String::new();
-    }
-
-    lines[start..end].join("\n")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_normalize_whitespace() {
-        assert_eq!(normalize_whitespace("a\n\n\n\nb"), "a\n\nb");
-        assert_eq!(normalize_whitespace("\n\na\n\n"), "a");
-        assert_eq!(normalize_whitespace("a\nb\nc"), "a\nb\nc");
-    }
+/// A fenced code block whose fence no backtick run in `code` can close early.
+/// A language holding a backtick would void a backtick fence, so it is dropped.
+pub fn fenced_code_block(language: &str, code: &str) -> String {
+    let longest_run = code.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+    let fence = "`".repeat(longest_run.max(2) + 1);
+    let language = if language.contains('`') { "" } else { language };
+    let code = code.trim_end_matches(['\n', '\r']);
+    format!("{fence}{language}\n{code}\n{fence}")
 }

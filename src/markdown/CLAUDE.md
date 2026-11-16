@@ -3,7 +3,7 @@
 ## Reading: two converters, different pipelines
 
 - `adf::adf_to_markdown` — walks Atlassian Document Format JSON (Jira). Handles `paragraph`, `heading`, `bulletList`, `orderedList`, `codeBlock`, `panel`, `table`, `mention`, `inlineCard`, marks, etc. Unknown blocks preserve convertible child blocks with an `<!-- Unsupported: NAME -->` marker; those without convertible children are omitted. Unknown inline nodes are omitted.
-- `confluence::confluence_to_markdown` — runs `htmd` on HTML storage format. Confluence HTML includes `ac:*` / `ri:*` namespaced tags and macro blocks; `confluence::cleanup` strips residue (schema-version, mxgraph base64, etc.) before conversion.
+- `confluence::confluence_to_markdown` — parses storage format as XML with `xml5ever`, spells prefixed names out (`ac:link`) and renders the tree through `htmd`, whose handlers cover the Confluence elements. CDATA, nesting and entities are the parser's job: storage markup is never matched as text. `htmd` compares local names only, which is why prefixes are kept in the name.
 
 Block recursion depth is independent of list indentation. Every recursive block conversion passes through `convert_block_node`; exceeding the depth limit emits a truncation marker and preserves subsequent sibling blocks.
 
@@ -22,6 +22,6 @@ Task-list markers and other extensions stay disabled until their ADF and storage
 
 New ADF node types should match Atlassian's published ADF spec. Don't invent node names. If an unfamiliar node type appears in real data, check the ADF docs first and handle it in `adf/blocks.rs` or `adf/inline.rs`.
 
-## Cleanup is lossy by design
+## Reading is a view, storage is the lossless form
 
-`confluence::cleanup` removes layout-only attributes and macro bookkeeping. This is intentional — users asking for markdown want readable text, not round-trippable HTML. Don't add round-trip support; use the default `--format storage` for that.
+Markdown cannot express macros, mentions, layouts or most ADF nodes; the readers render them as readable placeholders. Code blocks, lists, quotes, tables, links and hard breaks read back as the Markdown that wrote them, and a Confluence image does too; the Jira writer stores an image as a link. Block content is joined structurally — list items indent to their marker's width and code keeps its blank lines — never by normalizing whitespace across the document. Don't add round-trip support for constructs Markdown lacks; `--format storage` (or `adf`) is the form for editing them.

@@ -262,10 +262,10 @@ dependencies = [
  "httpdate",
  "keyring-core",
  "libc",
+ "markup5ever_rcdom",
  "oauth2",
  "percent-encoding",
  "pulldown-cmark",
- "regex",
  "reqwest",
  "secrecy",
  "self-replace",
@@ -283,6 +283,7 @@ dependencies = [
  "webbrowser",
  "windows-native-keyring-store",
  "wiremock",
+ "xml5ever",
  "zbus-secret-service-keyring-store",
 ]
 
