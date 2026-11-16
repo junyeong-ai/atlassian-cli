@@ -79,7 +79,8 @@ only where their contracts are the same.
   credential, 4 missing resource, 5 rate limit, 6 server error. Output may
   precede a later failure.
 - Lists use an `items` envelope. Creating writes return the identifiers callers
-  need; side-effect-only writes return `{}`. Extract required response fields
+  need, and an issue or page create also its web `url`; side-effect-only writes
+  return `{}`. Extract required response fields
   with `response` helpers; malformed successful responses are errors.
 - `delete` destroys a resource; `remove` detaches an association (a link,
   label or watcher). Whole-resource deletion requires `--yes` at the CLI
