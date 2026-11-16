@@ -5,7 +5,7 @@
 - `adf::adf_to_markdown` — walks Atlassian Document Format JSON (Jira). Handles `paragraph`, `heading`, `bulletList`, `orderedList`, `codeBlock`, `panel`, `table`, `mention`, `inlineCard`, marks, etc. Unknown blocks preserve convertible child blocks with an `<!-- Unsupported: NAME -->` marker; those without convertible children are omitted. Unknown inline nodes are omitted.
 - `confluence::confluence_to_markdown` — parses storage format as XML with `xml5ever`, spells prefixed names out (`ac:link`) and renders the tree through `htmd`, whose handlers cover the Confluence elements. CDATA, nesting and entities are the parser's job: storage markup is never matched as text. `htmd` compares local names only, which is why prefixes are kept in the name.
 
-Block recursion depth is independent of list indentation. Every recursive block conversion passes through `convert_block_node`; exceeding the depth limit emits a truncation marker and preserves subsequent sibling blocks.
+In the ADF reader, block recursion depth is independent of list indentation: every recursive block conversion passes through `adf::blocks::convert_block_node`, and exceeding the depth limit emits a truncation marker and preserves subsequent sibling blocks. The Confluence reader leaves nesting to `htmd` and has no depth marker.
 
 ## Writing: one parser, two renderers
 

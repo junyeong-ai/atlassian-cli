@@ -74,10 +74,10 @@ Commands:
   comment     Add, update, or list comments on an issue
   transition  Apply or list workflow transitions for an issue
   link        Create, remove, or list issue links (and list link types)
-  worklog     Add, update, list, or remove worklog (time-tracking) entries
+  worklog     Add, update, list, or delete worklog (time-tracking) entries
   watcher     Start watching, stop watching, or list watchers on an issue
   user        Find users and the account ids that assignee fields, JQL and CQL take
-  list        Query global metadata (issue types, priorities, statuses, labels)
+  list        List fields, issue types, priorities, statuses and labels; with --project, what that project can create
   board       List agile boards for a project
   sprint      List sprints, or move issues between a sprint and the backlog
   epic        Assign issues to an epic, or remove them from their epics
@@ -539,7 +539,7 @@ Options:
 ## `atlassian-cli jira worklog`
 
 ```text
-Add, update, list, or remove worklog (time-tracking) entries
+Add, update, list, or delete worklog (time-tracking) entries
 
 Usage: atlassian-cli jira worklog <COMMAND>
 
@@ -746,7 +746,7 @@ Options:
 ## `atlassian-cli jira list`
 
 ```text
-Query global metadata (issue types, priorities, statuses, labels)
+List fields, issue types, priorities, statuses and labels; with --project, what that project can create
 
 Usage: atlassian-cli jira list <COMMAND>
 

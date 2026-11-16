@@ -157,7 +157,7 @@ atlassian-cli self uninstall --yes [--keep-skill] [--keep-credentials] [--purge-
 | `scoped_token` | 토큰 소유자 | `api.atlassian.com` | scope가 **있는** API 토큰. 그 scope로 권한이 제한됨 |
 | `basic` | 토큰 소유자 | `{domain}` | scope가 **없는** classic API 토큰 |
 
-두 토큰 방식은 서로의 토큰을 받지 않습니다. 사이트 호스트는 scope가 있는 토큰에 401을 돌려주고, 게이트웨이는 classic 토큰을 거부합니다. 401에는 만료, 방식 불일치, scope 부족처럼 확인할 원인을 알려 주는 `hint`가 붙습니다. 두 종류 모두 <https://id.atlassian.com/manage-profile/security/api-tokens>에서 만듭니다. Atlassian은 scoped 토큰을 권장하며, 2024-12-15 이전에 발급된 토큰은 2026-03-14부터 2026-05-12 사이에 만료되었습니다([토큰 관리](https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/)).
+두 토큰 방식은 서로의 토큰을 받지 않습니다. 사이트 호스트는 scope가 있는 토큰에 401을 돌려주고, 게이트웨이는 classic 토큰을 거부합니다. 401에는 만료, 방식 불일치, scope 부족처럼 확인할 원인을 알려 주는 `hint`가 붙습니다. 두 종류 모두 <https://id.atlassian.com/manage-profile/security/api-tokens>에서 만듭니다. Atlassian은 scoped 토큰을 권장하며, 모든 API 토큰은 1년 안에 만료됩니다([토큰 관리](https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/)).
 
 ### OAuth 2.0 (3LO) — 권장
 
@@ -191,7 +191,7 @@ refresh token이 있는 세션은 만료 5분 전에 갱신됩니다. 프로파�
 | `sprint list` | `read:sprint:jira-software` | [Board sprints](https://developer.atlassian.com/cloud/jira/software/rest/api-group-board/#api-rest-agile-1-0-board-boardid-sprint-get) |
 | `sprint move` | `write:sprint:jira-software` | [Sprint](https://developer.atlassian.com/cloud/jira/software/rest/api-group-sprint/) |
 | `sprint backlog` | `write:board-scope:jira-software` | [Backlog](https://developer.atlassian.com/cloud/jira/software/rest/api-group-backlog/) |
-| `confluence search` | `search:confluence`, `read:confluence-content.all` | [Search](https://developer.atlassian.com/cloud/confluence/rest/v1/api-group-search/) |
+| `confluence search` | `search:confluence` (본문 확장이 거부되면 `read:confluence-content.all` 추가) | [Search](https://developer.atlassian.com/cloud/confluence/rest/v1/api-group-search/) |
 | `confluence get`, `confluence label list`, `confluence property list` | `read:page:confluence` | [Page](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-page/), [Label](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-label/), [Content properties](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-content-properties/) |
 | `confluence comment` 읽기 | `read:comment:confluence` | [Comment](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-comment/) |
 | `confluence attachment list` | `read:attachment:confluence` | [Attachment](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-attachment/) |
@@ -208,7 +208,7 @@ Confluence 쓰기에는 쓰기 전에 하는 읽기까지 포함해, 호출하�
 export ATLASSIAN_AUTH_METHOD=service_account
 export ATLASSIAN_CLIENT_ID="..."
 export ATLASSIAN_CLIENT_SECRET="..."
-# ATLASSIAN_CLOUD_ID는 자격 증명이 여러 사이트에 접근할 때만 필요
+# ATLASSIAN_CLOUD_ID는 자격 증명이 여러 사이트에 접근하거나 사이트를 찾지 못할 때 필요
 ```
 
 ```toml
@@ -334,6 +334,7 @@ API 실패에는 `status`와 `operation`이 있고, Atlassian이 JSON으로 답�
 - **`Failed to resolve cloud_id`** — `_edge/tenant_info`를 읽지 못했습니다. `cloud_id`를 지정합니다.
 - **서비스 계정의 `invalid_client`** — client ID나 secret이 틀렸습니다. `config validate`로 확인합니다.
 - **`Multiple Atlassian sites found`** — 자격 증명이 여러 사이트에 접근합니다. `cloud_id`를 지정합니다.
+- **`No accessible Atlassian sites found`** — 서비스 계정의 사이트 탐색 결과가 비었습니다. `https://<site>.atlassian.net/_edge/tenant_info`가 알려 주는 `cloud_id`를 지정합니다.
 - **`Invalid Atlassian domain`** — domain은 `.atlassian.net`으로 끝나야 합니다.
 - **`Profile 'X' not found`** — 읽은 파일 중 그 프로파일을 정의한 곳이 없습니다. `config list`로 확인합니다.
 - **검색 필드가 예상과 다름** — `--fields`가 `search_default_fields`보다, `search_default_fields`가 기본 17개와 `search_custom_fields`보다 우선합니다.

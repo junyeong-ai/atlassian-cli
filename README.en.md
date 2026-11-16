@@ -157,7 +157,7 @@ Choose a method explicitly; it is never inferred.
 | `scoped_token` | the token's owner | `api.atlassian.com` | API token **with** scopes; limited to those scopes |
 | `basic` | the token's owner | `{domain}` | classic API token **without** scopes |
 
-The two token methods do not accept each other's tokens: the site host answers 401 to a token carrying scopes, and the gateway rejects a classic one. A 401 carries a `hint` naming the causes to check, such as expiry, the wrong method or a missing scope. Create either kind of token at <https://id.atlassian.com/manage-profile/security/api-tokens>; Atlassian recommends scoped tokens, and tokens issued before 2024-12-15 expired between 2026-03-14 and 2026-05-12 ([token management](https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/)).
+The two token methods do not accept each other's tokens: the site host answers 401 to a token carrying scopes, and the gateway rejects a classic one. A 401 carries a `hint` naming the causes to check, such as expiry, the wrong method or a missing scope. Create either kind of token at <https://id.atlassian.com/manage-profile/security/api-tokens>; Atlassian recommends scoped tokens; every API token expires within a year ([token management](https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/)).
 
 ### OAuth 2.0 (3LO) — recommended
 
@@ -191,7 +191,7 @@ Sessions with a refresh token refresh five minutes before expiry. Beyond the def
 | `sprint list` | `read:sprint:jira-software` | [Board sprints](https://developer.atlassian.com/cloud/jira/software/rest/api-group-board/#api-rest-agile-1-0-board-boardid-sprint-get) |
 | `sprint move` | `write:sprint:jira-software` | [Sprint](https://developer.atlassian.com/cloud/jira/software/rest/api-group-sprint/) |
 | `sprint backlog` | `write:board-scope:jira-software` | [Backlog](https://developer.atlassian.com/cloud/jira/software/rest/api-group-backlog/) |
-| `confluence search` | `search:confluence`, `read:confluence-content.all` | [Search](https://developer.atlassian.com/cloud/confluence/rest/v1/api-group-search/) |
+| `confluence search` | `search:confluence` (add `read:confluence-content.all` if expanding bodies is refused) | [Search](https://developer.atlassian.com/cloud/confluence/rest/v1/api-group-search/) |
 | `confluence get`, `confluence label list`, `confluence property list` | `read:page:confluence` | [Page](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-page/), [Label](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-label/), [Content properties](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-content-properties/) |
 | `confluence comment` reads | `read:comment:confluence` | [Comment](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-comment/) |
 | `confluence attachment list` | `read:attachment:confluence` | [Attachment](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-attachment/) |
@@ -208,7 +208,7 @@ Confluence writes need the scopes of every endpoint they call, including a read 
 export ATLASSIAN_AUTH_METHOD=service_account
 export ATLASSIAN_CLIENT_ID="..."
 export ATLASSIAN_CLIENT_SECRET="..."
-# ATLASSIAN_CLOUD_ID is needed only when the credential reaches more than one site
+# ATLASSIAN_CLOUD_ID is needed when the credential reaches several sites, or discovery finds none
 ```
 
 ```toml
@@ -334,6 +334,7 @@ API failures carry `status` and `operation`, Atlassian's JSON error body as `det
 - **`Failed to resolve cloud_id`** — `_edge/tenant_info` could not be read; pin `cloud_id`.
 - **`invalid_client` from a service account** — the client ID or secret is wrong; check with `config validate`.
 - **`Multiple Atlassian sites found`** — the credential reaches several sites; pin `cloud_id`.
+- **`No accessible Atlassian sites found`** — site discovery for the service account returned nothing; pin `cloud_id`, which `https://<site>.atlassian.net/_edge/tenant_info` reports.
 - **`Invalid Atlassian domain`** — the domain must end with `.atlassian.net`.
 - **`Profile 'X' not found`** — no file read defines that profile; check `config list`.
 - **Unexpected search fields** — `--fields` wins over `search_default_fields`, which wins over the 17 defaults plus `search_custom_fields`.

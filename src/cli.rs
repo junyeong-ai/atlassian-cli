@@ -253,7 +253,7 @@ pub(crate) enum JiraSubcommand {
         #[command(subcommand)]
         action: LinkAction,
     },
-    /// Add, update, list, or remove worklog (time-tracking) entries
+    /// Add, update, list, or delete worklog (time-tracking) entries
     Worklog {
         #[command(subcommand)]
         action: WorklogAction,
@@ -268,7 +268,7 @@ pub(crate) enum JiraSubcommand {
         #[command(subcommand)]
         action: UserAction,
     },
-    /// Query global metadata (issue types, priorities, statuses, labels)
+    /// List fields, issue types, priorities, statuses and labels; with --project, what that project can create
     List {
         #[command(subcommand)]
         action: ListAction,

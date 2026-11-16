@@ -241,7 +241,9 @@ spells the separator the same way so both builders read identically.
   buffer expires.
 - `cloud_id` is auto-discovered through accessible-resources when not
   configured. Multiple accessible sites → bail with the list; user must
-  pin one via `cloud_id`.
+  pin one via `cloud_id`. None → bail naming `cloud_id` and
+  `_edge/tenant_info`; Atlassian does not document this discovery for client
+  credentials, so an empty answer is a case to expect.
 
 ## Blank-value policy
 
