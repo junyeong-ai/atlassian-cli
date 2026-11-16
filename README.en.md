@@ -90,6 +90,7 @@ atlassian-cli confluence delete 123456 --yes           # moves the page to the t
 - Body arguments take `-` to read standard input, and refuse it empty. A heredoc with a quoted delimiter (`<<'EOF'`) needs no escaping and has no argument-size limit.
 - `--all` follows every page of a search; `--all --stream` writes JSONL as pages arrive and reports progress on stderr.
 - Markdown writes follow CommonMark with GitHub tables and strikethrough. ADF cannot hold a heading, quote, table or rule inside a list item or quote, so such Markdown is refused with its location. Raw HTML stays literal text; write Confluence macros with `--format storage`.
+- A Markdown read is a view: macros, mentions and layouts become placeholders, and writing that Markdown back replaces them with text. Edit bodies that hold them in the stored representation.
 
 The generated [CLI reference](docs/cli.md) lists every command, argument and default; `atlassian-cli <command> --help` describes the installed version.
 

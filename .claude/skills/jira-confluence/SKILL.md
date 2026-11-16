@@ -14,7 +14,7 @@ atlassian-cli --profile work jira get PROJ-123 --format markdown
 atlassian-cli --pretty confluence search "space = TEAM" --limit 5
 ```
 
-`--format` names how rich text is read and written. The default is each product's stored representation: `adf` (ADF JSON) for Jira and `storage` (XHTML) for Confluence. `--format markdown` converts in both directions. On reads, only the content fields inside the JSON envelope change; on writes, the body you pass is Markdown. Prefer Markdown for both, and use the stored representation only for content Markdown cannot express, such as panels, mentions or Confluence macros.
+`--format` names how rich text is read and written. The default is each product's stored representation: `adf` (ADF JSON) for Jira and `storage` (XHTML) for Confluence. `--format markdown` converts in both directions. On reads, only the content fields inside the JSON envelope change; on writes, the body you pass is Markdown. Use Markdown to read and to write new content. A Markdown read is a view: macros, mentions, layouts, Jira attachments and similar content become placeholders, and writing that Markdown back replaces them with literal text. To edit a body that holds such content, read and write it in the stored representation and change only what the edit needs.
 
 Write bodies through standard input with `-` whenever they span lines or contain quotes. A quoted heredoc needs no escaping and avoids the operating system's argument-size limit:
 
@@ -174,7 +174,7 @@ atlassian-cli confluence attachment upload 12345 ./diagram.png --comment "v2"
 atlassian-cli confluence attachment upload 12345 ./icon.svg --content-type image/svg+xml
 ```
 
-- To edit a page, read it, change the body, and write it back with `--base-version` set to the `version.number` you read. Without it the update overwrites whatever is current, including a save made while you worked; with it Confluence answers `409` when the page changed, and the fix is to re-read, reapply the edit and retry. A space that requires approval for edits can also answer `409`; its message says so.
+- To edit a page, read it, change the body, and write it back with `--base-version` set to the `version.number` you read. Without it the update overwrites whatever is current, including a save made while you worked; with it Confluence answers `409` when the page changed, and the fix is to re-read, reapply the edit and retry. A space that requires approval for edits can also answer `409`; if a re-read still shows the version you sent, nothing changed underneath you, so report the refusal instead of retrying.
 - Markdown converts to storage format with code blocks as the `code` macro. An image whose source has a scheme (`https://…`) embeds that URL; any other source names the page attachment by its last path segment, the name `attachment upload` gives the file, so upload it first. Write Confluence macros and HTML with `--format storage`; in Markdown they stay literal text.
 - `comment list` returns one flat, depth-first array covering both comment families and every level of every thread. Each entry carries `location` (`footer`/`inline`), `depth`, and `parentCommentId` (`null` at a root), so rebuild the tree from those rather than assuming the array is top-level only.
 - `comment get`/`replies`/`update`/`delete` take the **comment id**; `comment list`/`add` take the **page id**.
@@ -197,7 +197,7 @@ atlassian-cli confluence attachment upload 12345 ./icon.svg --content-type image
 
 Jira `--all` requests 100 issues per page and ignores `--limit`. Confluence `--all` uses `--limit` for the first page only, capped at 50; subsequent requests follow the server's cursor links.
 
-`--stream` writes JSONL to stdout and progress to stderr — never mix it with `--pretty`.
+`--stream` writes one compact JSON object per line to stdout and progress to stderr; `--pretty` does not apply to it.
 
 ## Errors & exit codes
 

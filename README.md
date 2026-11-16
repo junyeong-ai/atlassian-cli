@@ -90,6 +90,7 @@ atlassian-cli confluence delete 123456 --yes           # 페이지를 휴지통�
 - 본문 인자에 `-`를 주면 표준 입력에서 읽으며, 빈 입력은 거부합니다. 구분자를 따옴표로 감싼 heredoc(`<<'EOF'`)은 이스케이프가 필요 없고 인자 크기 제한도 받지 않습니다.
 - `--all`은 검색의 모든 페이지를 가져오고, `--all --stream`은 페이지가 도착하는 대로 JSONL을 쓰며 진행 상황을 stderr에 보고합니다.
 - Markdown 쓰기는 GitHub 표와 취소선을 포함한 CommonMark를 따릅니다. ADF는 목록 항목이나 인용 안에 제목·인용·표·구분선을 담을 수 없으므로, 그런 Markdown은 위치를 밝혀 거부합니다. 원시 HTML은 글자 그대로 남으며, Confluence 매크로는 `--format storage`로 씁니다.
+- Markdown으로 읽은 본문은 보기용입니다. 매크로·멘션·레이아웃은 자리 표시 텍스트로 바뀌고, 그 Markdown을 다시 쓰면 해당 요소가 텍스트로 대체됩니다. 이런 요소가 있는 본문은 저장 표현으로 편집합니다.
 
 모든 명령·인자·기본값은 생성된 [CLI 참조](docs/cli.md)에 있고, 설치된 버전의 설명은 `atlassian-cli <명령> --help`로 확인합니다.
 
