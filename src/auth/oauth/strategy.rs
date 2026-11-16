@@ -3,7 +3,7 @@
 use super::flow::{self, FlowInputs};
 use super::store::{KeychainAccess, TokenSet, TokenStore};
 use crate::auth::strategy::{AuthStrategy, Identity, probe_myself};
-use crate::auth::{AuthMethod, TOKEN_REFRESH_BUFFER_SECS};
+use crate::auth::{AuthMethod, MissingCredentials, TOKEN_REFRESH_BUFFER_SECS};
 use crate::client::{Service, proxy_url};
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
@@ -143,12 +143,12 @@ impl OAuthStrategy {
         let tokens = store
             .load()
             .await?
-            .with_context(|| {
+            .ok_or_else(|| {
                 // Where the keychain is not one of this store's backends it was
                 // not consulted, so this is the file store's answer and not the
                 // machine's: advising a login here would replace a session
                 // rather than reach one.
-                if store.keychain() == KeychainAccess::Forbidden {
+                MissingCredentials(if store.keychain() == KeychainAccess::Forbidden {
                     format!(
                         "No OAuth tokens in the file store for profile '{profile}', and \
                          ATLASSIAN_NO_KEYCHAIN forbade looking in the keychain. Unset it for \
@@ -159,7 +159,7 @@ impl OAuthStrategy {
                     format!(
                         "No OAuth tokens stored for profile '{profile}'. Run `atlassian-cli auth login` first."
                     )
-                }
+                })
             })?
             .tokens;
         let cloud_id =
@@ -170,9 +170,11 @@ impl OAuthStrategy {
         // smuggle URL structure into the request path.
         crate::config::validate_cloud_id(&cloud_id)?;
         if tokens.refresh_token.is_none() && tokens.is_expired_with_buffer(0) {
-            bail!(
-                "Stored OAuth access_token has expired and no refresh_token is available. Run `atlassian-cli auth login`."
-            );
+            bail!(MissingCredentials(
+                "Stored OAuth access_token has expired and no refresh_token is available. Run \
+                 `atlassian-cli auth login`."
+                    .into()
+            ));
         }
         Ok(Self {
             params,

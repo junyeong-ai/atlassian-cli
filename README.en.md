@@ -319,7 +319,7 @@ API failures carry `status` and `operation`, and a `hint` when a remediation is 
 | `0` | success |
 | `1` | generic failure |
 | `2` | usage error |
-| `3` | authentication or permission (401, 403) |
+| `3` | authentication or permission (401, 403), or no usable credential configured or stored |
 | `4` | not found (404) |
 | `5` | rate limited (429) |
 | `6` | server error (5xx) |

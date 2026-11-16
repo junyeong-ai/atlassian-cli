@@ -1,5 +1,6 @@
 use crate::auth::{
-    AuthConfig, AuthMethod, DEFAULT_OAUTH_REDIRECT_PORT, OAuthParams, default_oauth_scopes,
+    AuthConfig, AuthMethod, DEFAULT_OAUTH_REDIRECT_PORT, MissingCredentials, OAuthParams,
+    default_oauth_scopes,
 };
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -747,10 +748,13 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
-        let auth = self
-            .auth
-            .as_ref()
-            .context("Authentication not configured. Set ATLASSIAN_AUTH_METHOD env var or add [default.auth] to config")?;
+        let auth = self.auth.as_ref().ok_or_else(|| {
+            MissingCredentials(
+                "Authentication not configured. Set ATLASSIAN_AUTH_METHOD env var or add \
+                     [default.auth] to config"
+                    .into(),
+            )
+        })?;
 
         match auth {
             AuthConfig::Basic { email, token } => {
@@ -770,7 +774,7 @@ impl Config {
                 }
 
                 if token.is_empty() {
-                    bail!("API token is empty");
+                    bail!(MissingCredentials("API token is empty".into()));
                 }
             }
             AuthConfig::ScopedToken {
@@ -782,7 +786,7 @@ impl Config {
                     bail!("Invalid email format: {}", email);
                 }
                 if token.is_empty() {
-                    bail!("API token is empty");
+                    bail!(MissingCredentials("API token is empty".into()));
                 }
                 // The gateway path carries the cloud_id, so one must exist by
                 // the time a request is built. Either it is pinned here — and
@@ -807,10 +811,14 @@ impl Config {
                 cloud_id,
             } => {
                 if client_id.is_empty() {
-                    bail!("Service account client_id is empty");
+                    bail!(MissingCredentials(
+                        "Service account client_id is empty".into()
+                    ));
                 }
                 if client_secret.is_empty() {
-                    bail!("Service account client_secret is empty");
+                    bail!(MissingCredentials(
+                        "Service account client_secret is empty".into()
+                    ));
                 }
                 // A user-pinned cloud_id is interpolated into the proxy path,
                 // so it must not carry URL structure. Auto-discovered IDs are
@@ -827,10 +835,10 @@ impl Config {
                 cloud_id,
             } => {
                 if client_id.is_empty() {
-                    bail!("OAuth client_id is empty");
+                    bail!(MissingCredentials("OAuth client_id is empty".into()));
                 }
                 if client_secret.is_empty() {
-                    bail!("OAuth client_secret is empty");
+                    bail!(MissingCredentials("OAuth client_secret is empty".into()));
                 }
                 if let Some(cloud_id) = cloud_id.as_deref() {
                     validate_cloud_id(cloud_id)?;

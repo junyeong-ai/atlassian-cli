@@ -71,8 +71,9 @@ only where their contracts are the same.
   summary; progress and diagnostics use stderr. Retain search results only in
   non-streaming mode; streaming keeps a cumulative count and cursor history.
 - Runtime failures emit one JSON error object to stderr. Clap usage errors use
-  text and exit 2. Exit codes: 1 generic, 3 auth/permission, 4 missing resource,
-  5 rate limit, 6 server error. Output may precede a later failure.
+  text and exit 2. Exit codes: 1 generic, 3 auth/permission or no usable
+  credential, 4 missing resource, 5 rate limit, 6 server error. Output may
+  precede a later failure.
 - Lists use an `items` envelope. Creating writes return the identifiers callers
   need; side-effect-only writes return `{}`. Extract required response fields
   with `response` helpers; malformed successful responses are errors.

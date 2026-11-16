@@ -1,4 +1,4 @@
-use crate::auth::{AuthMethod, AuthStrategy};
+use crate::auth::{AuthMethod, AuthStrategy, MissingCredentials};
 use crate::config::Config;
 use anyhow::{Context, Result};
 use reqwest::StatusCode;
@@ -178,7 +178,7 @@ impl ApiClient {
         let auth_config = config
             .auth
             .clone()
-            .context("Authentication not configured")?;
+            .ok_or_else(|| MissingCredentials("Authentication not configured".into()))?;
 
         let http = http_client(Duration::from_millis(config.performance.request_timeout_ms))?;
 

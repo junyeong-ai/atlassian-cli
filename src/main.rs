@@ -675,7 +675,7 @@ fn keyring_report(outcome: &atlassian_cli::auth::KeyringEnumeration) -> serde_js
 /// either valid output or nothing.
 ///
 /// Exit codes, stable for scripted callers: 1 generic, 2 CLI usage (clap),
-/// 3 auth (401/403), 4 not found (404), 5 rate limited (429),
+/// 3 auth (401/403, or no usable credential), 4 not found (404), 5 rate limited (429),
 /// 6 server error (5xx). API failures carry `status`/`operation` (and
 /// `hint` when remediation is known) alongside `message`; a 429 adds
 /// `retryAfterSeconds` and `rateLimitReason` when the server sent them.
@@ -704,6 +704,11 @@ fn render_error(err: &anyhow::Error) -> (i32, String) {
             s if s >= 500 => 6,
             _ => 1,
         };
+    } else if err
+        .downcast_ref::<atlassian_cli::auth::MissingCredentials>()
+        .is_some()
+    {
+        code = 3;
     }
     (code, serde_json::json!({ "error": error }).to_string())
 }
@@ -1137,6 +1142,18 @@ mod tests {
             assert_eq!(payload["error"]["retryAfterSeconds"], seconds);
             assert_eq!(payload["error"]["rateLimitReason"], "jira-burst-based");
         }
+    }
+
+    /// A credential that is missing locally is an authentication failure for
+    /// the caller, through whatever context it was reported under.
+    #[test]
+    fn missing_credentials_exit_with_the_authentication_code() {
+        let error = anyhow::Error::from(atlassian_cli::auth::MissingCredentials(
+            "No OAuth tokens stored".into(),
+        ))
+        .context("Failed to build the client");
+        let (code, payload) = render_error(&error);
+        assert_eq!(code, 3, "{payload}");
     }
 
     /// Scripts written against `--format html` keep working; the value it

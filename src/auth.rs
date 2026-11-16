@@ -35,6 +35,21 @@ pub use scoped_token::ScopedTokenStrategy;
 pub use service_account::ServiceAccountStrategy;
 pub use strategy::{AuthStrategy, Identity};
 
+/// No usable credential is available without a person's help: none is
+/// configured, a configured one is empty, or no OAuth session is stored or
+/// can be refreshed. It exits with the authentication code a 401 does, since
+/// the remedy is the same — configure credentials or sign in.
+#[derive(Debug)]
+pub struct MissingCredentials(pub String);
+
+impl std::fmt::Display for MissingCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for MissingCredentials {}
+
 // ---------------------------------------------------------------------------
 // Shared constants — single source of truth for OAuth defaults and the
 // token-lifecycle parameters that govern both service_account and 3LO flows.
