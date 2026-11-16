@@ -115,6 +115,12 @@ impl AuthStrategy for MockAuthStrategy {
     }
 }
 
+/// The production HTTP client, for a test that hands one to a strategy.
+#[cfg(test)]
+pub fn test_http_client() -> reqwest::Client {
+    crate::client::http_client(std::time::Duration::from_secs(30)).expect("test HTTP client builds")
+}
+
 /// Build an `ApiClient` that talks to the given mock-server base URL.
 #[cfg(test)]
 pub fn mock_client(base_url: impl Into<String>) -> ApiClient {

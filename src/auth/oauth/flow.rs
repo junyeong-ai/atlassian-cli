@@ -310,12 +310,9 @@ mod tests {
             .body(b"grant_type=authorization_code&code=abc".to_vec())
             .unwrap();
 
-        let response = perform_oauth_request(
-            crate::client::http_client(Duration::from_secs(30)).unwrap(),
-            request,
-        )
-        .await
-        .unwrap();
+        let response = perform_oauth_request(crate::test_utils::test_http_client(), request)
+            .await
+            .unwrap();
 
         // Non-2xx must pass through untouched — the oauth2 crate parses the
         // RFC 6749 error body itself.
@@ -351,12 +348,9 @@ mod tests {
                 .uri(format!("{}{endpoint}", server.uri()))
                 .body(b"client_secret=test-secret".to_vec())
                 .unwrap();
-            let response = perform_oauth_request(
-                crate::client::http_client(Duration::from_secs(30)).unwrap(),
-                request,
-            )
-            .await
-            .unwrap();
+            let response = perform_oauth_request(crate::test_utils::test_http_client(), request)
+                .await
+                .unwrap();
             assert_eq!(response.status(), status);
         }
     }

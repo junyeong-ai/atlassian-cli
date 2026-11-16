@@ -197,7 +197,7 @@ mod tests {
     async fn authorization_is_the_basic_credential() {
         let expected = encode_basic_credential("u@x.com", "scoped-token");
         let header = fixture()
-            .authorization(&reqwest::Client::new())
+            .authorization(&crate::test_utils::test_http_client())
             .await
             .unwrap();
         assert_eq!(header, format!("Basic {}", expected.expose_secret()));
@@ -224,7 +224,7 @@ mod tests {
             "u@x.com".into(),
             "t".into(),
             Some("abc/../evil?x=1".into()),
-            &reqwest::Client::new(),
+            &crate::test_utils::test_http_client(),
         )
         .await
         .unwrap_err()
@@ -239,7 +239,7 @@ mod tests {
             "u@x.com".into(),
             "t".into(),
             None,
-            &reqwest::Client::new(),
+            &crate::test_utils::test_http_client(),
         )
         .await
         .unwrap_err()
@@ -255,7 +255,7 @@ mod tests {
             "u@x.com".into(),
             "t".into(),
             None,
-            &reqwest::Client::new(),
+            &crate::test_utils::test_http_client(),
         )
         .await
         .unwrap_err()
@@ -277,7 +277,7 @@ mod tests {
             "u@x.com".into(),
             "t".into(),
             Some("cloud-abc-123".into()),
-            &reqwest::Client::new(),
+            &crate::test_utils::test_http_client(),
         )
         .await
         .unwrap();
@@ -298,9 +298,12 @@ mod tests {
             .mount(&server)
             .await;
 
-        let id = ScopedTokenStrategy::fetch_cloud_id(&server.uri(), &reqwest::Client::new())
-            .await
-            .unwrap();
+        let id = ScopedTokenStrategy::fetch_cloud_id(
+            &server.uri(),
+            &crate::test_utils::test_http_client(),
+        )
+        .await
+        .unwrap();
         assert_eq!(id, "cloud-9");
 
         let requests = server.received_requests().await.unwrap();
@@ -320,10 +323,13 @@ mod tests {
             .mount(&server)
             .await;
 
-        let err = ScopedTokenStrategy::fetch_cloud_id(&server.uri(), &reqwest::Client::new())
-            .await
-            .unwrap_err()
-            .to_string();
+        let err = ScopedTokenStrategy::fetch_cloud_id(
+            &server.uri(),
+            &crate::test_utils::test_http_client(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("403"), "{err}");
         assert!(err.contains("cloud_id"), "{err}");
     }
@@ -342,9 +348,12 @@ mod tests {
             .mount(&server)
             .await;
 
-        let raw = ScopedTokenStrategy::fetch_cloud_id(&server.uri(), &reqwest::Client::new())
-            .await
-            .unwrap();
+        let raw = ScopedTokenStrategy::fetch_cloud_id(
+            &server.uri(),
+            &crate::test_utils::test_http_client(),
+        )
+        .await
+        .unwrap();
         assert_eq!(raw, "abc/../../evil");
         assert!(crate::config::validate_cloud_id(&raw).is_err());
     }
@@ -358,10 +367,13 @@ mod tests {
             .mount(&server)
             .await;
 
-        let err = ScopedTokenStrategy::fetch_cloud_id(&server.uri(), &reqwest::Client::new())
-            .await
-            .unwrap_err()
-            .to_string();
+        let err = ScopedTokenStrategy::fetch_cloud_id(
+            &server.uri(),
+            &crate::test_utils::test_http_client(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("cloud_id"), "{err}");
     }
 }

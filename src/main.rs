@@ -911,13 +911,9 @@ async fn handle_auth(
                 overrides,
             )?;
             let params = config.oauth_params()?;
-            let http = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_millis(
-                    config.performance.request_timeout_ms,
-                ))
-                .connect_timeout(std::time::Duration::from_secs(10))
-                .redirect(reqwest::redirect::Policy::none())
-                .build()?;
+            let http = atlassian_cli::client::http_client(std::time::Duration::from_millis(
+                config.performance.request_timeout_ms,
+            ))?;
 
             let store = TokenStore::new(&config.profile)?;
             let outcome = OAuthStrategy::login_with_timeout(

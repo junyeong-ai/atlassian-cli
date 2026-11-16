@@ -74,13 +74,21 @@ impl ReleaseClient {
         Self::build(base, base)
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "release downloads carry no credentials and follow GitHub's redirects to its CDN"
+    )]
     fn build(api_base: &str, web_base: &str) -> Result<Self, DistError> {
-        let http = reqwest::Client::builder()
+        let builder = reqwest::Client::builder()
             // GitHub rejects an API request without one, and the version
             // identifies which build asked when a rate limit has to be traced.
             .user_agent(concat!("atlassian-cli/", env!("CARGO_PKG_VERSION")))
             .timeout(Duration::from_secs(300))
-            .connect_timeout(Duration::from_secs(15))
+            .connect_timeout(Duration::from_secs(15));
+        // Tests reach only loopback mock servers, which an inherited HTTP(S)_PROXY would intercept.
+        #[cfg(test)]
+        let builder = builder.no_proxy();
+        let http = builder
             .build()
             .map_err(|e| DistError::Network(format!("could not build an HTTP client: {e}")))?;
         Ok(Self {

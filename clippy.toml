@@ -1,0 +1,5 @@
+disallowed-methods = [
+  { path = "reqwest::Client::new", reason = "build through client::http_client so the request timeout and the no-redirect policy apply" },
+  { path = "reqwest::Client::builder", reason = "build through client::http_client so the request timeout and the no-redirect policy apply" },
+  { path = "reqwest::ClientBuilder::new", reason = "build through client::http_client so the request timeout and the no-redirect policy apply" },
+]

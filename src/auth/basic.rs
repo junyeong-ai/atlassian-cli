@@ -98,7 +98,7 @@ mod tests {
     async fn auth_header_is_base64_basic() {
         let s = BasicStrategy::new(Some("test.atlassian.net"), "test".into(), "token123".into())
             .unwrap();
-        let http = reqwest::Client::new();
+        let http = crate::test_utils::test_http_client();
         assert_eq!(
             s.authorization(&http).await.unwrap(),
             "Basic dGVzdDp0b2tlbjEyMw=="

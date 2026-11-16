@@ -352,7 +352,7 @@ mod tests {
         let strategy = OAuthStrategy::resume(params.clone(), store())
             .await
             .unwrap();
-        let http = reqwest::Client::new();
+        let http = crate::test_utils::test_http_client();
         assert_eq!(
             strategy.authorization(&http).await.unwrap(),
             "Bearer test-access"

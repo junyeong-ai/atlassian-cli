@@ -144,13 +144,20 @@ impl Service {
     }
 }
 
-pub(crate) fn http_client(timeout: Duration) -> Result<reqwest::Client> {
-    reqwest::Client::builder()
+/// The HTTP client for every Atlassian and OAuth request.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the one place the Atlassian client policy is built"
+)]
+pub fn http_client(timeout: Duration) -> Result<reqwest::Client> {
+    let builder = reqwest::Client::builder()
         .timeout(timeout)
         .connect_timeout(Duration::from_secs(10))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .context("Failed to create HTTP client")
+        .redirect(reqwest::redirect::Policy::none());
+    // Tests reach only loopback mock servers, which an inherited HTTP(S)_PROXY would intercept.
+    #[cfg(test)]
+    let builder = builder.no_proxy();
+    builder.build().context("Failed to create HTTP client")
 }
 
 pub struct ApiClient {
