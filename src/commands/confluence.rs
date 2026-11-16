@@ -32,15 +32,14 @@ pub(crate) async fn run(
         } => {
             let as_markdown = matches!(format, ConfluenceFormat::Markdown);
             if all {
-                confluence::search_all(&query, limit, None, expand, stream, as_markdown, client)
-                    .await
+                confluence::search_all(&query, limit, expand, stream, as_markdown, client).await
             } else {
-                confluence::search(&query, limit, None, expand, as_markdown, client).await
+                confluence::search(&query, limit, expand, as_markdown, client).await
             }
         }
         ConfluenceSubcommand::Get { page_id, format } => {
             let as_markdown = matches!(format, ConfluenceFormat::Markdown);
-            confluence::get_page(&page_id, None, None, as_markdown, client).await
+            confluence::get_page(&page_id, as_markdown, client).await
         }
         ConfluenceSubcommand::Create {
             space,

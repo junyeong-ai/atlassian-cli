@@ -1,6 +1,5 @@
 use crate::client::{ApiClient, Service, extract_path_and_query};
 use crate::config::Config;
-use crate::confluence::fields::build_search_expand;
 use crate::filter;
 use crate::http_utils::encode_path_segment;
 use crate::markdown::confluence_to_markdown;
@@ -117,17 +116,33 @@ fn v1_next_link(links: &Value, next: &str) -> String {
     }
 }
 
+/// The `expand` a search sends: what every result carries, then the caller's
+/// additions, each under `content.` as the v1 search expands its content.
+fn search_expand(requested: Option<Vec<String>>) -> String {
+    let mut expand: Vec<String> = vec!["content.body.storage".into(), "content.version".into()];
+    for name in requested.into_iter().flatten() {
+        let name = if name.starts_with("content.") {
+            name
+        } else {
+            format!("content.{name}")
+        };
+        if !expand.contains(&name) {
+            expand.push(name);
+        }
+    }
+    expand.join(",")
+}
+
 pub async fn search(
     query: &str,
     limit: u32,
-    include_all_fields: Option<bool>,
-    additional_expand: Option<Vec<String>>,
+    expand: Option<Vec<String>>,
     as_markdown: bool,
     client: &ApiClient,
 ) -> Result<Value> {
     let final_cql = apply_space_filter(query, client.config());
     let url = "/wiki/rest/api/search";
-    let expand = build_search_expand(include_all_fields, additional_expand);
+    let expand = search_expand(expand);
 
     let effective_limit = effective_search_limit(limit);
 
@@ -162,14 +177,13 @@ pub async fn search(
 pub async fn search_all(
     query: &str,
     limit: u32,
-    include_all_fields: Option<bool>,
-    additional_expand: Option<Vec<String>>,
+    expand: Option<Vec<String>>,
     stream: bool,
     as_markdown: bool,
     client: &ApiClient,
 ) -> Result<Value> {
     let final_cql = apply_space_filter(query, client.config());
-    let expand = build_search_expand(include_all_fields, additional_expand);
+    let expand = search_expand(expand);
 
     // The counterpart of `fetch_all_v2_results`' ceiling, and for the same
     // reason: `CursorTrail` refuses a repeated path, and a server handing out a

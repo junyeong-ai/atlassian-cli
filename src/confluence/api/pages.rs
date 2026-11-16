@@ -1,6 +1,5 @@
 use super::{fetch_all_v2_results, fetch_version_number, resolve_space_id, v2_list_envelope};
 use crate::client::{ApiClient, Service};
-use crate::confluence::fields::apply_v2_filtering;
 use crate::filter;
 use crate::http_utils::encode_path_segment;
 use crate::markdown::confluence_to_markdown;
@@ -8,22 +7,16 @@ use crate::response::{require_field, require_u64};
 use anyhow::Result;
 use serde_json::{Value, json};
 
-pub async fn get_page(
-    page_id: &str,
-    include_all_fields: Option<bool>,
-    additional_includes: Option<Vec<String>>,
-    as_markdown: bool,
-    client: &ApiClient,
-) -> Result<Value> {
+/// A page with its storage body and version, the version an edit's
+/// `--base-version` names.
+pub async fn get_page(page_id: &str, as_markdown: bool, client: &ApiClient) -> Result<Value> {
     let url = format!("/wiki/api/v2/pages/{}", encode_path_segment(page_id));
-
-    let query_params = apply_v2_filtering(include_all_fields, additional_includes);
 
     let request = client
         .get(Service::Confluence, &url)
         .await?
         .header("Accept", "application/json")
-        .query(&query_params);
+        .query(&[("body-format", "storage"), ("include-version", "true")]);
     let response = client.execute("get page", request).await?;
 
     let mut data: Value = response.json().await?;

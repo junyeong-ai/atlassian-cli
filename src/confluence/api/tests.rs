@@ -34,7 +34,7 @@ async fn integ_search_all_honors_limit_on_first_page() {
         .await;
 
     let client = mock_client(server.uri());
-    let result = search_all("type = page", 10, None, None, false, false, &client)
+    let result = search_all("type = page", 10, None, false, false, &client)
         .await
         .unwrap();
     assert_eq!(result["total"], 0);
@@ -53,7 +53,7 @@ async fn integ_search_returns_envelope_with_server_total() {
         .await;
 
     let client = mock_client(server.uri());
-    let result = search("type = page", 10, None, None, false, &client)
+    let result = search("type = page", 10, None, false, &client)
         .await
         .unwrap();
     assert_eq!(result["total"], 7);
@@ -72,7 +72,7 @@ async fn integ_search_bails_on_missing_results() {
         .await;
 
     let client = mock_client(server.uri());
-    let err = search("type = page", 10, None, None, false, &client)
+    let err = search("type = page", 10, None, false, &client)
         .await
         .unwrap_err()
         .to_string();
@@ -134,7 +134,7 @@ async fn integ_search_keeps_a_result_that_carries_no_content() {
         .await;
 
     let client = mock_client(server.uri());
-    let result = search("type = space", 10, None, None, false, &client)
+    let result = search("type = space", 10, None, false, &client)
         .await
         .unwrap();
 
@@ -153,7 +153,7 @@ async fn integ_search_requires_numeric_total_size() {
         .await;
 
     let client = mock_client(server.uri());
-    let err = search("type = page", 10, None, None, false, &client)
+    let err = search("type = page", 10, None, false, &client)
         .await
         .unwrap_err()
         .to_string();
@@ -171,9 +171,7 @@ async fn integ_get_page_encodes_page_id() {
         .await;
 
     let client = mock_client(server.uri());
-    let result = get_page("12 345", None, None, false, &client)
-        .await
-        .unwrap();
+    let result = get_page("12 345", false, &client).await.unwrap();
     assert_eq!(result["id"], "12 345");
 }
 
@@ -1671,7 +1669,7 @@ async fn integ_v1_search_all_returns_every_page_it_fetched() {
             .await;
 
         let client = mock_client(server.uri());
-        let result = search_all("type = page", 50, None, None, stream, false, &client)
+        let result = search_all("type = page", 50, None, stream, false, &client)
             .await
             .unwrap();
         if stream {
@@ -1720,7 +1718,7 @@ async fn integ_v1_search_all_walks_past_a_page_that_matched_nothing() {
         .await;
 
     let client = mock_client(server.uri());
-    let result = search_all("type = page", 50, None, None, false, false, &client)
+    let result = search_all("type = page", 50, None, false, false, &client)
         .await
         .unwrap();
     assert_eq!(result["items"][0]["id"], "7", "{result}");
@@ -1748,7 +1746,7 @@ async fn integ_v1_search_all_bails_on_a_next_that_is_not_a_string() {
         .await;
 
     let client = mock_client(server.uri());
-    let err = search_all("type = page", 50, None, None, false, false, &client)
+    let err = search_all("type = page", 50, None, false, false, &client)
         .await
         .unwrap_err()
         .to_string();
@@ -1924,7 +1922,7 @@ async fn integ_v1_search_all_bails_when_the_cursor_stops_advancing() {
         .await;
 
     let client = mock_client(server.uri());
-    let err = search_all("type = page", 50, None, None, false, false, &client)
+    let err = search_all("type = page", 50, None, false, false, &client)
         .await
         .unwrap_err()
         .to_string();
@@ -2084,7 +2082,7 @@ async fn search_preserves_explicit_space_and_quoted_sorting_on_the_wire() {
             .expect(1)
             .mount(&server)
             .await;
-        let result = search(input, 1, None, None, false, &client).await.unwrap();
+        let result = search(input, 1, None, false, &client).await.unwrap();
         assert_eq!(result["items"][0]["id"], "42");
     }
 }
@@ -2127,5 +2125,14 @@ async fn integ_page_children_lists_every_direct_child_across_pages() {
             { "id": "1", "type": "page", "title": "Spec" },
             { "id": "2", "type": "folder", "title": "Archive" }
         ] })
+    );
+}
+
+#[test]
+fn search_expand_adds_requested_names_under_content_once() {
+    let expand = search_expand(Some(vec!["ancestors".into(), "content.version".into()]));
+    assert_eq!(
+        expand,
+        "content.body.storage,content.version,content.ancestors"
     );
 }
