@@ -7,7 +7,6 @@ authors = ["Atlassian CLI Team"]
 description = "High-performance CLI for Atlassian Jira and Confluence"
 license = "MIT"
 repository = "https://github.com/junyeong-ai/atlassian-cli"
-homepage = "https://github.com/junyeong-ai/atlassian-cli"
 keywords = ["atlassian", "jira", "confluence", "cli"]
 categories = ["command-line-utilities"]
 
