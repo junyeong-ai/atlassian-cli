@@ -47,8 +47,10 @@ async fn main() {
         _ => "trace",
     };
 
+    // xml5ever warns at the end of every document it parses that it does not
+    // implement `stop_parsing`, which says nothing about the document.
     tracing_subscriber::fmt()
-        .with_env_filter(log_level)
+        .with_env_filter(format!("{log_level},xml5ever=error"))
         .with_writer(std::io::stderr)
         .init();
 
