@@ -30,7 +30,7 @@ coordinated disclosure date has been agreed.
 - Workflow definitions are linted with `zizmor` on pushes to `main`, relevant
   pull requests, merge groups, and a weekly schedule.
 - Releases include SLSA build provenance attestations
-  (`actions/attest-build-provenance`), per-artifact SHA-256 checksums, and an
+  (`actions/attest`), per-artifact SHA-256 checksums, and an
   SPDX SBOM (`anchore/sbom-action`).
 - The OpenSSF Scorecard for this repository is published on every push to
   `main`.
