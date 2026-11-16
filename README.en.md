@@ -123,7 +123,7 @@ cargo install --path . --locked --root "$HOME/.local" --target "$(rustc --print 
 
 Add `--force` to replace a binary installed another way.
 
-Releases cover Linux (x86_64, aarch64), macOS (Intel, Apple Silicon) and Windows (x86_64). `install.sh` runs on Linux and macOS. Every platform publishes a `.tar.gz`, so `self update` works everywhere.
+Releases cover Linux (x86_64, aarch64; static, so any glibc or musl distribution), macOS (Intel, Apple Silicon) and Windows (x86_64). `install.sh` runs on Linux and macOS. Every platform publishes a `.tar.gz`, so `self update` works everywhere.
 
 ### Managing the installation
 

@@ -32,9 +32,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
+          - target: x86_64-unknown-linux-musl
             os: ubuntu-24.04
-          - target: aarch64-unknown-linux-gnu
+          - target: aarch64-unknown-linux-musl
             os: ubuntu-24.04-arm
           - target: x86_64-apple-darwin
             os: macos-26-intel
@@ -44,6 +44,9 @@ jobs:
             os: windows-latest
     env:
       TARGET: ${{ matrix.target }}
+      # Linux ships static musl binaries, which run whatever glibc a host has.
+      CC_x86_64_unknown_linux_musl: musl-gcc
+      CC_aarch64_unknown_linux_musl: musl-gcc
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -54,6 +57,10 @@ jobs:
         run: |
           rustup toolchain install
           rustup target add "$TARGET"
+          if [[ "$TARGET" == *-linux-musl ]]; then
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends musl-tools
+          fi
 
       # No build cache: restoring one into the job that produces the published
       # binaries is a cache-poisoning path, so a release builds from scratch.
@@ -66,7 +73,7 @@ jobs:
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"           # e.g. v0.2.0
-          stem="${BIN_NAME}-${tag}-${TARGET}" # e.g. atlassian-cli-v0.2.0-x86_64-unknown-linux-gnu
+          stem="${BIN_NAME}-${tag}-${TARGET}" # e.g. atlassian-cli-v0.2.0-x86_64-unknown-linux-musl
           mkdir -p dist staging
           bin="${BIN_NAME}"
           if [[ "$RUNNER_OS" == "Windows" ]]; then

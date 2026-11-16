@@ -44,7 +44,7 @@ The shell installer follows the same verify-before-replace order and refuses a d
 
 `read_from_tar_gz` returns one named member's bytes. No path from the archive reaches the filesystem, so archive-directed writes are not a thing that can happen.
 
-Linux release builds use Ubuntu 24.04 hosts for both architectures; general CI follows the latest runner images. Packaging runs each native release binary and requires its reported version to match the tag before uploading artifacts.
+Linux releases are static musl builds (`*-unknown-linux-musl`, C code through `musl-gcc`), so a host's glibc version never decides whether the binary runs; a glibc build from an Ubuntu 24.04 runner required glibc 2.39 and did not start on Ubuntu 22.04, Debian 12 or Amazon Linux 2023. CI tests Linux on the same musl targets and otherwise follows the latest runner images. Packaging runs each native release binary and requires its reported version to match the tag before uploading artifacts.
 
 Every target publishes a `.tar.gz`, Windows included, so there is one extraction path. `target.rs`'s table must match the `Release` workflow's build matrix or a download 404s; a test reads `release.yml` and holds them together.
 

@@ -123,7 +123,7 @@ cargo install --path . --locked --root "$HOME/.local" --target "$(rustc --print 
 
 다른 방식으로 설치한 바이너리를 교체하려면 `--force`를 더합니다.
 
-릴리스는 Linux(x86_64, aarch64), macOS(Intel, Apple Silicon), Windows(x86_64)용으로 나옵니다. `install.sh`는 Linux와 macOS에서 동작합니다. 모든 플랫폼이 `.tar.gz`를 발행하므로 `self update`는 어디서나 동작합니다.
+릴리스는 Linux(x86_64, aarch64; 정적 링크라 glibc 버전이나 musl 배포판과 무관), macOS(Intel, Apple Silicon), Windows(x86_64)용으로 나옵니다. `install.sh`는 Linux와 macOS에서 동작합니다. 모든 플랫폼이 `.tar.gz`를 발행하므로 `self update`는 어디서나 동작합니다.
 
 ### 설치 관리
 

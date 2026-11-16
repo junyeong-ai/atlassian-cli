@@ -22,11 +22,11 @@ const WINDOWS_BINARY: &str = "atlassian-cli.exe";
 impl ReleaseTarget {
     pub const ALL: [ReleaseTarget; 5] = [
         ReleaseTarget {
-            triple: "x86_64-unknown-linux-gnu",
+            triple: "x86_64-unknown-linux-musl",
             binary: UNIX_BINARY,
         },
         ReleaseTarget {
-            triple: "aarch64-unknown-linux-gnu",
+            triple: "aarch64-unknown-linux-musl",
             binary: UNIX_BINARY,
         },
         ReleaseTarget {
@@ -47,9 +47,9 @@ impl ReleaseTarget {
     /// release publishes none.
     pub fn current() -> Option<&'static ReleaseTarget> {
         let triple = if cfg!(all(target_arch = "x86_64", target_os = "linux")) {
-            "x86_64-unknown-linux-gnu"
+            "x86_64-unknown-linux-musl"
         } else if cfg!(all(target_arch = "aarch64", target_os = "linux")) {
-            "aarch64-unknown-linux-gnu"
+            "aarch64-unknown-linux-musl"
         } else if cfg!(all(target_arch = "x86_64", target_os = "macos")) {
             "x86_64-apple-darwin"
         } else if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
