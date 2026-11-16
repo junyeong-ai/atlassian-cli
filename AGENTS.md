@@ -77,8 +77,9 @@ only where their contracts are the same.
 - Lists use an `items` envelope. Creating writes return the identifiers callers
   need; side-effect-only writes return `{}`. Extract required response fields
   with `response` helpers; malformed successful responses are errors.
-- Whole-resource deletion requires `--yes` at the CLI boundary. Targeted
-  sub-resource removals require an unambiguous identifier.
+- `delete` destroys a resource; `remove` detaches an association (a link,
+  label or watcher). Whole-resource deletion requires `--yes` at the CLI
+  boundary. Targeted sub-resource removals require an unambiguous identifier.
 
 ## HTTP and authentication
 

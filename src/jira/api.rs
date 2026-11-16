@@ -19,7 +19,7 @@ pub use comments::{add_comment, delete_comment, get_comments, update_comment};
 mod links;
 pub use links::{add_link, get_link_types, get_links, remove_link, remove_link_by_id};
 mod worklogs;
-pub use worklogs::{add_worklog, get_worklogs, remove_worklog, update_worklog};
+pub use worklogs::{add_worklog, delete_worklog, get_worklogs, update_worklog};
 mod agile;
 pub use agile::{
     get_boards, get_sprints, move_issues_to_backlog, move_issues_to_sprint, resolve_board_id,

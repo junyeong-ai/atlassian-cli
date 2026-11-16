@@ -547,7 +547,7 @@ Commands:
   add     Add a worklog entry to an issue
   list    List worklog entries on an issue
   update  Update a worklog entry
-  remove  Remove a worklog entry
+  delete  Delete a worklog entry
   help    Print this message or the help of the given subcommand(s)
 
 Options:
@@ -621,12 +621,12 @@ Options:
           Print help
 ```
 
-## `atlassian-cli jira worklog remove`
+## `atlassian-cli jira worklog delete`
 
 ```text
-Remove a worklog entry
+Delete a worklog entry
 
-Usage: atlassian-cli jira worklog remove <ISSUE_KEY> <WORKLOG_ID>
+Usage: atlassian-cli jira worklog delete <ISSUE_KEY> <WORKLOG_ID>
 
 Arguments:
   <ISSUE_KEY>

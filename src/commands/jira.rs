@@ -226,10 +226,10 @@ pub(crate) async fn run(cmd: JiraCommand, client: &atlassian_cli::ApiClient) -> 
                 jira::update_worklog(&issue_key, &worklog_id, &time_spent, comment_val, client)
                     .await
             }
-            WorklogAction::Remove {
+            WorklogAction::Delete {
                 issue_key,
                 worklog_id,
-            } => jira::remove_worklog(&issue_key, &worklog_id, client).await,
+            } => jira::delete_worklog(&issue_key, &worklog_id, client).await,
         },
         JiraSubcommand::Watcher { action } => match action {
             WatcherAction::Add { issue_key } => jira::add_watcher(&issue_key, client).await,

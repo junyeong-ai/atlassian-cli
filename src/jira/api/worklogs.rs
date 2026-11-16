@@ -90,7 +90,7 @@ pub async fn update_worklog(
     Ok(json!({ "id": require_field(&data, "/id", "update worklog")? }))
 }
 
-pub async fn remove_worklog(
+pub async fn delete_worklog(
     issue_key: &str,
     worklog_id: &str,
     client: &ApiClient,
@@ -102,7 +102,7 @@ pub async fn remove_worklog(
     );
 
     let request = client.delete(Service::Jira, &url).await?;
-    client.execute("remove worklog", request).await?;
+    client.execute("delete worklog", request).await?;
 
     Ok(json!({}))
 }

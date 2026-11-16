@@ -77,7 +77,7 @@ atlassian-cli jira worklog add PROJ-123 "2h 30m" --comment "Investigation"
 atlassian-cli jira worklog add PROJ-123 "2h" --started 2026-08-22T09:30:00.000+0900   # backdate; omitted logs now
 atlassian-cli jira worklog list PROJ-123
 atlassian-cli jira worklog update PROJ-123 10001 "3h"   # worklog id from `worklog list`
-atlassian-cli jira worklog remove PROJ-123 10001
+atlassian-cli jira worklog delete PROJ-123 10001
 
 # Watchers — operate on the signed-in user
 atlassian-cli jira watcher add PROJ-123

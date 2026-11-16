@@ -60,7 +60,7 @@ pub async fn update_comment(
 }
 
 /// Delete a single comment. Scoped to one comment by id (the id is the
-/// specificity guard), so — like `remove_link`/`remove_worklog` — it does not
+/// specificity guard), so — like `remove_link`/`delete_worklog` — it does not
 /// require a separate `--yes` confirmation at the CLI layer.
 pub async fn delete_comment(
     issue_key: &str,

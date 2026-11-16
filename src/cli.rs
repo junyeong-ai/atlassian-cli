@@ -421,8 +421,8 @@ pub(crate) enum WorklogAction {
         #[arg(long)]
         comment: Option<String>,
     },
-    /// Remove a worklog entry
-    Remove {
+    /// Delete a worklog entry
+    Delete {
         /// Issue key
         issue_key: String,
         /// Worklog ID
