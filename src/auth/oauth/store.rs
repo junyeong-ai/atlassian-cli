@@ -159,7 +159,7 @@ pub enum TokenStorageBackend {
 impl TokenStorageBackend {
     pub fn as_str(self) -> &'static str {
         match self {
-            TokenStorageBackend::Keyring => "keyring",
+            TokenStorageBackend::Keyring => "keychain",
             TokenStorageBackend::File => "file",
         }
     }

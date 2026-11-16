@@ -662,7 +662,7 @@ fn credentials_report(
         "file": file.map(display_path),
         "fileError": stored.file_error,
         "profiles": stored.profiles,
-        "keyring": keyring_report(&stored.keyring),
+        "keychain": keyring_report(&stored.keyring),
     })
 }
 
