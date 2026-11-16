@@ -13,13 +13,14 @@
 
 use super::callback;
 use super::store::TokenSet;
-use crate::auth::DEFAULT_TOKEN_LIFETIME_SECS;
+use crate::auth::{DEFAULT_TOKEN_LIFETIME_SECS, MissingCredentials};
 use anyhow::{Context, Result, bail};
-use oauth2::basic::{BasicClient, BasicTokenResponse};
+use oauth2::basic::{BasicClient, BasicErrorResponse, BasicTokenResponse};
 use oauth2::http;
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointNotSet, EndpointSet,
-    PkceCodeChallenge, RedirectUrl, RefreshToken, Scope, TokenResponse, TokenUrl,
+    PkceCodeChallenge, RedirectUrl, RefreshToken, RequestTokenError, Scope, TokenResponse,
+    TokenUrl,
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
@@ -158,6 +159,23 @@ pub async fn login(
 /// Exchange the stored refresh_token for a fresh access_token (and possibly a
 /// rotated refresh_token). Atlassian rotates refresh tokens — callers MUST
 /// overwrite stored state with the returned set.
+/// A refresh the token endpoint refused ends the stored session, so it is a
+/// missing credential; any other failure happened on the way to the endpoint.
+fn refresh_failure<E>(error: RequestTokenError<E, BasicErrorResponse>) -> anyhow::Error
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    match error {
+        RequestTokenError::ServerResponse(refusal) => {
+            anyhow::Error::new(MissingCredentials(format!(
+                "The stored OAuth session was refused when refreshed ({refusal}). Run \
+                 `atlassian-cli auth login`."
+            )))
+        }
+        other => anyhow::Error::new(other).context("Failed to refresh OAuth token"),
+    }
+}
+
 pub async fn refresh(
     inputs: &FlowInputs<'_>,
     refresh_token: &SecretString,
@@ -172,9 +190,7 @@ pub async fn refresh(
         ))
         .request_async(&send)
         .await
-        .context(
-            "Failed to refresh OAuth token (refresh_token may be expired — try `auth login`)",
-        )?;
+        .map_err(refresh_failure)?;
     Ok(to_token_set(
         &token_response,
         inputs.scopes,
@@ -278,6 +294,21 @@ fn to_token_set(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_refused_refresh_is_a_missing_credential_and_a_failed_trip_is_not() {
+        use oauth2::basic::BasicErrorResponseType;
+
+        let refused = refresh_failure::<std::io::Error>(RequestTokenError::ServerResponse(
+            BasicErrorResponse::new(BasicErrorResponseType::InvalidGrant, None, None),
+        ));
+        assert!(refused.downcast_ref::<MissingCredentials>().is_some());
+
+        let unreachable = refresh_failure(RequestTokenError::Request(std::io::Error::other(
+            "connection reset",
+        )));
+        assert!(unreachable.downcast_ref::<MissingCredentials>().is_none());
+    }
+
     use super::*;
 
     #[test]
