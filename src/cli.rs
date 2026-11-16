@@ -190,6 +190,9 @@ pub(crate) enum JiraSubcommand {
         all: bool,
         #[arg(long, requires = "all", help = "Stream as JSONL (requires --all)")]
         stream: bool,
+        /// Continue from the `nextPageToken` an earlier page returned
+        #[arg(long, conflicts_with = "all")]
+        page_token: Option<String>,
         #[arg(long, value_delimiter = ',', help = "Fields to return")]
         fields: Option<Vec<String>>,
         /// Format of rich-text fields in the output; markdown also returns the description

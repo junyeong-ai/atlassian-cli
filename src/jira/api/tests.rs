@@ -110,7 +110,7 @@ async fn integ_search_bails_when_the_body_lost_its_issues_array() {
         .await;
 
     let client = mock_client(server.uri());
-    let err = search("project = X", 50, None, false, &client)
+    let err = search("project = X", 50, None, None, false, &client)
         .await
         .unwrap_err()
         .to_string();
@@ -1116,11 +1116,35 @@ async fn integ_search_asks_for_a_page_and_answers_with_the_envelope() {
         .await;
 
     let client = mock_client(server.uri());
-    let result = search("project = X", 25, None, false, &client)
+    let result = search("project = X", 25, None, None, false, &client)
         .await
         .unwrap();
     assert_eq!(result["count"], 2, "{result}");
     assert_eq!(result["items"][1]["key"], "X-2", "{result}");
+    assert_eq!(result["nextPageToken"], Value::Null, "{result}");
+}
+
+/// A page that does not end the results says so with the token that continues
+/// them, and that token asks for the next page.
+#[tokio::test]
+async fn integ_search_hands_back_the_token_that_continues_it() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_string_contains("\"nextPageToken\":\"P2\""))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issues": [{ "key": "X-3" }], "nextPageToken": "P3"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = mock_client(server.uri());
+    let result = search("project = X", 1, Some("P2"), None, false, &client)
+        .await
+        .unwrap();
+    assert_eq!(result["items"][0]["key"], "X-3", "{result}");
+    assert_eq!(result["nextPageToken"], "P3", "{result}");
 }
 
 /// JQL search is a POST that changes nothing, so a rate-limited page is
@@ -1143,7 +1167,7 @@ async fn integ_search_asks_again_for_a_rate_limited_page() {
         .await;
 
     let client = mock_client(server.uri());
-    let result = search("project = X", 25, None, false, &client)
+    let result = search("project = X", 25, None, None, false, &client)
         .await
         .unwrap();
     assert_eq!(result["count"], 0, "{result}");
@@ -2876,7 +2900,7 @@ async fn search_preserves_scope_and_quoted_sorting_on_the_wire() {
             .expect(1)
             .mount(&server)
             .await;
-        let result = search(input, 1, None, false, &client).await.unwrap();
+        let result = search(input, 1, None, None, false, &client).await.unwrap();
         assert_eq!(result["items"][0]["key"], "OTHER-1");
     }
 }

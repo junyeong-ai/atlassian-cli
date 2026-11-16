@@ -190,13 +190,13 @@ atlassian-cli confluence attachment upload 12345 ./icon.svg --content-type image
 
 | Need | Flag |
 |---|---|
-| One page | (default `--limit N`) |
+| One page | (default `--limit N`); Jira continues with `--page-token` |
 | Every result | `--all` |
 | Stream to disk / pipe | `--all --stream` (outputs JSONL) |
 | Pick fields (Jira `get` & `search`) | `--fields key,summary,status` (or `*all` on `get` for the full issue) |
 | Expand fields (Confluence `search` only) | `--expand ancestors,space` — `get` has no `--expand`; read `spaceId` from `get`, then map it via `space list` |
 
-Jira `--all` requests 100 issues per page and ignores `--limit`. Confluence `--all` uses `--limit` for the first page only, capped at 50; subsequent requests follow the server's cursor links.
+A Jira page without `--all` carries `nextPageToken`: `null` when it ends the results, otherwise the value to pass as `--page-token` for the next page. Jira can return fewer issues than `--limit` while more remain, so read the token, not the count. Jira `--all` requests 100 issues per page and ignores `--limit`. Confluence `--all` uses `--limit` for the first page only, capped at 50; subsequent requests follow the server's cursor links.
 
 `--stream` writes one compact JSON object per line to stdout and progress to stderr; `--pretty` does not apply to it.
 

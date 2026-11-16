@@ -139,6 +139,9 @@ Options:
       --stream
           Stream as JSONL (requires --all)
 
+      --page-token <PAGE_TOKEN>
+          Continue from the `nextPageToken` an earlier page returned
+
       --fields <FIELDS>
           Fields to return
 

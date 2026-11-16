@@ -67,9 +67,12 @@ pub async fn get_issue(
     Ok(data)
 }
 
+/// One page of results. `nextPageToken` in the result is the token for the
+/// page after it, or `null` when this page ends the results.
 pub async fn search(
     jql: &str,
     limit: u32,
+    page_token: Option<&str>,
     fields: Option<Vec<String>>,
     as_markdown: bool,
     client: &ApiClient,
@@ -79,11 +82,14 @@ pub async fn search(
 
     let resolved_fields = fields::resolve_search_fields(fields, as_markdown, client.config());
 
-    let body = json!({
+    let mut body = json!({
         "jql": final_jql,
         "maxResults": limit,
         "fields": resolved_fields,
     });
+    if let Some(token) = page_token {
+        body["nextPageToken"] = json!(token);
+    }
 
     let request = client
         .post(Service::Jira, url)
@@ -101,15 +107,39 @@ pub async fn search(
     let Some(issues) = data["issues"].as_array().cloned() else {
         anyhow::bail!("search succeeded but its response had no 'issues' array: {data}");
     };
+    let next = read_next_page_token(&data)?;
     let count = issues.len();
     let mut result = list_envelope(issues, client);
     result["count"] = json!(count);
+    result["nextPageToken"] = json!(next);
 
     if as_markdown {
         convert_issues_to_markdown(&mut result);
     }
 
     Ok(result)
+}
+
+/// The token for the page after this one. Absent or null is the endpoint's
+/// end-of-results signal and nothing else is: a token that is not a string is
+/// drift, the distinction the Confluence walk draws on `_links.next`, and an
+/// empty one names no page — sent back, it would repeat a page or fail later
+/// under a token that reads like our own bug.
+fn read_next_page_token(data: &Value) -> Result<Option<String>> {
+    let signal = &data["nextPageToken"];
+    if signal.is_null() {
+        return Ok(None);
+    }
+    let Some(token) = signal.as_str() else {
+        anyhow::bail!("search succeeded but its 'nextPageToken' was not a string: {signal}");
+    };
+    if token.is_empty() {
+        anyhow::bail!(
+            "search returned an empty 'nextPageToken', which is neither a page to fetch nor \
+             the absent field that ends the results"
+        );
+    }
+    Ok(Some(token.to_string()))
 }
 
 pub async fn search_all(
@@ -162,7 +192,7 @@ pub async fn search_all(
         let Some(issues) = data["issues"].as_array().cloned() else {
             anyhow::bail!("search succeeded but its response had no 'issues' array: {data}");
         };
-        let next_signal = data["nextPageToken"].clone();
+        let next = read_next_page_token(&data)?;
         let count = issues.len();
 
         let processed_issues: Vec<Value> = issues
@@ -195,38 +225,22 @@ pub async fn search_all(
             page_num, count, total
         );
 
-        // Absent or null is the endpoint's own end-of-results signal; a token
-        // that is there and is not a string is drift, the same distinction the
-        // Confluence walk draws on `_links.next`. An empty page is neither —
-        // with a token still live, breaking on one drops every page after it.
-        if next_signal.is_null() {
+        // An empty page is not the end — with a token still live, breaking on
+        // one drops every page after it.
+        let Some(token) = next else {
             // Cleared rather than merely broken out of: the check after the
             // loop reads this to tell "the endpoint said stop" from "the page
             // bound ran out".
             next_page_token = None;
             break;
-        }
-        let Some(token) = next_signal.as_str() else {
-            anyhow::bail!(
-                "search succeeded but its 'nextPageToken' was not a string: {next_signal}"
-            );
         };
-        // Absent or null is this endpoint's end signal and nothing else is. An
-        // empty string names no page, and sent back it would either repeat one
-        // or fail a request later under a token that reads like our own bug.
-        if token.is_empty() {
-            anyhow::bail!(
-                "search returned an empty 'nextPageToken', which is neither a page to fetch nor \
-                 the absent field that ends the walk"
-            );
-        }
-        if !seen_tokens.insert(token.to_string()) {
+        if !seen_tokens.insert(token.clone()) {
             anyhow::bail!(
                 "search returned a page token it had already used ({token}), so the walk would \
                  not advance"
             );
         }
-        next_page_token = Some(token.to_string());
+        next_page_token = Some(token);
 
         sleep(Duration::from_millis(
             client.config().performance.rate_limit_delay_ms,

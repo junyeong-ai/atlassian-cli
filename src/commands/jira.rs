@@ -57,6 +57,7 @@ pub(crate) async fn run(cmd: JiraCommand, client: &atlassian_cli::ApiClient) -> 
             limit,
             all,
             stream,
+            page_token,
             fields,
             format,
         } => {
@@ -64,7 +65,8 @@ pub(crate) async fn run(cmd: JiraCommand, client: &atlassian_cli::ApiClient) -> 
             if all {
                 jira::search_all(&jql, fields, stream, as_markdown, client).await
             } else {
-                jira::search(&jql, limit, fields, as_markdown, client).await
+                let token = page_token.as_deref();
+                jira::search(&jql, limit, token, fields, as_markdown, client).await
             }
         }
         JiraSubcommand::Create {
