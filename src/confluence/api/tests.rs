@@ -53,12 +53,75 @@ async fn integ_search_returns_envelope_with_server_total() {
         .await;
 
     let client = mock_client(server.uri());
-    let result = search("type = page", 10, None, false, &client)
+    let result = search("type = page", 10, None, None, false, &client)
         .await
         .unwrap();
     assert_eq!(result["total"], 7);
     assert_eq!(result["count"], 1);
     assert_eq!(result["items"][0]["id"], "1");
+}
+
+/// A search answers with what matched and where — not the pages' bodies,
+/// which it asks for only under Markdown — and with the cursor that continues it.
+#[tokio::test]
+async fn integ_search_returns_matches_and_the_token_that_continues_them() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/wiki/rest/api/search"))
+        .and(query_param("expand", "content.version"))
+        .and(query_param("cursor", "C1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [{
+                "content": { "id": "1", "title": "Runbook" },
+                "excerpt": "the @@@hl@@@deploy@@@endhl@@@ steps",
+                "url": "/spaces/OPS/pages/1/Runbook",
+                "lastModified": "2026-11-01T09:00:00.000Z"
+            }],
+            "totalSize": 30,
+            "_links": {
+                "base": "https://example.atlassian.net/wiki",
+                "next": "/rest/api/search?cql=text~deploy&limit=10&cursor=C2"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = mock_client(server.uri());
+    let result = search("text ~ deploy", 10, Some("C1"), None, false, &client)
+        .await
+        .unwrap();
+    let item = &result["items"][0];
+    assert_eq!(item["excerpt"], "the @@@hl@@@deploy@@@endhl@@@ steps");
+    assert_eq!(item["url"], "/spaces/OPS/pages/1/Runbook");
+    assert_eq!(item["lastModified"], "2026-11-01T09:00:00.000Z");
+    assert_eq!(result["nextPageToken"], "C2");
+}
+
+#[tokio::test]
+async fn integ_search_under_markdown_reads_the_bodies_it_converts() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/wiki/rest/api/search"))
+        .and(query_param(
+            "expand",
+            "content.version,content.body.storage",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [{ "content": { "id": "1",
+                "body": { "storage": { "value": "<p><strong>Hi</strong></p>" } } } }],
+            "totalSize": 1
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = mock_client(server.uri());
+    let result = search("type = page", 10, None, None, true, &client)
+        .await
+        .unwrap();
+    assert_eq!(result["items"][0]["body"]["storage"]["value"], "**Hi**");
+    assert_eq!(result["nextPageToken"], Value::Null);
 }
 
 #[tokio::test]
@@ -72,7 +135,7 @@ async fn integ_search_bails_on_missing_results() {
         .await;
 
     let client = mock_client(server.uri());
-    let err = search("type = page", 10, None, false, &client)
+    let err = search("type = page", 10, None, None, false, &client)
         .await
         .unwrap_err()
         .to_string();
@@ -134,7 +197,7 @@ async fn integ_search_keeps_a_result_that_carries_no_content() {
         .await;
 
     let client = mock_client(server.uri());
-    let result = search("type = space", 10, None, false, &client)
+    let result = search("type = space", 10, None, None, false, &client)
         .await
         .unwrap();
 
@@ -153,7 +216,7 @@ async fn integ_search_requires_numeric_total_size() {
         .await;
 
     let client = mock_client(server.uri());
-    let err = search("type = page", 10, None, false, &client)
+    let err = search("type = page", 10, None, None, false, &client)
         .await
         .unwrap_err()
         .to_string();
@@ -2082,7 +2145,7 @@ async fn search_preserves_explicit_space_and_quoted_sorting_on_the_wire() {
             .expect(1)
             .mount(&server)
             .await;
-        let result = search(input, 1, None, false, &client).await.unwrap();
+        let result = search(input, 1, None, None, false, &client).await.unwrap();
         assert_eq!(result["items"][0]["id"], "42");
     }
 }
@@ -2130,9 +2193,13 @@ async fn integ_page_children_lists_every_direct_child_across_pages() {
 
 #[test]
 fn search_expand_adds_requested_names_under_content_once() {
-    let expand = search_expand(Some(vec!["ancestors".into(), "content.version".into()]));
+    let requested = vec!["ancestors".into(), "content.version".into()];
     assert_eq!(
-        expand,
-        "content.body.storage,content.version,content.ancestors"
+        search_expand(Some(requested), false),
+        "content.version,content.ancestors"
+    );
+    assert_eq!(
+        search_expand(None, true),
+        "content.version,content.body.storage"
     );
 }

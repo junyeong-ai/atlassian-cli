@@ -544,20 +544,20 @@ pub(crate) enum ConfluenceSubcommand {
         #[arg(
             long,
             default_value = "50",
-            help = "Results per page (capped at 50 by the body-expanding search API). With --all, controls first-page batch size"
+            help = "Results per page, at most 50. With --all, the size of the first page"
         )]
         limit: u32,
         #[arg(long, help = "Fetch all results via cursor pagination")]
         all: bool,
         #[arg(long, requires = "all", help = "Stream as JSONL (requires --all)")]
         stream: bool,
-        #[arg(
-            long,
-            value_delimiter = ',',
-            help = "Expand fields (e.g., body.storage,ancestors)"
-        )]
+        /// Continue from the `nextPageToken` an earlier page returned
+        #[arg(long, conflicts_with = "all")]
+        page_token: Option<String>,
+        /// Add to each result: body.storage for the page body, ancestors, space, ...
+        #[arg(long, value_delimiter = ',')]
         expand: Option<Vec<String>>,
-        /// Format of page bodies in the output
+        /// Format of page bodies in the output; markdown also returns the body
         #[arg(long, value_enum, default_value_t)]
         format: ConfluenceFormat,
     },

@@ -22,9 +22,9 @@ pub use content::{
 mod spaces;
 pub use spaces::{get_space, get_spaces, resolve_space_id};
 
-/// Operative page-size cap for the CQL search endpoint. The v1 search with
-/// body expansion (which we always request) is throttled well below the
-/// non-body ceiling, so 50 is the real maximum a single page returns.
+/// Page-size cap for the CQL search endpoint. A search that expands bodies
+/// returns at most 50 per page, and the ceiling without them is not
+/// documented, so every page keeps to the one that is known.
 const MAX_SEARCH_LIMIT: u32 = 50;
 
 fn apply_space_filter(cql: &str, config: &Config) -> String {
@@ -116,10 +116,14 @@ fn v1_next_link(links: &Value, next: &str) -> String {
     }
 }
 
-/// The `expand` a search sends: what every result carries, then the caller's
-/// additions, each under `content.` as the v1 search expands its content.
-fn search_expand(requested: Option<Vec<String>>) -> String {
-    let mut expand: Vec<String> = vec!["content.body.storage".into(), "content.version".into()];
+/// The `expand` a search sends: the version every result carries, the body
+/// when Markdown is asked for (as a Jira search adds the description), then the
+/// caller's additions, each under `content.` as the v1 search expands content.
+fn search_expand(requested: Option<Vec<String>>, as_markdown: bool) -> String {
+    let mut expand: Vec<String> = vec!["content.version".into()];
+    if as_markdown {
+        expand.push("content.body.storage".into());
+    }
     for name in requested.into_iter().flatten() {
         let name = if name.starts_with("content.") {
             name
@@ -133,34 +137,23 @@ fn search_expand(requested: Option<Vec<String>>) -> String {
     expand.join(",")
 }
 
+/// One page of matches. `nextPageToken` in the result continues the search
+/// through `page_token`, or is `null` when this page ends the results.
 pub async fn search(
     query: &str,
     limit: u32,
+    page_token: Option<&str>,
     expand: Option<Vec<String>>,
     as_markdown: bool,
     client: &ApiClient,
 ) -> Result<Value> {
     let final_cql = apply_space_filter(query, client.config());
-    let url = "/wiki/rest/api/search";
-    let expand = search_expand(expand);
-
-    let effective_limit = effective_search_limit(limit);
-
-    let request = client
-        .get(Service::Confluence, url)
-        .await?
-        .header("Accept", "application/json")
-        .query(&[
-            ("cql", final_cql.as_str()),
-            ("limit", &effective_limit.to_string()),
-            ("expand", &expand),
-        ]);
-    let response = client.execute("search", request).await?;
-
-    let mut data: Value = response.json().await?;
+    let expand = search_expand(expand, as_markdown);
+    let mut data = fetch_search_page(client, &final_cql, &expand, limit, page_token).await?;
 
     let mut items = extract_content_from_results(&mut data, as_markdown)?;
     let total = require_u64(&data, "/totalSize", "search")?;
+    let next = search_cursor(&data)?;
     // As on the `--all` path and the Jira side: the items are filtered, the
     // envelope this CLI promises is not.
     for item in &mut items {
@@ -171,7 +164,32 @@ pub async fn search(
         "items": items,
         "count": items.len(),
         "total": total,
+        "nextPageToken": next,
     }))
+}
+
+/// The `cursor` the page after this one is fetched with, read from the `next`
+/// link the v1 search returns; `None` when there is no next page.
+fn search_cursor(data: &Value) -> Result<Option<String>> {
+    let links = &data["_links"];
+    let next = match &links["next"] {
+        Value::Null => return Ok(None),
+        Value::String(next) => next,
+        other => anyhow::bail!("search succeeded but its '_links.next' was not a string: {other}"),
+    };
+    // Parsed only to read its query: a rooted link needs a base to parse
+    // against, and an absolute one replaces it.
+    let link =
+        reqwest::Url::parse("https://confluence.invalid/")?.join(&v1_next_link(links, next))?;
+    let cursor = link
+        .query_pairs()
+        .find(|(name, _)| name == "cursor")
+        .map(|(_, value)| value.into_owned())
+        .filter(|cursor| !cursor.is_empty());
+    match cursor {
+        Some(cursor) => Ok(Some(cursor)),
+        None => anyhow::bail!("search returned a next link without a cursor: {next}"),
+    }
 }
 
 pub async fn search_all(
@@ -183,7 +201,7 @@ pub async fn search_all(
     client: &ApiClient,
 ) -> Result<Value> {
     let final_cql = apply_space_filter(query, client.config());
-    let expand = search_expand(expand);
+    let expand = search_expand(expand, as_markdown);
 
     // The counterpart of `fetch_all_v2_results`' ceiling, and for the same
     // reason: `CursorTrail` refuses a repeated path, and a server handing out a
@@ -206,7 +224,7 @@ pub async fn search_all(
         let mut data = if let Some(ref url) = next_url {
             fetch_page(client, url).await?
         } else {
-            fetch_initial_page(client, &final_cql, &expand, limit).await?
+            fetch_search_page(client, &final_cql, &expand, limit, None).await?
         };
 
         if page_num == 1 {
@@ -292,24 +310,29 @@ pub async fn search_all(
     }
 }
 
-async fn fetch_initial_page(
+async fn fetch_search_page(
     client: &ApiClient,
     cql: &str,
     expand: &str,
     limit: u32,
+    cursor: Option<&str>,
 ) -> Result<Value> {
     let url = "/wiki/rest/api/search";
     let effective_limit = effective_search_limit(limit).to_string();
 
+    let mut query = vec![
+        ("cql", cql),
+        ("limit", &effective_limit),
+        ("expand", expand),
+    ];
+    if let Some(cursor) = cursor {
+        query.push(("cursor", cursor));
+    }
     let request = client
         .get(Service::Confluence, url)
         .await?
         .header("Accept", "application/json")
-        .query(&[
-            ("cql", cql),
-            ("limit", &effective_limit),
-            ("expand", expand),
-        ]);
+        .query(&query);
     let response = client.execute("search", request).await?;
 
     response.json().await.map_err(Into::into)
@@ -844,6 +867,13 @@ fn extract_content_from_results(data: &mut Value, as_markdown: bool) -> Result<V
                 return item.take();
             };
             let mut content = content.take();
+            // What the match adds to the content: where the query matched, the
+            // page's address under the site's `/wiki`, and when it changed.
+            for field in ["excerpt", "url", "lastModified"] {
+                if let Some(value) = item.get(field) {
+                    content[field] = value.clone();
+                }
+            }
 
             if as_markdown
                 && let Some(html) = content

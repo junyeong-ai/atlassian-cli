@@ -132,12 +132,13 @@ A depth-limit marker in Markdown means content was truncated; inspect the unconv
 ```bash
 # Read
 atlassian-cli confluence get 12345 --format markdown
-atlassian-cli confluence search "space = TEAM" --limit 20
+atlassian-cli confluence search "space = TEAM" --limit 20     # matches: title, excerpt, url — no bodies
+atlassian-cli confluence search "text ~ deploy" --format markdown --limit 5   # with bodies, as Markdown
 atlassian-cli confluence children 12345          # direct children of any type, each with its `type`; JSON only
 atlassian-cli confluence comment list 12345 --format markdown   # every reply, footer and inline
 
 # Large reads — cursor pagination (list endpoints auto-follow cursors to completion)
-atlassian-cli confluence search "space = TEAM" --all --stream > pages.jsonl
+atlassian-cli confluence search "space = TEAM" --all --stream --expand body.storage > pages.jsonl
 
 # Pages — storage format by default, Markdown with --format markdown
 atlassian-cli confluence create SPACE "Title" - --format markdown < page.md
@@ -183,20 +184,21 @@ atlassian-cli confluence attachment upload 12345 ./icon.svg --content-type image
 - `--location` defaults to `footer` on `comment get`/`replies` — an id from an inline thread needs `--location inline`, and every entry `comment list` returns already states which it is. A wrong `--location` is a 404, not a fallback.
 - `property set` values are **strict JSON** — quote bare strings as `'"text"'`, not `text`.
 - `attachment upload` upserts by filename; add `--minor` to suppress watcher notifications on re-upload. The `Content-Type` is mapped from the file extension (so `diagram.png` → `image/png` and renders inline instead of becoming an opaque download); pass `--content-type <mime>` to override. Note: Confluence Cloud often blocks **inline SVG** rendering for security, so embed diagrams as PNG when you need them to display.
-- For OAuth, request the scopes for every endpoint a command calls, including reads before writes. CQL `search` needs `search:confluence`, plus `read:confluence-content.all` for the page bodies it expands. Page-property `set`/`delete` need `read:page:confluence` and `write:page:confluence`; comment `update` needs `read:comment:confluence` and `write:comment:confluence`, while comment `delete` needs `delete:comment:confluence`. Page create also looks up its space; page update reads its current version unless `--base-version` is given; `children` needs `read:hierarchical-content:confluence`. Check the [property](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-content-properties/), [comment](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-comment/), and [page](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-page/) endpoint requirements. A `401 "scope does not match"` can indicate missing grants. Enable required scopes on the app, request them in the profile, then reauthorize; changing app permissions alone does not update an existing token.
+- For OAuth, request the scopes for every endpoint a command calls, including reads before writes. CQL `search` needs `search:confluence`, plus `read:confluence-content.all` to expand page bodies (`--format markdown`, `--expand body.storage`). Page-property `set`/`delete` need `read:page:confluence` and `write:page:confluence`; comment `update` needs `read:comment:confluence` and `write:comment:confluence`, while comment `delete` needs `delete:comment:confluence`. Page create also looks up its space; page update reads its current version unless `--base-version` is given; `children` needs `read:hierarchical-content:confluence`. Check the [property](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-content-properties/), [comment](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-comment/), and [page](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-page/) endpoint requirements. A `401 "scope does not match"` can indicate missing grants. Enable required scopes on the app, request them in the profile, then reauthorize; changing app permissions alone does not update an existing token.
+- A Confluence search result is the matched content with `excerpt` (matches marked `@@@hl@@@…@@@endhl@@@`), `url` under the site's `/wiki` and `lastModified`. Read a body with `confluence get`, or add `--expand body.storage` to the search.
 - CQL compares user fields against account ids (`creator = "<accountId>"`); find them with `jira user search`.
 
 ## Pagination & output cheatsheet
 
 | Need | Flag |
 |---|---|
-| One page | (default `--limit N`); Jira continues with `--page-token` |
+| One page | (default `--limit N`); continue with `--page-token` |
 | Every result | `--all` |
 | Stream to disk / pipe | `--all --stream` (outputs JSONL) |
 | Pick fields (Jira `get` & `search`) | `--fields key,summary,status` (or `*all` on `get` for the full issue) |
 | Expand fields (Confluence `search` only) | `--expand ancestors,space` — `get` has no `--expand`; read `spaceId` from `get`, then map it via `space list` |
 
-A Jira page without `--all` carries `nextPageToken`: `null` when it ends the results, otherwise the value to pass as `--page-token` for the next page. Jira can return fewer issues than `--limit` while more remain, so read the token, not the count. Jira `--all` requests 100 issues per page and ignores `--limit`. Confluence `--all` uses `--limit` for the first page only, capped at 50; subsequent requests follow the server's cursor links.
+A search page without `--all` carries `nextPageToken`: `null` when it ends the results, otherwise the value to pass as `--page-token` for the next page. Jira can return fewer issues than `--limit` while more remain, so read the token, not the count. Jira `--all` requests 100 issues per page and ignores `--limit`. Confluence `--all` uses `--limit` for the first page only, capped at 50; subsequent requests follow the server's cursor links.
 
 `--stream` writes one compact JSON object per line to stdout and progress to stderr; `--pretty` does not apply to it.
 

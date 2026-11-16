@@ -27,6 +27,7 @@ pub(crate) async fn run(
             limit,
             all,
             stream,
+            page_token,
             expand,
             format,
         } => {
@@ -34,7 +35,8 @@ pub(crate) async fn run(
             if all {
                 confluence::search_all(&query, limit, expand, stream, as_markdown, client).await
             } else {
-                confluence::search(&query, limit, expand, as_markdown, client).await
+                let token = page_token.as_deref();
+                confluence::search(&query, limit, token, expand, as_markdown, client).await
             }
         }
         ConfluenceSubcommand::Get { page_id, format } => {

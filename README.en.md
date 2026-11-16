@@ -88,7 +88,7 @@ atlassian-cli confluence delete 123456 --yes           # moves the page to the t
 - Results of `jira`, `confluence` and `self` go to stdout as JSON, and lists use an `items` envelope. Root options such as `--pretty`, `--profile` and `--config` precede the subcommand.
 - `--format` names the rich-text representation: `adf` for Jira or `storage` for Confluence by default, or `markdown`, which converts read content inside the JSON envelope and write bodies before they are sent. `html` remains an alias of the default.
 - Body arguments take `-` to read standard input, and refuse it empty. A heredoc with a quoted delimiter (`<<'EOF'`) needs no escaping and has no argument-size limit.
-- `--all` follows every page of a search; `--all --stream` writes JSONL as pages arrive and reports progress on stderr.
+- A search page carries `nextPageToken`, `null` on the last page, which `--page-token` continues from. `--all` follows every page; `--all --stream` writes JSONL as pages arrive and reports progress on stderr. A Confluence search returns matches with their excerpt and URL; bodies come with `--format markdown` or `--expand body.storage`.
 - Markdown writes follow CommonMark with GitHub tables and strikethrough. ADF cannot hold a heading, quote, table or rule inside a list item or quote, so such Markdown is refused with its location. Raw HTML stays literal text; write Confluence macros with `--format storage`.
 - A Markdown read is a view: macros, mentions and layouts become placeholders, and writing that Markdown back replaces them with text. Edit bodies that hold them in the stored representation.
 

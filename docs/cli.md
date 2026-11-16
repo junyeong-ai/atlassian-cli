@@ -1008,7 +1008,7 @@ Arguments:
 
 Options:
       --limit <LIMIT>
-          Results per page (capped at 50 by the body-expanding search API). With --all, controls first-page batch size
+          Results per page, at most 50. With --all, the size of the first page
 
           [default: 50]
 
@@ -1018,11 +1018,14 @@ Options:
       --stream
           Stream as JSONL (requires --all)
 
+      --page-token <PAGE_TOKEN>
+          Continue from the `nextPageToken` an earlier page returned
+
       --expand <EXPAND>
-          Expand fields (e.g., body.storage,ancestors)
+          Add to each result: body.storage for the page body, ancestors, space, ...
 
       --format <FORMAT>
-          Format of page bodies in the output
+          Format of page bodies in the output; markdown also returns the body
 
           Possible values:
           - storage:  Storage format, the XHTML Confluence stores
