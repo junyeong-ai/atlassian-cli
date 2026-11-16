@@ -54,6 +54,11 @@ pub struct ApiError {
 
 /// The most of a non-JSON error body a message carries: enough for any error
 /// Atlassian words in text, short of a whole HTML error page.
+///
+/// An HTML page stays markup rather than being rendered to text. Atlassian's
+/// IP-allowlist refusal states its cause only in a `<meta>` tag whose
+/// attributes are separated by U+00A0, which an HTML parser reads as part of
+/// the tag name, so rendering drops the one sentence that says what happened.
 const ERROR_TEXT_LIMIT: usize = 1000;
 
 impl ApiError {

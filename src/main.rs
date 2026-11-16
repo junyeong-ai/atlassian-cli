@@ -1151,8 +1151,8 @@ mod tests {
     }
 
     /// Atlassian's JSON error body is reported as structured `details` — a
-    /// refused create names each field and why — while a text body, such as a
-    /// gateway's HTML page, stays in the message and is cut short there.
+    /// refused create names each field and why — while a text body, such as an
+    /// edge HTML page, stays in the message and is cut short there.
     #[test]
     fn an_api_error_reports_its_json_body_as_details_and_bounds_text() {
         let api_error = |body: String| {
@@ -1178,10 +1178,22 @@ mod tests {
             "Failed to create issue (400 Bad Request)"
         );
 
-        let (_, payload) = render_error(&api_error(format!("<html>{}</html>", "x".repeat(5000))));
+        // The shape of the IP-allowlist page: its cause is in a malformed
+        // `<meta>`, so only the markup itself carries it.
+        let page = format!(
+            "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta\u{a0}name=\"description\"\u{a0}\
+             content=\"You're unable to access content because your IP address is not listed in \
+             the IP allowlist. Contact your admin for help.\">\n<style>{}</style>",
+            "x".repeat(5000)
+        );
+        let (_, payload) = render_error(&api_error(page));
         let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
         let message = payload["error"]["message"].as_str().unwrap();
-        assert!(message.ends_with("… (4013 more characters)"), "{message}");
+        assert!(
+            message.contains("your IP address is not listed in the IP allowlist"),
+            "{message}"
+        );
+        assert!(message.ends_with("… (4211 more characters)"), "{message}");
         assert!(payload["error"].get("details").is_none());
     }
 
