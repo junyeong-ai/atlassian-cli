@@ -21,6 +21,8 @@ When adding a new write endpoint that takes user text, route through these helpe
 
 Under `--format markdown` the command layer converts a body, or a string `description` among JSON fields, with `markdown::markdown_to_adf` first, so these helpers receive an ADF object and validate its root.
 
+Reads under `--format markdown` convert every value among an issue's `fields` that is an ADF document root — the root `validate_adf` accepts — so embedded comments, the environment and rich-text custom fields convert with the description, after `filter::apply` has run.
+
 ## Epic membership
 
 `assign_issues_to_epic` and `unassign_issues_from_epic` edit each issue's `fields.parent`, the epic link in company-managed and team-managed projects alike; the agile epic endpoints do not work for team-managed epics. Clearing sends `"parent": null` and reads the issue back: on a live site the documented `update.parent.set.none` answered 204 and left the parent in place. A parent-less read omits `fields` entirely, so the read-back checks the issue `key`, not `fields`.

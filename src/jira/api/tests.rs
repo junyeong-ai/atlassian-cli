@@ -796,6 +796,7 @@ async fn integ_an_issue_is_filtered_before_its_description_becomes_a_string() {
             "fields": {
                 "description": {
                     "type": "doc",
+                    "version": 1,
                     "content": [{
                         "type": "paragraph",
                         "content": [{ "type": "text", "text": "sensitive" }]
@@ -811,11 +812,43 @@ async fn integ_an_issue_is_filtered_before_its_description_becomes_a_string() {
     let client = crate::test_utils::mock_client_with_config(server.uri(), config);
 
     let result = get_issue("ABC-1", None, true, &client).await.unwrap();
-    let description = result["fields"]["description"].as_str().unwrap_or_default();
+    let description = result["fields"]["description"].as_str().unwrap();
     assert!(
         !description.contains("sensitive"),
         "the excluded field reached the converted description: {result}"
     );
+}
+
+/// Under Markdown every rich-text field becomes Markdown, wherever the issue
+/// holds it, and a value that only resembles a document is left as it came.
+#[tokio::test]
+async fn integ_every_rich_text_field_of_an_issue_reads_as_markdown() {
+    let doc = |text: &str| {
+        json!({ "type": "doc", "version": 1, "content": [{
+            "type": "paragraph", "content": [{ "type": "text", "text": text }]
+        }]})
+    };
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/ABC-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "key": "ABC-1",
+            "fields": {
+                "environment": doc("prod"),
+                "customfield_10050": doc("notes"),
+                "comment": { "comments": [{ "id": "1", "body": doc("first") }] },
+                "customfield_10060": { "type": "doc", "value": "not a document" }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = mock_client(server.uri());
+    let fields = &get_issue("ABC-1", None, true, &client).await.unwrap()["fields"];
+    assert_eq!(fields["environment"], "prod");
+    assert_eq!(fields["customfield_10050"], "notes");
+    assert_eq!(fields["comment"]["comments"][0]["body"], "first");
+    assert_eq!(fields["customfield_10060"]["value"], "not a document");
 }
 
 /// `adf_to_markdown` turns the body object into a string, and a key the

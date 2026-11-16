@@ -12,15 +12,24 @@ use std::io::{self, Write};
 use std::time::Duration;
 use tokio::time::sleep;
 
+/// Every rich-text value among an issue's fields is an ADF document — the
+/// description, the environment, rich-text custom fields, and the bodies of
+/// the comments and worklogs an issue embeds — and each becomes Markdown.
 fn convert_issue_to_markdown(issue: &mut Value) {
-    let Some(fields) = issue.get_mut("fields") else {
+    if let Some(fields) = issue.get_mut("fields") {
+        convert_documents(fields);
+    }
+}
+
+fn convert_documents(value: &mut Value) {
+    if adf::validate_adf(value).is_ok() {
+        *value = Value::String(adf_to_markdown(value));
         return;
-    };
-    let Some(desc) = fields.get_mut("description") else {
-        return;
-    };
-    if desc.is_object() {
-        *desc = Value::String(adf_to_markdown(desc));
+    }
+    match value {
+        Value::Object(map) => map.values_mut().for_each(convert_documents),
+        Value::Array(items) => items.iter_mut().for_each(convert_documents),
+        _ => {}
     }
 }
 
