@@ -35,7 +35,7 @@ htmd = "0.5.6"
 # Storage format is parsed into the tree type htmd renders, so these two follow
 # the html5ever release line of htmd rather than their own latest release.
 markup5ever_rcdom = "0.38.0"
-xml5ever = "0.38.0"
+xml5ever = "0.40.0"
 pulldown-cmark = { version = "0.13.6", default-features = false, features = ["html"] }
 percent-encoding = "2.3.2"
 fastrand = "2.5.0"
