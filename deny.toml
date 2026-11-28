@@ -6,13 +6,19 @@ feature-depth = 1
 
 [advisories]
 yanked = "deny"
-# zvariant and its companions merged into zbus 6. The Linux keyring store reaches
-# them through secret-service, which still requires zbus 5; drop these once
-# https://github.com/hwchen/secret-service-rs/pull/122 ships.
+# Report unmaintained crates anywhere in the graph; cargo-deny 0.22 narrowed the
+# default to the workspace's direct dependencies.
+unmaintained = "all"
+# zvariant and its companions merged into zbus 6. The Linux keyring store,
+# zbus-secret-service-keyring-store 1.0.1, still requires secret-service 5 and
+# zbus 5; drop these once it moves to secret-service 6, which uses zbus 6.
+# chrono is a required dependency of oauth2 5.0.0, the latest release; drop its
+# entry once oauth2 no longer depends on it.
 ignore = [
   { id = "RUSTSEC-2026-0370", reason = "zvariant merged into zbus 6; secret-service still requires zbus 5" },
   { id = "RUSTSEC-2026-0371", reason = "zbus_names merged into zbus 6; secret-service still requires zbus 5" },
   { id = "RUSTSEC-2026-0372", reason = "zvariant_derive merged into zbus 6; secret-service still requires zbus 5" },
+  { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained; oauth2 5.0.0 requires it" },
 ]
 
 [licenses]
