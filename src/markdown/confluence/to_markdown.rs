@@ -2,10 +2,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::LazyLock;
 
-use htmd::element_handler::{HandlerResult, Handlers};
+use htmd::element_handler::{Context, HandlerResult, Handlers};
+use htmd::node::Node;
 use htmd::options::{BulletListMarker, Options};
-use htmd::{Element, HtmlToMarkdown, Node};
-use markup5ever_rcdom::{NodeData, RcDom};
+use htmd::{Element, HtmlToMarkdown};
+use markup5ever_rcdom::{self as rcdom, Handle, NodeData, RcDom};
 use xml5ever::driver::{XmlParseOpts, parse_document};
 use xml5ever::tendril::TendrilSink;
 use xml5ever::{Attribute, LocalName, QualName, ns};
@@ -25,7 +26,11 @@ pub fn confluence_to_markdown(storage: &str) -> String {
     );
     let dom = parse_document(RcDom::default(), XmlParseOpts::default()).one(document.as_str());
     match qualified(&dom.document) {
-        Some(tree) => CONVERTER.tree_to_markdown(&tree),
+        // Only string input is parsed, and parsing is the only step that can
+        // fail; a tree converts without I/O.
+        Some(tree) => CONVERTER
+            .convert(&tree)
+            .expect("htmd renders a parsed tree without I/O"),
         None => String::new(),
     }
 }
@@ -35,7 +40,7 @@ pub fn confluence_to_markdown(storage: &str) -> String {
 /// `link` is an HTML block element, so the bare local name would reflow the
 /// text around a Confluence link. Comments and processing instructions carry
 /// no content and are left out.
-fn qualified(node: &Rc<Node>) -> Option<Rc<Node>> {
+fn qualified(node: &Handle) -> Option<Handle> {
     let data = match &node.data {
         NodeData::Document => NodeData::Document,
         NodeData::Text { contents } => NodeData::Text {
@@ -60,7 +65,7 @@ fn qualified(node: &Rc<Node>) -> Option<Rc<Node>> {
         | NodeData::Comment { .. }
         | NodeData::ProcessingInstruction { .. } => return None,
     };
-    let copy = Node::new(data);
+    let copy = rcdom::Node::new(data);
     for child in node.children.borrow().iter().filter_map(qualified) {
         child.parent.set(Some(Rc::downgrade(&copy)));
         copy.children.borrow_mut().push(child);
@@ -107,24 +112,24 @@ static CONVERTER: LazyLock<HtmlToMarkdown> = LazyLock::new(|| {
         .build()
 });
 
-fn preformatted(_: &dyn Handlers, element: Element) -> Option<HandlerResult> {
+fn preformatted(_: &dyn Handlers, element: &Element) -> Option<HandlerResult> {
     Some(block(fenced_code_block("", &text(element.node))).into())
 }
 
-fn time(handlers: &dyn Handlers, element: Element) -> Option<HandlerResult> {
+fn time(handlers: &dyn Handlers, element: &Element) -> Option<HandlerResult> {
     match attribute(element.node, "datetime") {
         Some(datetime) => Some(datetime.into()),
         None => handlers.fallback(element),
     }
 }
 
-fn structured_macro(handlers: &dyn Handlers, element: Element) -> Option<HandlerResult> {
+fn structured_macro(handlers: &dyn Handlers, element: &Element) -> Option<HandlerResult> {
     let node = element.node;
     let name = attribute(node, "ac:name").unwrap_or_default();
     let parameter = |key: &str| macro_parameter(node, key);
     let rich_body = || {
         child(node, "ac:rich-text-body")
-            .map(|body| trim_blank_lines(&handlers.walk_children(&body).content))
+            .map(|body| trim_blank_lines(&handlers.walk_children_content(&body, Context::BLOCK)))
             .unwrap_or_default()
     };
     let plain_body = || {
@@ -200,12 +205,11 @@ fn structured_macro(handlers: &dyn Handlers, element: Element) -> Option<Handler
     Some(rendered.into())
 }
 
-fn macro_parameter(node: &Rc<Node>, key: &str) -> Option<String> {
-    node.children
-        .borrow()
+fn macro_parameter(node: &Node, key: &str) -> Option<String> {
+    node.children()
         .iter()
         .find(|c| is(c, "ac:parameter") && attribute(c, "ac:name").as_deref() == Some(key))
-        .map(|c| text(c).trim().to_string())
+        .map(|c| text(&c).trim().to_string())
         .filter(|value| !value.is_empty())
 }
 
@@ -221,23 +225,23 @@ fn status(title: Option<String>, colour: Option<String>) -> String {
     format!("{indicator} {}", escape_inline(&title))
 }
 
-fn task_list(handlers: &dyn Handlers, element: Element) -> Option<HandlerResult> {
+fn task_list(handlers: &dyn Handlers, element: &Element) -> Option<HandlerResult> {
     Some(block(tasks(handlers, element.node)).into())
 }
 
-fn tasks(handlers: &dyn Handlers, list: &Rc<Node>) -> String {
+fn tasks(handlers: &dyn Handlers, list: &Node) -> String {
     let mut items: Vec<String> = Vec::new();
-    for entry in list.children.borrow().iter() {
-        if is(entry, "ac:task") {
+    for entry in list.children().iter() {
+        if is(&entry, "ac:task") {
             let done =
-                child(entry, "ac:task-status").is_some_and(|s| text(&s).trim() == "complete");
-            let body = child(entry, "ac:task-body")
-                .map(|b| trim_blank_lines(&handlers.walk_children(&b).content))
+                child(&entry, "ac:task-status").is_some_and(|s| text(&s).trim() == "complete");
+            let body = child(&entry, "ac:task-body")
+                .map(|b| trim_blank_lines(&handlers.walk_children_content(&b, Context::BLOCK)))
                 .unwrap_or_default();
             let marker = if done { "- [x] " } else { "- [ ] " };
             items.push(format!("{marker}{}", indent_continuation(&body, "  ")));
-        } else if is(entry, "ac:task-list") {
-            let nested = indent_all(&tasks(handlers, entry), "  ");
+        } else if is(&entry, "ac:task-list") {
+            let nested = indent_all(&tasks(handlers, &entry), "  ");
             match items.last_mut() {
                 Some(previous) => {
                     previous.push('\n');
@@ -250,7 +254,7 @@ fn tasks(handlers: &dyn Handlers, list: &Rc<Node>) -> String {
     items.join("\n")
 }
 
-fn image(_: &dyn Handlers, element: Element) -> Option<HandlerResult> {
+fn image(_: &dyn Handlers, element: &Element) -> Option<HandlerResult> {
     let node = element.node;
     let alt = attribute(node, "ac:alt")
         .or_else(|| attribute(node, "ac:title"))
@@ -265,10 +269,15 @@ fn image(_: &dyn Handlers, element: Element) -> Option<HandlerResult> {
     Some(rendered.into())
 }
 
-fn link(handlers: &dyn Handlers, element: Element) -> Option<HandlerResult> {
+fn link(handlers: &dyn Handlers, element: &Element) -> Option<HandlerResult> {
     let node = element.node;
     let label = child(node, "ac:link-body")
-        .map(|body| handlers.walk_children(&body).content.trim().to_string())
+        .map(|body| {
+            handlers
+                .walk_children_content(&body, Context::INLINE)
+                .trim()
+                .to_string()
+        })
         .or_else(|| child(node, "ac:plain-text-link-body").map(|b| escape_inline(text(&b).trim())))
         .filter(|label| !label.is_empty());
     let anchor = attribute(node, "ac:anchor").map(|a| format!("#{a}"));
@@ -309,7 +318,7 @@ fn link(handlers: &dyn Handlers, element: Element) -> Option<HandlerResult> {
     Some(rendered.into())
 }
 
-fn emoticon(_: &dyn Handlers, element: Element) -> Option<HandlerResult> {
+fn emoticon(_: &dyn Handlers, element: &Element) -> Option<HandlerResult> {
     let node = element.node;
     if let Some(emoji) = attribute(node, "ac:emoji-fallback") {
         return Some(emoji.into());
@@ -334,7 +343,7 @@ fn emoticon(_: &dyn Handlers, element: Element) -> Option<HandlerResult> {
     Some(shortcut.to_string().into())
 }
 
-fn adf_extension(handlers: &dyn Handlers, element: Element) -> Option<HandlerResult> {
+fn adf_extension(handlers: &dyn Handlers, element: &Element) -> Option<HandlerResult> {
     let node = element.node;
     let adf_node = child(node, "ac:adf-node");
     let kind = adf_node
@@ -344,7 +353,7 @@ fn adf_extension(handlers: &dyn Handlers, element: Element) -> Option<HandlerRes
     let content = adf_node
         .as_ref()
         .and_then(|n| child(n, "ac:adf-content"))
-        .map(|c| trim_blank_lines(&handlers.walk_children(&c).content));
+        .map(|c| trim_blank_lines(&handlers.walk_children_content(&c, Context::BLOCK)));
 
     let rendered = if kind == "panel" {
         let label = adf_node
@@ -362,17 +371,17 @@ fn adf_extension(handlers: &dyn Handlers, element: Element) -> Option<HandlerRes
         placeholder("Draw.io", Some(&name))
     } else {
         child(node, "ac:adf-fallback")
-            .map(|f| trim_blank_lines(&handlers.walk_children(&f).content))
+            .map(|f| trim_blank_lines(&handlers.walk_children_content(&f, Context::BLOCK)))
             .unwrap_or_default()
     };
     Some(block(rendered).into())
 }
 
 /// The text of the first descendant `element` whose `key` is `key`.
-fn adf_value(node: &Rc<Node>, element: &str, key: &str) -> Option<String> {
-    descendants(node)
-        .into_iter()
-        .find(|d| is(d, element) && attribute(d, "key").as_deref() == Some(key))
+fn adf_value(node: &Node, element: &str, key: &str) -> Option<String> {
+    node.children()
+        .iter()
+        .find_map(|c| c.find(|d| is(d, element) && attribute(d, "key").as_deref() == Some(key)))
         .map(|d| text(&d).trim().to_string())
         .filter(|value| !value.is_empty())
 }
@@ -454,32 +463,18 @@ fn destination(target: &str) -> String {
 }
 
 fn is(node: &Node, name: &str) -> bool {
-    matches!(&node.data, NodeData::Element { name: qualified, .. } if &*qualified.local == name)
+    node.tag_name() == Some(name)
 }
 
 fn attribute(node: &Node, name: &str) -> Option<String> {
-    let NodeData::Element { attrs, .. } = &node.data else {
-        return None;
-    };
-    attrs
-        .borrow()
-        .iter()
-        .find(|a| &*a.name.local == name)
-        .map(|a| a.value.to_string())
+    node.attr(name).map(|value| value.to_string())
 }
 
-fn child(node: &Node, name: &str) -> Option<Rc<Node>> {
-    node.children.borrow().iter().find(|c| is(c, name)).cloned()
-}
-
-fn descendants(node: &Rc<Node>) -> Vec<Rc<Node>> {
-    let mut found = Vec::new();
-    let mut pending: Vec<Rc<Node>> = node.children.borrow().iter().rev().cloned().collect();
-    while let Some(next) = pending.pop() {
-        pending.extend(next.children.borrow().iter().rev().cloned());
-        found.push(next);
-    }
-    found
+/// The first child element named `name`. Siblings are walked rather than
+/// `children()` iterated because only the walk yields nodes that outlive the
+/// borrow of their parent.
+fn child<'a>(node: &Node<'a>, name: &str) -> Option<Node<'a>> {
+    std::iter::successors(node.first_child(), Node::next_sibling).find(|c| is(c, name))
 }
 
 fn text(node: &Node) -> String {
@@ -489,11 +484,11 @@ fn text(node: &Node) -> String {
 }
 
 fn collect_text(node: &Node, into: &mut String) {
-    if let NodeData::Text { contents } = &node.data {
-        into.push_str(&contents.borrow());
+    if let Some(text) = node.text() {
+        into.push_str(&text);
     }
-    for child in node.children.borrow().iter() {
-        collect_text(child, into);
+    for child in node.children().iter() {
+        collect_text(&child, into);
     }
 }
 
@@ -565,9 +560,9 @@ mod tests {
                 "a\n\n[Macro: unknown]",
             ),
             (
-                "entities resolve and plain text passes through",
+                "entities resolve and a literal ampersand is escaped",
                 "Tom&nbsp;&amp; Jerry",
-                "Tom\u{a0}& Jerry",
+                "Tom\u{a0}\\& Jerry",
             ),
         ];
         for (case, storage, expected) in cases {
@@ -577,7 +572,7 @@ mod tests {
 
     #[test]
     fn markdown_the_writer_produced_reads_back_unchanged() {
-        let markdown = "# Title\n\n```python\ndef f():\n    return 1\n\n\nx = 2\n```\n\n- item\n\n![d](diagram.png)";
+        let markdown = "# Title\n\n```python\ndef f():\n    return 1\n\n\nx = 2\n```\n\n- item\n\nTom \\& Jerry pay \\$5\n\n![d](diagram.png)";
         let storage = markdown_to_confluence(markdown).unwrap();
         assert_eq!(confluence_to_markdown(&storage), markdown);
     }
